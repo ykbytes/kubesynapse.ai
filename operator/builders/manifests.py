@@ -30,6 +30,9 @@ from config import (
     AGENT_RUNTIME_TIMEOUT_SECONDS,
     AGENT_SKILL_FILES_ENV,
     ARTIFACT_MOUNT_PATH,
+    CREDENTIAL_PROXY_ENABLED,
+    CREDENTIAL_PROXY_IMAGE,
+    CREDENTIAL_PROXY_IMAGE_PULL_POLICY,
     DEFAULT_MAX_PARALLEL_STEPS,
     DEFAULT_STORAGE_SIZE,
     HELM_RELEASE_NAME,
@@ -45,6 +48,7 @@ from config import (
     OPA_SIDECAR_PORT,
     OPA_SIDECAR_RESOURCES,
     OPENCODE_DEFAULT_PROVIDER,
+    OPENCODE_IMMUTABLE_CONFIG,
     OPENCODE_MCP_CONNECTIONS_ENV,
     OPENCODE_MCP_SIDECARS_ENV,
     OPENCODE_RUNTIME_CONFIG_FILES_ENV,
@@ -56,6 +60,7 @@ from config import (
     PI_DEFAULT_MODEL,
     PI_DEFAULT_PROVIDER,
     PI_DEFAULT_THINKING_LEVEL,
+    PI_IMMUTABLE_CONFIG,
     PI_RUNTIME_IMAGE,
     PI_RUNTIME_IMAGE_PULL_POLICY,
     PROVIDER_REGISTRY_CONFIGMAP_NAME,
@@ -73,8 +78,6 @@ from config import (
     WORKER_MEMORY_REQUEST,
     WORKER_SERVICE_ACCOUNT_NAME,
     WORKER_TTL_SECONDS_AFTER_FINISHED,
-    OPENCODE_IMMUTABLE_CONFIG,
-    PI_IMMUTABLE_CONFIG,
     serialize_env_value,
 )
 from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
@@ -805,6 +808,252 @@ def _build_sidecar_egress_init_container(allowed_cidrs: list[str]) -> dict[str, 
 
 
 # ---------------------------------------------------------------------------
+# Credential proxy sidecar
+# ---------------------------------------------------------------------------
+
+CREDENTIAL_PROXY_LITELLM_PORT: int = 4001
+CREDENTIAL_PROXY_MCP_HUB_PORT: int = 4010
+CREDENTIAL_PROXY_PROVIDER_PORT: int = 4003
+CREDENTIAL_PROXY_INBOUND_PORT: int = 8080
+CREDENTIAL_PROXY_HEALTH_PORT: int = 9090
+AGENT_INTERNAL_PORT: int = 8081
+
+_PROVIDER_PROXY_CONFIG: dict[str, dict[str, str]] = {
+    "opencode": {
+        "target": "https://opencode.ai/zen/v1",
+        "secret_env": "OPENCODE_API_KEY",
+        "header_name": "Authorization",
+        "header_prefix": "Bearer ",
+    },
+    "opencode-go": {
+        "target": "https://opencode.ai/zen/go/v1",
+        "secret_env": "OPENCODE_GO_API_KEY",
+        "header_name": "Authorization",
+        "header_prefix": "Bearer ",
+    },
+    "github-copilot": {
+        "target": "https://api.githubcopilot.com",
+        "secret_env": "GITHUB_COPILOT_TOKEN",
+        "header_name": "Authorization",
+        "header_prefix": "Bearer ",
+    },
+}
+
+
+def _build_credential_proxy_routes(
+    mcp_connections: list[dict[str, Any]],
+    mcp_servers: list[str],
+    selected_provider_id: str,
+) -> list[dict[str, str]]:
+    """Build the PROXY_ROUTES JSON for the credential-proxy sidecar."""
+    routes: list[dict[str, str]] = []
+
+    routes.append({
+        "listen": f":{CREDENTIAL_PROXY_LITELLM_PORT}",
+        "target": f"http://{LITELLM_SVC}.{OPERATOR_NAMESPACE}.svc.cluster.local:4000",
+        "auth": "bearer",
+        "secret_env": "LITELLM_MASTER_KEY",
+    })
+
+    provider_proxy = _PROVIDER_PROXY_CONFIG.get(selected_provider_id)
+    if provider_proxy is not None:
+        routes.append(
+            {
+                "listen": f":{CREDENTIAL_PROXY_PROVIDER_PORT}",
+                "target": provider_proxy["target"],
+                "auth": "header",
+                "secret_env": provider_proxy["secret_env"],
+                "header_name": provider_proxy["header_name"],
+                "header_prefix": provider_proxy["header_prefix"],
+            }
+        )
+
+    needs_mcp_bearer = mcp_connections_require_shared_bearer_token(mcp_connections, mcp_servers)
+    if needs_mcp_bearer:
+        routes.append({
+            "listen": f":{CREDENTIAL_PROXY_MCP_HUB_PORT}",
+            "target": f"http://{HELM_RELEASE_NAME}-mcp-github.{MCP_HUB_NAMESPACE}.svc.cluster.local:8000",
+            "auth": "bearer",
+            "secret_env": "MCP_BEARER_TOKEN",
+        })
+
+    # Per-connection remote MCP credentials are also isolated in the proxy.
+    # The runtime connects to the original target URL without auth headers.
+    # The proxy injects those headers server-side using the env-bound secrets.
+    for index, connection in enumerate(mcp_connections, start=1):
+        if not isinstance(connection, dict):
+            continue
+        runtime = connection.get("runtime") if isinstance(connection.get("runtime"), dict) else {}
+        if str(runtime.get("kind") or "remote").strip().lower() != "remote":
+            continue
+        runtime_url = str(runtime.get("url") or "").strip()
+        if not runtime_url:
+            continue
+        for header in runtime.get("headers") or []:
+            if not isinstance(header, dict):
+                continue
+            env_var = str(header.get("envVar") or "").strip()
+            if not env_var:
+                continue
+            header_name = str(header.get("name") or "Authorization").strip() or "Authorization"
+            prefix = str(header.get("prefix") or "")
+            listen_port = CREDENTIAL_PROXY_MCP_HUB_PORT + index
+            route: dict[str, str] = {
+                "listen": f":{listen_port}",
+                "target": runtime_url,
+                "auth": "header",
+                "secret_env": env_var,
+                "header_name": header_name,
+            }
+            if prefix:
+                route["header_prefix"] = prefix
+            routes.append(route)
+            break
+
+    routes.append({
+        "listen": f":{CREDENTIAL_PROXY_INBOUND_PORT}",
+        "target": f"http://localhost:{AGENT_INTERNAL_PORT}",
+        "auth": "validate",
+        "secret_env": "OPENCODE_SERVER_PASSWORD",
+    })
+
+    return routes
+
+
+def _build_credential_proxy_container(
+    mcp_connections: list[dict[str, Any]],
+    mcp_servers: list[str],
+    selected_provider_id: str,
+    needs_shared_mcp_bearer: bool,
+    provider_bootstrap_secret_name: str,
+) -> dict[str, Any]:
+    """Build the credential-proxy sidecar container spec."""
+    routes = _build_credential_proxy_routes(mcp_connections, mcp_servers, selected_provider_id)
+
+    env: list[dict[str, Any]] = [
+        {"name": "PROXY_ROUTES", "value": json.dumps(routes, ensure_ascii=False)},
+        {
+            "name": "LITELLM_MASTER_KEY",
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": SECRET_NAME,
+                    "key": "LITELLM_MASTER_KEY",
+                    "optional": True,
+                }
+            },
+        },
+        {
+            "name": "OPENCODE_SERVER_PASSWORD",
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": SECRET_NAME,
+                    "key": "OPENCODE_SERVER_PASSWORD",
+                    "optional": True,
+                }
+            },
+        },
+    ]
+
+    if needs_shared_mcp_bearer:
+        env.append({
+            "name": "MCP_BEARER_TOKEN",
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": MCP_AUTH_SECRET_NAME,
+                    "key": "bearer-token",
+                    "optional": True,
+                }
+            },
+        })
+
+    provider_proxy = _PROVIDER_PROXY_CONFIG.get(selected_provider_id)
+    if provider_proxy is not None:
+        env.append(
+            {
+                "name": provider_proxy["secret_env"],
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": SECRET_NAME,
+                        "key": provider_proxy["secret_env"],
+                        "optional": True,
+                    }
+                },
+            }
+        )
+
+    for secret_binding in _build_mcp_runtime_secret_env_bindings(mcp_connections):
+        env.append(secret_binding)
+
+    env.append(
+        {
+            "name": "API_GATEWAY_SHARED_TOKEN",
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": SECRET_NAME,
+                    "key": "API_GATEWAY_SHARED_TOKEN",
+                    "optional": True,
+                }
+            },
+        }
+    )
+
+    if selected_provider_id not in ("litellm",):
+        env.append({
+            "name": "OPENCODE_AUTH_CONTENT",
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": provider_bootstrap_secret_name,
+                    "key": "OPENCODE_AUTH_CONTENT",
+                    "optional": True,
+                }
+            },
+        })
+
+    return {
+        "name": "credential-proxy",
+        "image": CREDENTIAL_PROXY_IMAGE,
+        "imagePullPolicy": CREDENTIAL_PROXY_IMAGE_PULL_POLICY,
+        "ports": [
+            {"containerPort": CREDENTIAL_PROXY_LITELLM_PORT, "name": "litellm-proxy", "protocol": "TCP"},
+            {"containerPort": CREDENTIAL_PROXY_PROVIDER_PORT, "name": "provider-proxy", "protocol": "TCP"},
+            {"containerPort": CREDENTIAL_PROXY_INBOUND_PORT, "name": "proxy-http", "protocol": "TCP"},
+            {"containerPort": CREDENTIAL_PROXY_HEALTH_PORT, "name": "health", "protocol": "TCP"},
+        ],
+        "env": env,
+        "resources": {
+            "requests": {"cpu": "10m", "memory": "16Mi"},
+            "limits": {"cpu": "100m", "memory": "64Mi"},
+        },
+        "securityContext": {
+            "allowPrivilegeEscalation": False,
+            "readOnlyRootFilesystem": True,
+            "runAsNonRoot": True,
+            "runAsUser": 1000,
+            "runAsGroup": 1000,
+            "capabilities": {"drop": ["ALL"]},
+            "seccompProfile": {"type": "RuntimeDefault"},
+        },
+        "readinessProbe": {
+            "httpGet": {"path": "/healthz", "port": CREDENTIAL_PROXY_HEALTH_PORT},
+            "initialDelaySeconds": 1,
+            "periodSeconds": 5,
+            "timeoutSeconds": 2,
+            "failureThreshold": 3,
+        },
+        "livenessProbe": {
+            "httpGet": {"path": "/healthz", "port": CREDENTIAL_PROXY_HEALTH_PORT},
+            "initialDelaySeconds": 3,
+            "periodSeconds": 10,
+            "timeoutSeconds": 2,
+            "failureThreshold": 3,
+        },
+        "volumeMounts": [
+            {"name": "credential-proxy-tmp", "mountPath": "/tmp"},  # noqa: S108 — standard container tmp mount
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
 # PVC manifests
 # ---------------------------------------------------------------------------
 
@@ -1152,7 +1401,11 @@ def create_agent_service_manifest(name: str, namespace: str) -> dict[str, Any]:
         },
         "spec": {
             "selector": {"app": "ai-agent", "agent-name": name},
-            "ports": [{"name": "http", "port": API_PORT, "targetPort": "http"}],
+            # Keep the Service pinned to the pod's public ingress port.
+            # In credential-proxy mode, 8080 belongs to the proxy sidecar while
+            # the agent container itself moves to 8081. Routing via the
+            # container port name would bypass the proxy.
+            "ports": [{"name": "http", "port": API_PORT, "targetPort": API_PORT}],
         },
     }
 
@@ -1940,16 +2193,6 @@ def create_agent_statefulset_manifest(
         {"name": "AGENT_SYSTEM_PROMPT", "value": system_prompt},
         {"name": "HELM_RELEASE_NAME", "value": HELM_RELEASE_NAME},
         {"name": "API_GATEWAY_INTERNAL_URL", "value": resolved_api_gateway_internal_url()},
-        {
-            "name": "API_GATEWAY_SHARED_TOKEN",
-            "valueFrom": {
-                "secretKeyRef": {
-                    "name": SECRET_NAME,
-                    "key": "API_GATEWAY_SHARED_TOKEN",
-                    "optional": True,
-                }
-            },
-        },
     ]
     agent_a2a_config = parse_agent_a2a_config(spec.get("a2a"), source="AIAgent.spec.a2a")
     policy_a2a_config = parse_policy_a2a_config(policy_spec or {})
@@ -1986,7 +2229,8 @@ def create_agent_statefulset_manifest(
     # AFTER the main env list is created above).
     if git_config.get("repoUrl") and git_agent_env:
         env.extend(git_agent_env)
-    env.extend(_build_mcp_runtime_secret_env_bindings(mcp_connections))
+    if not CREDENTIAL_PROXY_ENABLED:
+        env.extend(_build_mcp_runtime_secret_env_bindings(mcp_connections))
 
     volume_mounts = [
         {"name": "tmp-volume", "mountPath": "/tmp"},  # noqa: S108 — standard container tmp mount
@@ -2072,48 +2316,68 @@ def create_agent_statefulset_manifest(
     # Build a deterministic per-agent secret name for provider bootstrap data
     provider_bootstrap_secret_name = f"{sandbox_name(name)}-opencode-provider"
 
+    from config import API_PORT as _API_PORT
+
+    # When credential-proxy is enabled, secrets are held in the proxy sidecar.
+    # The agent container connects to localhost:4001 (LiteLLM proxy) and
+    # localhost:4010 (MCP Hub proxy) without needing any auth tokens.
+    if CREDENTIAL_PROXY_ENABLED:
+        litellm_host = f"http://localhost:{CREDENTIAL_PROXY_LITELLM_PORT}"
+    else:
+        litellm_host = f"http://{LITELLM_SVC}.{OPERATOR_NAMESPACE}.svc.cluster.local:4000"
+
     env.extend(
         [
             {"name": "OPENCODE_PROVIDER", "value": selected_provider_id},
             {"name": "OPENCODE_MODEL", "value": selected_model_id},
             {"name": "OPENCODE_SYSTEM_PROMPT", "value": system_prompt},
             {"name": "OPENCODE_DEFAULT_AGENT", "value": "build"},
-            {"name": "LITELLM_HOST", "value": f"http://{LITELLM_SVC}.{OPERATOR_NAMESPACE}.svc.cluster.local:4000"},
+            {"name": "LITELLM_HOST", "value": litellm_host},
             {"name": "LITELLM_BASE_PATH", "value": "v1/chat/completions"},
             {"name": "MCP_SERVERS", "value": ",".join(mcp_servers)},
             {"name": "MCP_HUB_NAMESPACE", "value": MCP_HUB_NAMESPACE},
-            {
-                "name": "LITELLM_API_KEY",
-                "valueFrom": {
-                    "secretKeyRef": {
-                        "name": SECRET_NAME,
-                        "key": "LITELLM_MASTER_KEY",
-                        "optional": True,
-                    }
-                },
-            },
-            {
-                "name": "MCP_BEARER_TOKEN",
-                "valueFrom": {
-                    "secretKeyRef": {
-                        "name": MCP_AUTH_SECRET_NAME,
-                        "key": "bearer-token",
-                        "optional": not needs_shared_mcp_bearer,
-                    }
-                },
-            },
-            {
-                "name": "OPENCODE_AUTH_CONTENT",
-                "valueFrom": {
-                    "secretKeyRef": {
-                        "name": provider_bootstrap_secret_name,
-                        "key": "OPENCODE_AUTH_CONTENT",
-                        "optional": True,
-                    }
-                },
-            },
+            {"name": "CREDENTIAL_PROXY_ENABLED", "value": "true" if CREDENTIAL_PROXY_ENABLED else "false"},
+            {"name": "CREDENTIAL_PROXY_MCP_HUB_PORT", "value": str(CREDENTIAL_PROXY_MCP_HUB_PORT)},
         ]
     )
+
+    # Only inject secrets into the agent container when credential-proxy is disabled.
+    # When enabled, secrets are held exclusively in the credential-proxy sidecar.
+    if not CREDENTIAL_PROXY_ENABLED:
+        env.extend(
+            [
+                {
+                    "name": "LITELLM_API_KEY",
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": SECRET_NAME,
+                            "key": "LITELLM_MASTER_KEY",
+                            "optional": True,
+                        }
+                    },
+                },
+                {
+                    "name": "MCP_BEARER_TOKEN",
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": MCP_AUTH_SECRET_NAME,
+                            "key": "bearer-token",
+                            "optional": not needs_shared_mcp_bearer,
+                        }
+                    },
+                },
+                {
+                    "name": "OPENCODE_AUTH_CONTENT",
+                    "valueFrom": {
+                        "secretKeyRef": {
+                            "name": provider_bootstrap_secret_name,
+                            "key": "OPENCODE_AUTH_CONTENT",
+                            "optional": True,
+                        }
+                    },
+                },
+            ]
+        )
     # Inject selected-provider non-secret config for custom providers
     if selected_provider_id not in ("opencode", "opencode-go", "github-copilot", "litellm"):
         env.append(
@@ -2199,14 +2463,16 @@ def create_agent_statefulset_manifest(
         }
     ]
 
-    from config import API_PORT as _API_PORT
+    # When credential-proxy is enabled, the agent listens on an internal port (8081)
+    # and the credential-proxy listens on the external port (8080) to validate auth.
+    agent_listen_port = AGENT_INTERNAL_PORT if CREDENTIAL_PROXY_ENABLED else _API_PORT
 
     agent_container = {
         "name": "agent-runtime",
         "image": agent_image,
         "imagePullPolicy": agent_image_pull_policy,
         "securityContext": container_security_context,
-        "ports": [{"containerPort": _API_PORT, "name": "http", "protocol": "TCP"}],
+        "ports": [{"containerPort": agent_listen_port, "name": "http", "protocol": "TCP"}],
         "resources": agent_resources,
         "startupProbe": {
             "httpGet": {"path": "/health", "port": "http"},
@@ -2239,6 +2505,25 @@ def create_agent_statefulset_manifest(
     }
 
     containers = [agent_container]
+
+    # Add credential-proxy sidecar when enabled.
+    # This container holds all secrets and injects auth headers for outbound requests.
+    # The agent container never sees API keys, bearer tokens, or passwords.
+    if CREDENTIAL_PROXY_ENABLED:
+        credential_proxy_container = _build_credential_proxy_container(
+            mcp_connections=mcp_connections,
+            mcp_servers=mcp_servers,
+            selected_provider_id=selected_provider_id,
+            needs_shared_mcp_bearer=needs_shared_mcp_bearer,
+            provider_bootstrap_secret_name=provider_bootstrap_secret_name,
+        )
+        containers.append(credential_proxy_container)
+        volumes.append({"name": "credential-proxy-tmp", "emptyDir": {"sizeLimit": "64Mi"}})
+        logger.info(
+            "Injected credential-proxy sidecar for agent '%s' (secrets isolated from agent container)",
+            name,
+        )
+
     if mcp_sidecars:
         for index, sidecar_spec in enumerate(mcp_sidecars):
             sidecar_name = sidecar_spec.get("name", f"tool-{index}")

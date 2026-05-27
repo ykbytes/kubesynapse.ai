@@ -88,7 +88,8 @@ class OpenCodeRuntimeTests(unittest.TestCase):
         self.assertEqual(config["default_agent"], "build")
         self.assertEqual(config["permission"], "allow")
         self.assertIn("litellm", config["provider"])
-        self.assertEqual(config["provider"]["litellm"]["models"]["gpt-4"]["name"], "gpt-4")
+        self.assertIn("gpt-4o", config["provider"]["litellm"]["models"])
+        self.assertEqual(config["provider"]["litellm"]["models"]["gpt-4o"]["name"], "gpt-4o")
         self.assertEqual(warnings, [])
 
     def test_build_server_env_sets_openai_compat_env_for_litellm(self) -> None:
@@ -106,10 +107,8 @@ class OpenCodeRuntimeTests(unittest.TestCase):
         auth_content = json.dumps(
             {
                 "github-copilot": {
-                    "type": "oauth",
-                    "refresh": "gho-test-token",
-                    "access": "gho-test-token",
-                    "expires": 0,
+                    "type": "api",
+                    "key": "gho-test-api-key",
                 }
             }
         )
@@ -119,6 +118,7 @@ class OpenCodeRuntimeTests(unittest.TestCase):
             patch.dict(
                 os.environ,
                 {
+                    "CREDENTIAL_PROXY_ENABLED": "false",
                     "OPENCODE_PROVIDER": "github-copilot",
                     "OPENCODE_AUTH_CONTENT": auth_content,
                 },
@@ -127,9 +127,9 @@ class OpenCodeRuntimeTests(unittest.TestCase):
         ):
             env = supervisor_mod.build_server_env({"model": "github-copilot/gpt-5-mini"})
 
-        self.assertEqual(env["OPENCODE_AUTH_CONTENT"], auth_content)
+        self.assertNotIn("OPENCODE_AUTH_CONTENT", env)
         self.assertNotIn("OPENAI_BASE_URL", env)
-        self.assertNotIn("OPENAI_API_KEY", env)
+        self.assertEqual(env["OPENAI_API_KEY"], "gho-test-api-key")
 
     def test_materialize_skill_files_maps_platform_skills_to_opencode_layout(self) -> None:
         skill_text = (
@@ -350,6 +350,26 @@ class OpenCodeRuntimeTests(unittest.TestCase):
             "https://security-proxy.example.com/v1",
         )
 
+    def test_build_generated_config_credential_proxy_routes_opencode_go_via_localhost(self) -> None:
+        with (
+            patch.object(skills_mod, "DEFAULT_PROVIDER", "opencode-go"),
+            patch.object(skills_mod, "DEFAULT_MODEL", "mimo-v2.5-pro"),
+            patch.object(skills_mod, "DEFAULT_MODEL_REF", "opencode-go/mimo-v2.5-pro"),
+            patch.dict(
+                os.environ,
+                {
+                    "CREDENTIAL_PROXY_ENABLED": "true",
+                    "CREDENTIAL_PROXY_PROVIDER_PORT": "4003",
+                },
+                clear=False,
+            ),
+        ):
+            config, warnings = opencode_runtime_main.build_generated_config([])
+
+        self.assertEqual(config["provider"]["opencode-go"]["options"]["baseURL"], "http://127.0.0.1:4003/zen/go/v1")
+        self.assertEqual(config["provider"]["opencode-go"]["options"]["apiKey"], "credential-proxy")
+        self.assertEqual(warnings, [])
+
     def test_build_server_env_defaults_disable_default_plugins_to_true(self) -> None:
         """OPENCODE_DISABLE_DEFAULT_PLUGINS must default to 'true'."""
         with patch.dict(os.environ, {}, clear=True):
@@ -367,6 +387,121 @@ class OpenCodeRuntimeTests(unittest.TestCase):
             env = supervisor_mod.build_server_env({"model": "litellm/gpt-4"})
 
         self.assertEqual(env["OPENCODE_DISABLE_DEFAULT_PLUGINS"], "false")
+
+    def test_build_server_env_credential_proxy_enabled_blocks_secrets(self) -> None:
+        """When credential-proxy is enabled, secrets must NOT appear in subprocess env."""
+        with (
+            patch.object(supervisor_mod, "LITELLM_API_KEY", ""),
+            patch.object(supervisor_mod, "build_litellm_base_url", return_value="http://localhost:4001/v1"),
+            patch.dict(
+                os.environ,
+                {
+                    "CREDENTIAL_PROXY_ENABLED": "true",
+                    "LITELLM_API_KEY": "sk-secret-litellm-key",
+                    "MCP_BEARER_TOKEN": "secret-mcp-token",
+                    "OPENCODE_AUTH_CONTENT": '{"opencode": {"type": "api", "key": "secret-api-key"}}',
+                    "OPENCODE_SERVER_PASSWORD": "secret-server-password",
+                    "OPENCODE_PROVIDER": "litellm",
+                    "LITELLM_HOST": "http://localhost:4001",
+                    "LITELLM_BASE_PATH": "v1/chat/completions",
+                },
+                clear=True,
+            ),
+        ):
+            env = supervisor_mod.build_server_env({"model": "litellm/gpt-4"})
+
+        self.assertNotIn("LITELLM_API_KEY", env)
+        self.assertNotIn("MCP_BEARER_TOKEN", env)
+        self.assertNotIn("OPENCODE_AUTH_CONTENT", env)
+        self.assertNotIn("OPENCODE_SERVER_PASSWORD", env)
+        self.assertNotIn("OPENAI_API_KEY", env)
+        self.assertEqual(env["CREDENTIAL_PROXY_ENABLED"], "true")
+        self.assertEqual(env["LITELLM_HOST"], "http://localhost:4001")
+
+    def test_build_server_env_credential_proxy_disabled_preserves_secrets(self) -> None:
+        """When credential-proxy is disabled, secrets must be passed through (backward compat)."""
+        with (
+            patch.object(supervisor_mod, "LITELLM_API_KEY", "sk-litellm-key"),
+            patch.object(supervisor_mod, "build_litellm_base_url", return_value="http://litellm:4000/v1"),
+            patch.dict(
+                os.environ,
+                {
+                    "CREDENTIAL_PROXY_ENABLED": "false",
+                    "OPENCODE_PROVIDER": "litellm",
+                    "LITELLM_HOST": "http://litellm:4000",
+                    "LITELLM_BASE_PATH": "v1/chat/completions",
+                    "OPENCODE_SERVER_PASSWORD": "server-pass",
+                },
+                clear=True,
+            ),
+        ):
+            env = supervisor_mod.build_server_env({"model": "litellm/gpt-4"})
+
+        self.assertEqual(env["OPENAI_API_KEY"], "sk-litellm-key")
+        self.assertEqual(env["OPENCODE_SERVER_PASSWORD"], "server-pass")
+
+    def test_build_server_env_allowlist_blocks_arbitrary_env_vars(self) -> None:
+        """Env vars not in the allowlist must not appear in subprocess env."""
+        with patch.dict(
+            os.environ,
+            {
+                "CREDENTIAL_PROXY_ENABLED": "true",
+                "OPENCODE_PROVIDER": "litellm",
+                "LITELLM_HOST": "http://localhost:4001",
+                "LITELLM_BASE_PATH": "v1/chat/completions",
+                "RANDOM_SECRET_NOT_IN_ALLOWLIST": "should-not-appear",
+                "AWS_SECRET_ACCESS_KEY": "should-not-appear",
+                "DATABASE_PASSWORD": "should-not-appear",
+            },
+            clear=True,
+        ):
+            env = supervisor_mod.build_server_env({"model": "litellm/gpt-4"})
+
+        self.assertNotIn("RANDOM_SECRET_NOT_IN_ALLOWLIST", env)
+        self.assertNotIn("AWS_SECRET_ACCESS_KEY", env)
+        self.assertNotIn("DATABASE_PASSWORD", env)
+
+    def test_build_shared_mcp_config_credential_proxy_routes_through_localhost(self) -> None:
+        """When credential-proxy is enabled, MCP Hub connections route through proxy without auth headers."""
+        with patch.dict(
+            os.environ,
+            {
+                "CREDENTIAL_PROXY_ENABLED": "true",
+                "CREDENTIAL_PROXY_MCP_HUB_PORT": "4010",
+                "MCP_SERVERS": "context7,github",
+                "MCP_BEARER_TOKEN": "",
+            },
+            clear=True,
+        ):
+            entries, warnings = skills_mod.build_shared_mcp_config()
+
+        self.assertIn("context7", entries)
+        self.assertEqual(entries["context7"]["url"], "http://127.0.0.1:4010/mcp")
+        self.assertNotIn("headers", entries["context7"])
+
+    def test_build_shared_mcp_config_credential_proxy_disabled_uses_direct_connection(self) -> None:
+        """When credential-proxy is disabled, MCP Hub connections use direct URL with auth headers."""
+        with (
+            patch.object(skills_mod, "MCP_BEARER_TOKEN", "test-bearer-token"),
+            patch.object(skills_mod, "MCP_HUB_NAMESPACE", "mcp-hub"),
+            patch.object(skills_mod, "HELM_RELEASE_NAME", "kubesynapse"),
+            patch.dict(
+                os.environ,
+                {
+                    "CREDENTIAL_PROXY_ENABLED": "false",
+                    "MCP_SERVERS": "context7",
+                    "MCP_BEARER_TOKEN": "test-bearer-token",
+                    "MCP_HUB_NAMESPACE": "mcp-hub",
+                    "HELM_RELEASE_NAME": "kubesynapse",
+                },
+                clear=True,
+            ),
+        ):
+            entries, warnings = skills_mod.build_shared_mcp_config()
+
+        self.assertIn("context7", entries)
+        self.assertIn("mcp-hub", entries["context7"]["url"])
+        self.assertEqual(entries["context7"]["headers"]["Authorization"], "Bearer test-bearer-token")
 
     def test_build_mcp_config_prefers_structured_connections_over_legacy_inputs(self) -> None:
         with patch.dict(

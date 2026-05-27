@@ -122,6 +122,32 @@ opencodeRuntime:
   #         edit: false
   #       ---
   #       Focus on regressions, operational risk, and missing tests.
+
+# ---------------------------------------------------------------------------
+# Credential Proxy Sidecar
+# §security-P0: Isolates secrets (API keys, bearer tokens, passwords) in a
+# separate container. The agent runtime container never sees these secrets.
+# The proxy injects auth headers for outbound requests (LiteLLM, MCP Hub)
+# and validates inbound requests from the API gateway.
+# ---------------------------------------------------------------------------
+credentialProxy:
+  enabled: true
+  image:
+    repository: docker.io/kubesynapse/credential-proxy
+    tag: latest
+    pullPolicy: Always
+  resources:
+    requests:
+      cpu: "10m"
+      memory: "16Mi"
+    limits:
+      cpu: "100m"
+      memory: "64Mi"
+  ports:
+    litellm: 4001
+    mcpHub: 4010
+    inbound: 8080
+    health: 9090
   #     plugins/notify.ts: |
   #       export const NotifyPlugin = async () => ({})
 

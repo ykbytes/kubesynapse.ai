@@ -106,7 +106,7 @@ OPENCODE_SERVER_PORT = max(_safe_int("OPENCODE_SERVER_PORT", 4096), 1024)
 # Model / Provider
 # ---------------------------------------------------------------------------
 DEFAULT_PROVIDER = os.getenv("OPENCODE_PROVIDER", "litellm").strip() or "litellm"
-DEFAULT_MODEL = (os.getenv("OPENCODE_MODEL") or os.getenv("AGENT_MODEL") or "gpt-4").strip() or "gpt-4"
+DEFAULT_MODEL = (os.getenv("OPENCODE_MODEL") or os.getenv("AGENT_MODEL") or "gpt-4o").strip() or "gpt-4o"
 _AGENT_MODEL_RAW = (os.getenv("AGENT_MODEL") or "").strip()
 if "/" in _AGENT_MODEL_RAW:
     DEFAULT_MODEL_REF = _AGENT_MODEL_RAW
@@ -142,6 +142,17 @@ MCP_HUB_NAMESPACE = os.getenv("MCP_HUB_NAMESPACE", "mcp-hub").strip() or "mcp-hu
 MCP_BEARER_TOKEN = os.getenv("MCP_BEARER_TOKEN", "").strip()
 GITHUB_MCP_TOKEN = os.getenv("GITHUB_MCP_TOKEN", "").strip()
 HELM_RELEASE_NAME = os.getenv("HELM_RELEASE_NAME", "kubesynapse").strip() or "kubesynapse"
+
+# ---------------------------------------------------------------------------
+# Credential Proxy
+# When enabled, secrets are held in a separate sidecar container.
+# The agent container connects to localhost:4001 (LiteLLM) and localhost:4010
+# (MCP Hub) without needing any auth tokens.
+# ---------------------------------------------------------------------------
+CREDENTIAL_PROXY_ENABLED = os.getenv("CREDENTIAL_PROXY_ENABLED", "false").strip().lower() in ("true", "1", "yes")
+CREDENTIAL_PROXY_LITELLM_PORT = max(_safe_int("CREDENTIAL_PROXY_LITELLM_PORT", 4001), 1)
+CREDENTIAL_PROXY_MCP_HUB_PORT = max(_safe_int("CREDENTIAL_PROXY_MCP_HUB_PORT", 4010), 1)
+CREDENTIAL_PROXY_PROVIDER_PORT = max(_safe_int("CREDENTIAL_PROXY_PROVIDER_PORT", 4003), 1)
 
 # ---------------------------------------------------------------------------
 # Autonomy

@@ -218,6 +218,53 @@
         }
       }
     },
+    "credentialProxy": {
+      "type": "object",
+      "description": "Credential proxy sidecar configuration. Isolates secrets (API keys, bearer tokens, passwords) in a separate container. The agent runtime container never sees these secrets.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the credential-proxy sidecar. When enabled, secrets are held in the proxy container and injected into outbound requests."
+        },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string", "default": "docker.io/kubesynapse/credential-proxy" },
+            "tag": { "type": "string", "default": "latest" },
+            "pullPolicy": { "type": "string", "default": "Always" }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "requests": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string", "default": "10m" },
+                "memory": { "type": "string", "default": "16Mi" }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "properties": {
+                "cpu": { "type": "string", "default": "100m" },
+                "memory": { "type": "string", "default": "64Mi" }
+              }
+            }
+          }
+        },
+        "ports": {
+          "type": "object",
+          "properties": {
+            "litellm": { "type": "integer", "default": 4001, "description": "Port for LiteLLM proxy" },
+            "mcpHub": { "type": "integer", "default": 4010, "description": "Port for MCP Hub proxy" },
+            "inbound": { "type": "integer", "default": 8080, "description": "Port for inbound gateway requests" },
+            "health": { "type": "integer", "default": 9090, "description": "Port for health checks" }
+          }
+        }
+      }
+    },
     "piRuntime": {
       "type": "object",
       "description": "Pi agent runtime configuration",

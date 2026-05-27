@@ -14,6 +14,8 @@ import yaml
 from config import (
     AGENT_SKILL_CONFIGMAP_PATH_ENV,
     AGENT_SKILL_FILES_ENV,
+    CREDENTIAL_PROXY_ENABLED,
+    CREDENTIAL_PROXY_PROVIDER_PORT,
     DEFAULT_AGENT,
     DEFAULT_AGENT_STEPS,
     DEFAULT_MODEL,
@@ -48,6 +50,23 @@ from utils import dedupe_items, normalize_relative_path, serialize_file_content
 
 logger = logging.getLogger("opencode-runtime")
 
+_PROVIDER_PROXY_BASE_URLS: dict[str, str] = {
+    "opencode": "/zen/v1",
+    "opencode-go": "/zen/go/v1",
+    "github-copilot": "",
+}
+
+
+def _provider_proxy_base_url(provider_id: str) -> str | None:
+    suffix = _PROVIDER_PROXY_BASE_URLS.get(provider_id)
+    if suffix is None:
+        return None
+    return f"http://127.0.0.1:{CREDENTIAL_PROXY_PROVIDER_PORT}{suffix}"
+
+
+def _credential_proxy_enabled() -> bool:
+    return os.getenv("CREDENTIAL_PROXY_ENABLED", "false").strip().lower() in ("true", "1", "yes")
+
 # Mutable runtime config populated during lifespan startup
 SKILL_RUNTIME_CONFIG: dict[str, Any] = {
     "skillFiles": [],
@@ -78,6 +97,8 @@ KUBESYNAPSE_INSTRUCTION_CONTENT = (
     "6. You are scoped to your namespace — cross-namespace operations require explicit references.\n"
     "7. Clean up temporary files and be efficient with resources.\n"
     "8. When something fails, report the full error and your diagnosis.\n"
+    "9. NEVER attempt to read clipboard content. This is a headless server environment — there is no clipboard, no display, and no GUI. Do not call any tool with 'clipboard' as input.\n"
+    "10. Do NOT reference or attempt to access any image/screenshot/paste content. All inputs are plain text.\n"
 )
 
 
@@ -321,12 +342,20 @@ def load_opencode_mcp_connections() -> list[dict[str, Any]]:
 
 
 def build_shared_mcp_config() -> tuple[dict[str, Any], list[str]]:
-    """Build MCP server entries from the shared MCP hub."""
+    """Build MCP server entries from the shared MCP hub.
+
+    When credential-proxy is enabled, MCP Hub connections are routed through
+    localhost:4010 (the credential-proxy sidecar) without auth headers.
+    The proxy injects the bearer token server-side.
+    """
     entries: dict[str, Any] = {}
     warnings: list[str] = []
     raw_servers = os.getenv("MCP_SERVERS", "").strip()
     if not raw_servers:
         return entries, warnings
+
+    credential_proxy_enabled = os.getenv("CREDENTIAL_PROXY_ENABLED", "false").strip().lower() in ("true", "1", "yes")
+    mcp_hub_proxy_port = os.getenv("CREDENTIAL_PROXY_MCP_HUB_PORT", "4010").strip()
 
     for server_type in [item.strip() for item in raw_servers.split(",") if item.strip()]:
         if server_type == "github":
@@ -334,17 +363,25 @@ def build_shared_mcp_config() -> tuple[dict[str, Any], list[str]]:
                 "Skipping shared GitHub MCP server for OpenCode because the current hub deployment exposes an HTTP adapter rather than a native /mcp endpoint."
             )
             continue
-        if not MCP_BEARER_TOKEN:
-            warnings.append(f"Skipping shared MCP server '{server_type}' because MCP_BEARER_TOKEN is not configured.")
-            continue
-        entries[server_type] = {
-            "type": "remote",
-            "url": f"http://{HELM_RELEASE_NAME}-mcp-{server_type}.{MCP_HUB_NAMESPACE}.svc.cluster.local:8000/mcp",
-            "enabled": True,
-            "headers": {
-                "Authorization": f"Bearer {MCP_BEARER_TOKEN}",
-            },
-        }
+
+        if credential_proxy_enabled:
+            entries[server_type] = {
+                "type": "remote",
+                "url": f"http://127.0.0.1:{mcp_hub_proxy_port}/mcp",
+                "enabled": True,
+            }
+        else:
+            if not MCP_BEARER_TOKEN:
+                warnings.append(f"Skipping shared MCP server '{server_type}' because MCP_BEARER_TOKEN is not configured.")
+                continue
+            entries[server_type] = {
+                "type": "remote",
+                "url": f"http://{HELM_RELEASE_NAME}-mcp-{server_type}.{MCP_HUB_NAMESPACE}.svc.cluster.local:8000/mcp",
+                "enabled": True,
+                "headers": {
+                    "Authorization": f"Bearer {MCP_BEARER_TOKEN}",
+                },
+            }
     return entries, warnings
 
 
@@ -372,8 +409,10 @@ def build_structured_mcp_config(connections: list[dict[str, Any]]) -> tuple[dict
     """Build MCP config entries from the structured operator contract."""
     config: dict[str, Any] = {}
     warnings: list[str] = []
+    credential_proxy_enabled = os.getenv("CREDENTIAL_PROXY_ENABLED", "false").strip().lower() in ("true", "1", "yes")
+    mcp_hub_proxy_port = int(os.getenv("CREDENTIAL_PROXY_MCP_HUB_PORT", "4010").strip() or "4010")
 
-    for connection in connections:
+    for index, connection in enumerate(connections, start=1):
         runtime = connection.get("runtime") if isinstance(connection.get("runtime"), dict) else {}
         runtime_kind = str(runtime.get("kind") or "remote").strip().lower() or "remote"
         config_key = str(runtime.get("configKey") or connection.get("slug") or connection.get("name") or connection.get("serverId") or "").strip()
@@ -400,6 +439,15 @@ def build_structured_mcp_config(connections: list[dict[str, Any]]) -> tuple[dict
         if not url:
             warnings.append(f"Skipping MCP connection '{config_key}' because no runtime URL was provided.")
             continue
+
+        if credential_proxy_enabled and any(isinstance(header, dict) and str(header.get("envVar") or "").strip() for header in (runtime.get("headers") or [])):
+            config[config_key] = {
+                "type": "remote",
+                "url": f"http://127.0.0.1:{mcp_hub_proxy_port + index}/mcp",
+                "enabled": True,
+            }
+            continue
+
         headers: dict[str, str] = {}
         for header in runtime.get("headers") or []:
             if not isinstance(header, dict):
@@ -642,7 +690,10 @@ def build_generated_config(
             "name": provider_id,
         }
         resolved = prov.resolve_env()
-        if "OPENAI_BASE_URL" in resolved:
+        provider_proxy_base_url = _provider_proxy_base_url(provider_id) if _credential_proxy_enabled() else None
+        if provider_proxy_base_url:
+            provider_block.setdefault("options", {})["baseURL"] = provider_proxy_base_url
+        elif "OPENAI_BASE_URL" in resolved:
             provider_block.setdefault("options", {})["baseURL"] = resolved["OPENAI_BASE_URL"]
         elif provider_id == "opencode-go":
             provider_block.setdefault("options", {})["baseURL"] = "https://opencode.ai/zen/go/v1"
@@ -663,7 +714,10 @@ def build_generated_config(
                                 break
                 except (json.JSONDecodeError, TypeError):
                     pass
-        provider_block.setdefault("options", {})["apiKey"] = api_key
+        if provider_proxy_base_url:
+            provider_block.setdefault("options", {})["apiKey"] = "credential-proxy"
+        else:
+            provider_block.setdefault("options", {})["apiKey"] = api_key
         provider_block["models"] = {
             DEFAULT_MODEL: {
                 "name": DEFAULT_MODEL,
@@ -674,16 +728,20 @@ def build_generated_config(
             }
         }
         provider[provider_id] = provider_block
-    elif provider_id == "copilot":
+    elif provider_id in ("copilot", "github-copilot"):
         from providers import get_provider
 
-        prov = get_provider("copilot")
+        prov = get_provider(provider_id)
         provider_block: dict[str, Any] = {
             "npm": "@ai-sdk/openai-compatible",
-            "name": "copilot",
+            "name": provider_id,
         }
         resolved = prov.resolve_env()
-        if "GITHUB_TOKEN" in resolved:
+        provider_proxy_base_url = _provider_proxy_base_url("github-copilot") if _credential_proxy_enabled() else None
+        if provider_proxy_base_url:
+            provider_block.setdefault("options", {})["baseURL"] = provider_proxy_base_url
+            provider_block.setdefault("options", {})["apiKey"] = "credential-proxy"
+        elif "GITHUB_TOKEN" in resolved:
             provider_block.setdefault("options", {})["headers"] = {
                 "Authorization": f"Bearer {resolved['GITHUB_TOKEN']}"
             }
