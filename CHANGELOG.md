@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.2.0](https://github.com/ykbytes/kubesynapse.ai/compare/v0.1.0...v0.2.0) (2026-05-28)
+
+
+### Added
+
+* KubeSynapse — Kubernetes-native AI agent platform ([0c80731](https://github.com/ykbytes/kubesynapse.ai/commit/0c80731aa748e6704761b34fa5cacf3458161019))
+
+
+### Fixed
+
+* align CREDENTIAL_PROXY_MCP_HUB_PORT to 4010 across all components ([194366c](https://github.com/ykbytes/kubesynapse.ai/commit/194366ce56581650c55211885669c48d9eff7b44))
+* correct secret name in README password retrieval command ([de2efde](https://github.com/ykbytes/kubesynapse.ai/commit/de2efde73f06143a6dcc09712e499cd7e6ff1bd7))
+* reduce opencode invoke latency and align api v1 paths ([3e4684a](https://github.com/ykbytes/kubesynapse.ai/commit/3e4684a41836bc33c54c8c86320843f83e3a11a4))
+* remove expires 0 from Copilot OAuth auth content ([4ee7744](https://github.com/ykbytes/kubesynapse.ai/commit/4ee7744bb9995b987ee1831efbce5c0e17fe0c5b))
+* remove MCP sidecars from all 3 demos — images not available in Kind ([f41bad6](https://github.com/ykbytes/kubesynapse.ai/commit/f41bad6b1fc4786867f3fcd1b167630561db41ab))
+* resolve daily-standup-bot end-to-end workflow issues ([8edbc70](https://github.com/ykbytes/kubesynapse.ai/commit/8edbc709dc2a467b65619dda8c8b95c5edc004db))
+* switch demos to opencode-go/deepseek-v4-flash — fastest available model ([fbae799](https://github.com/ykbytes/kubesynapse.ai/commit/fbae799619e2358cb9f83cf2e787437ebb1f4ce2))
+* switch demos to opencode-go/glm-5 — working free model ([3d81902](https://github.com/ykbytes/kubesynapse.ai/commit/3d819027dee172a83c52a8323c5ae3756aaa6d0f))
+* validate demos against real CRD schema — model, sessionGroup, policies ([b5ca8a9](https://github.com/ykbytes/kubesynapse.ai/commit/b5ca8a92f2c96ca2f4418e0b5391244a3a6a3924))
+
+
+### Documentation
+
+* feature only OpenCode as production runtime, mark Pi/Vibe as alpha ([2922019](https://github.com/ykbytes/kubesynapse.ai/commit/2922019b9d72946d183736b62f825fdb2c967669))
+* fix deployment guides — add MCP sidecars, fix API paths, mark Pi/Vibe alpha ([a8a528b](https://github.com/ykbytes/kubesynapse.ai/commit/a8a528bf83e3c54777bd1e56486bfeffd8c1e6b9))
+* fix README quickstart and DX — critical user-facing bugs ([6ee14e5](https://github.com/ykbytes/kubesynapse.ai/commit/6ee14e5fbbc657a2522d5eb2ad910b9f648031ee))
+* redesigned architecture diagram — color-coded layers, emojis, cleaner flow ([c5b4715](https://github.com/ykbytes/kubesynapse.ai/commit/c5b4715259004a8df2bf756f461a0f4afe608e24))
+* replace README architecture diagram with color-coded layered version ([dbd6039](https://github.com/ykbytes/kubesynapse.ai/commit/dbd6039a30f10bc730f9925041cddbbaf860d3b9))
+* validate and correct architecture diagram — add labels, fix edges ([14b5939](https://github.com/ykbytes/kubesynapse.ai/commit/14b593948b4aa5efc777e4d5f8731c5e3ef3bbce))
+
 ## [Unreleased] - Sprint 10 (Observatory Pipeline Hardening & UI Fixes)
 
 ### Fixed
