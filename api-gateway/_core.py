@@ -39,9 +39,9 @@ from auth_middleware import (  # §4.1 — extracted auth middleware
     auth_configuration_payload,
     authenticate_bearer_token,
     browser_auth_enabled,
-    ensure_browser_auth_available,
     clear_oidc_transaction_cookie,
     clear_refresh_cookie,
+    ensure_browser_auth_available,
     ensure_namespace_access,
     ensure_role,
     issue_session_response,
@@ -115,6 +115,8 @@ from auth_store import (
     IntelligenceCollectorRow,
     IntelligenceScheduleRow,
     IntelligenceTaskRow,
+    api_rate_limit_key,
+    api_rate_limited,
     apply_memory_feedback,
     change_user_password,
     count_recent_webhook_invocations,
@@ -152,10 +154,8 @@ from auth_store import (
     list_workflow_triggers,
     login_rate_limit_key,
     login_rate_limited,
-    note_login_attempt,
-    api_rate_limit_key,
-    api_rate_limited,
     note_api_request,
+    note_login_attempt,
     purge_old_audit_logs,
     query_audit_logs,
     query_usage_detail,
@@ -312,6 +312,14 @@ async def lifespan(app: FastAPI):
             _load_tasks_from_db()
         except NameError:
             pass
+        # Start model registry for dynamic model discovery
+        try:
+            from services.model_router import start_model_registry, stop_model_registry
+            await start_model_registry()
+            logger.info("Model registry started for dynamic model discovery")
+        except Exception as exc:
+            logger.warning("Model registry failed to start (invoke will use static model config): %s", exc)
+            stop_model_registry = None  # type: ignore[assignment]
         # Validate shared token is configured
         shared_token = os.environ.get("API_GATEWAY_SHARED_TOKEN", "")
         if not shared_token:
@@ -326,6 +334,12 @@ async def lifespan(app: FastAPI):
         _SHUTDOWN.set()
         if _scheduler_task is not None:
             _scheduler_task.cancel()
+        # Stop model registry
+        try:
+            from services.model_router import stop_model_registry
+            await stop_model_registry()
+        except Exception:
+            pass
         logger.info("API gateway shutting down.")
 
 
@@ -378,7 +392,7 @@ async def _request_id_middleware(request: Request, call_next):  # type: ignore[n
 @app.exception_handler(HTTPException)
 async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     """Convert HTTPException to standard ErrorResponse."""
-    from error_codes import build_error_response, ErrorCode
+    from error_codes import ErrorCode, build_error_response
 
     status_code = exc.status_code
     detail = exc.detail

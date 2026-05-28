@@ -347,6 +347,42 @@ kubectl patch networkpolicy allow-litellm-egress -n kubesynapse --type merge \
 - Configure LiteLLM with fallback models
 - Set reasonable timeout values in agent spec
 - Monitor provider rate limits and error rates
+- Keep clients on canonical `/api/v1/...` paths for health and invoke calls.
+- Prefer the agent's configured model first in fallback ordering; avoid broad
+  cross-provider fallback chains that add retries before the real model runs.
+
+### High Invoke Latency For OpenCode Agents
+
+### Symptoms
+
+- Simple agent invokes take 20s to 40s before the first response
+- Gateway logs show repeated fallback attempts before the configured model runs
+- Runtime logs show repeated retries against OpenCode's synchronous
+  `/session/{id}/message` endpoint
+
+### Diagnosis
+
+```bash
+# Confirm the UI and clients hit the canonical invoke path
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/api/v1/agents/taskrunner/invoke \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"What is 2+2?","thread_id":"latency-check"}'
+
+# Check whether the gateway is trying multiple fallback models
+kubectl logs -n kubesynapse deployment/kubesynapse-api-gateway --tail=200 | grep runtime_request_start_model
+
+# Check whether the runtime is still using the broken sync message path
+kubectl logs taskrunner-sandbox-0 -c agent-runtime --tail=200 | grep '/session/.*/message'
+```
+
+### Fix
+
+- Ensure the Web UI and SDKs call `/api/v1/agents/{name}/invoke` and
+  `/api/v1/agents/{name}/invoke/stream` directly.
+- Keep the requested model first in the gateway fallback chain.
+- Use the OpenCode async prompt path in the runtime for invoke execution,
+  including turns with system prompts.
 
 ---
 

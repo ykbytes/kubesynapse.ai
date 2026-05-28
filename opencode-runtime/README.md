@@ -23,8 +23,17 @@ and runtime-local memory services.
 - **Gateway Memory Hand-off** — Final invoke payloads can emit `metadata.memory`
   candidates which the API gateway persists into PostgreSQL for durable recall.
 - **Stream Parity Support** — The runtime supports both `/invoke` and
-  `/invoke/stream`, and can fall back to an internal sync invoke when a
-  memory-heavy system prompt is already assembled upstream.
+  `/invoke/stream`, with the primary invoke path using OpenCode's async prompt
+  flow even when a system prompt is present.
+
+## Invoke Behavior
+
+- KubeSynapse uses the async OpenCode prompt path for normal invoke execution.
+- This avoids the slower and less reliable synchronous `/session/{id}/message`
+  path inside OpenCode.
+- In practice this reduces taskrunner-style invokes from the prior 30s to 40s
+  range down into the single-digit seconds when the model and session are
+  healthy.
 
 ## Memory Model
 

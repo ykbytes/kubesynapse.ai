@@ -111,14 +111,71 @@ def create_remote_session(working_directory: str) -> str:
     return session_id
 
 
+def _verify_session_ready(session_id: str, max_attempts: int = 5, base_delay: float = 0.05) -> None:
+    """Verify a newly created session can accept prompts.
+
+    OpenCode may return 500 on POST /session/{id}/message immediately after
+    session creation if the internal state isn't fully initialized. Polling
+    GET /session/status until the session appears eliminates this race.
+    """
+    for attempt in range(max_attempts):
+        try:
+            status = get_session_status(session_id)
+            if status and str(status.get("type", "idle")) in ("idle", "busy"):
+                return
+        except (httpx.HTTPError, ValueError):
+            pass
+        if attempt < max_attempts - 1:
+            time.sleep(base_delay * (2 ** attempt))
+    logger.debug("Session %s readiness check completed after %d attempts", session_id, max_attempts)
+
+
 def ensure_remote_session(thread_id: str, working_directory: str) -> str:
     """Return an existing session or create a new one for *thread_id*."""
     session_id = SESSION_REGISTRY.get(thread_id)
     if session_id:
         return session_id
     session_id = create_remote_session(working_directory)
+    _verify_session_ready(session_id)
     SESSION_REGISTRY.set(thread_id, session_id)
     return session_id
+
+
+_TRANSIENT_RETRY_ATTEMPTS = 3
+_TRANSIENT_RETRY_BASE_DELAY = 0.1
+
+
+def _transient_retry_post(
+    client: httpx.Client,
+    url: str,
+    json_body: dict[str, Any],
+    params: dict[str, str] | None = None,
+    retries: int = _TRANSIENT_RETRY_ATTEMPTS,
+    base_delay: float = _TRANSIENT_RETRY_BASE_DELAY,
+) -> httpx.Response:
+    """POST with short retries on transient 500/502/503 errors.
+
+    OpenCode may return 500 immediately after session creation if internal
+    state isn't fully initialized. These resolve within milliseconds so a
+    quick retry eliminates the need for the gateway to back off for seconds.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        try:
+            response = client.post(url, params=params, json=json_body)
+            if response.status_code not in (500, 502, 503):
+                return response
+            last_exc = HTTPException(
+                status_code=response.status_code,
+                detail=f"Transient {response.status_code} on POST {url}",
+            )
+        except httpx.HTTPError as exc:
+            last_exc = exc
+        if attempt < retries - 1:
+            time.sleep(base_delay * (2 ** attempt))
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"All {retries} transient retries exhausted for POST {url}")
 
 
 def send_prompt(
@@ -145,10 +202,11 @@ def send_prompt(
         body["format"] = prompt_format
 
     with runtime_http_client() as client:
-        response = client.post(
+        response = _transient_retry_post(
+            client,
             f"/session/{session_id}/message",
+            body,
             params={"directory": working_directory},
-            json=body,
         )
         if response.status_code == 404:
             raise HTTPException(status_code=404, detail="OpenCode session not found")
@@ -192,10 +250,11 @@ def send_prompt_async(
         body["format"] = prompt_format
 
     with runtime_http_client() as client:
-        response = client.post(
+        response = _transient_retry_post(
+            client,
             f"/session/{session_id}/prompt_async",
+            body,
             params={"directory": working_directory},
-            json=body,
         )
         if response.status_code == 404:
             raise HTTPException(status_code=404, detail="OpenCode session not found")

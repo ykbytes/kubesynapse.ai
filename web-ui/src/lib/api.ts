@@ -1735,7 +1735,7 @@ async function parseJsonResponse<T>(response: Response, parser: (payload: unknow
 }
 
 export async function fetchGatewayHealth(): Promise<GatewayHealth> {
-  const response = await fetch(buildUrl("/api/health"));
+  const response = await fetch(buildUrl("/api/v1/health"));
   return parseJsonResponse(response, parseGatewayHealthPayload);
 }
 
@@ -1750,7 +1750,7 @@ export async function fetchNamespaces(token: string): Promise<string[]> {
 }
 
 export async function fetchAuthConfig(): Promise<AuthConfig> {
-  const response = await fetch(buildUrl("/api/auth/config"), buildCredentialedInit());
+  const response = await fetch(buildUrl("/api/v1/auth/config"), buildCredentialedInit());
   return parseJsonResponse(response, parseAuthConfigPayload);
 }
 
@@ -1760,7 +1760,7 @@ export async function loginWithPassword(
   provider: "local" | "ldap" = "local",
 ): Promise<AuthSession> {
   const response = await fetch(
-    buildUrl("/api/auth/login"),
+    buildUrl("/api/v1/auth/login"),
     buildCredentialedInit({
       method: "POST",
       headers: {
@@ -1780,7 +1780,7 @@ export async function registerWithPassword(
   displayName?: string,
 ): Promise<AuthSession> {
   const response = await fetch(
-    buildUrl("/api/auth/register"),
+    buildUrl("/api/v1/auth/register"),
     buildCredentialedInit({
       method: "POST",
       headers: {
@@ -1801,7 +1801,7 @@ export async function registerWithPassword(
 /** Internal refresh used by the 401-retry logic in fetchAuthenticated. */
 async function refreshAuthSessionInternal(): Promise<AuthSession> {
   const response = await fetch(
-    buildUrl("/api/auth/refresh"),
+    buildUrl("/api/v1/auth/refresh"),
     buildCredentialedInit({
       method: "POST",
       headers: { Accept: "application/json" },
@@ -1815,7 +1815,7 @@ export async function refreshAuthSession(): Promise<AuthSession> {
 }
 
 export async function logoutSession(token?: string): Promise<void> {
-  const response = await fetchAuthenticated(buildUrl("/api/auth/logout"), token, {
+  const response = await fetchAuthenticated(buildUrl("/api/v1/auth/logout"), token, {
     method: "POST",
   });
   if (!response.ok) {
@@ -1825,7 +1825,7 @@ export async function logoutSession(token?: string): Promise<void> {
 }
 
 export async function fetchCurrentUser(token: string): Promise<AuthenticatedUser> {
-  const response = await fetchAuthenticated(buildUrl("/api/auth/me"), token);
+  const response = await fetchAuthenticated(buildUrl("/api/v1/auth/me"), token);
   return parseJsonResponse(response, (payload) => {
     const record = expectRecord(payload, "CurrentUserResponse");
     return parseAuthenticatedUserPayload(record.user, "CurrentUserResponse.user");
@@ -1833,7 +1833,7 @@ export async function fetchCurrentUser(token: string): Promise<AuthenticatedUser
 }
 
 export async function changePassword(token: string, currentPassword: string, newPassword: string): Promise<AuthenticatedUser> {
-  const response = await fetchAuthenticated(buildUrl("/api/auth/change-password"), token, {
+  const response = await fetchAuthenticated(buildUrl("/api/v1/auth/change-password"), token, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -2298,7 +2298,7 @@ export async function invokeAgent(
   requestId: string,
 ): Promise<InvokeResponse> {
   const response = await fetchAuthenticated(
-    buildUrl(`/api/agents/${agentName}/invoke`, namespace),
+    buildUrl(`/api/v1/agents/${agentName}/invoke`, namespace),
     token,
     {
       method: "POST",
@@ -3174,7 +3174,7 @@ export async function rejectQuestion(
 }
 
 export async function streamAgentInvoke(options: StreamHandlers): Promise<void> {
-  await fetchEventSource(buildUrl(`/api/agents/${options.agentName}/invoke/stream`, options.namespace), {
+  await fetchEventSource(buildUrl(`/api/v1/agents/${options.agentName}/invoke/stream`, options.namespace), {
     fetch: buildEventSourceFetch(options.token, options.requestId),
     method: "POST",
     headers: {

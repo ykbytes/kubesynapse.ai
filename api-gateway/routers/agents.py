@@ -3,12 +3,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from typing import Any
 
 # Re-import all shared symbols from the gateway core
 from _core import *
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
+from services.audit import emit_invoke_audit
+from services.model_router import get_fallback_chain, record_model_failure, record_model_success
+from services.runtime_client import (
+    CircuitBreakerOpenError,
+    RuntimeUnhealthyError,
+    invoke_with_retry,
+    stream_with_retry,
+)
 
 from routers.observability import _agent_wants_intelligence, _build_auto_intelligence_context
 
@@ -22,7 +31,7 @@ def _invoke_error_detail(
     request_id: str | None = None,
 ) -> dict[str, Any]:
     """Build a structured ErrorResponse for agent invocation failures."""
-    from error_codes import build_error_response, ErrorCode
+    from error_codes import ErrorCode, build_error_response
     return build_error_response(
         code=ErrorCode.INVOKE_FAILED,
         message=reason,
@@ -42,7 +51,7 @@ def _build_invoke_execution_id(
 ) -> str:
     request_seed = str(request_id or "").strip()
     if request_seed:
-        digest = hashlib.sha256(f"request:{request_seed}".encode("utf-8")).hexdigest()[:24]
+        digest = hashlib.sha256(f"request:{request_seed}".encode()).hexdigest()[:24]
         return f"exec-{digest}"
 
     thread_seed = str(thread_id or "").strip()
@@ -628,7 +637,6 @@ async def invoke_agent(
     if request.factory_mode and not is_factory_agent_resource(agent_name, agent):
         raise HTTPException(status_code=400, detail="factory_mode is only supported for the kubesynapse factory agent.")
     request_payload = request.model_dump(exclude={"factory_mode"})
-    policy_memory = resolve_agent_memory_policy(agent, namespace)
     _log_invoke_step("memory_policy_resolved")
     normalized_memory_policy = _apply_recalled_memory_to_request(
         agent_name,
@@ -652,61 +660,104 @@ async def invoke_agent(
     if request.factory_mode:
         append_system_note(request_payload, FACTORY_MODE_SYSTEM_NOTES.get(request.factory_mode))
     request_id = raw_request.headers.get("x-request-id") or str(uuid.uuid4())
-    async with httpx.AsyncClient(timeout=AGENT_RUNTIME_TIMEOUT_SECONDS, trust_env=False) as client:
+
+    # Validate model availability and get fallback chain
+    agent_model = agent.get("spec", {}).get("model", "")
+    fallback_models = await get_fallback_chain(agent_model) if agent_model else [agent_model]
+    _log_invoke_step("model_fallback_resolved")
+
+    runtime_url = agent_runtime_url(agent_name, namespace)
+    agent_key = f"{namespace}/{agent_name}"
+
+    for model in fallback_models:
         try:
-            _log_invoke_step("runtime_request_start")
-            response = await client.post(
-                f"{agent_runtime_url(agent_name, namespace)}/invoke",
-                json=request_payload,
+            _log_invoke_step(f"runtime_request_start_model={model}")
+            response = await invoke_with_retry(
+                runtime_url,
+                "/invoke",
+                {**request_payload, "model": model} if model != agent_model else request_payload,
                 headers={"x-request-id": request_id},
+                timeout=AGENT_RUNTIME_TIMEOUT_SECONDS,
+                agent_key=agent_key,
             )
             _log_invoke_step("runtime_request_complete")
+        except (CircuitBreakerOpenError, RuntimeUnhealthyError) as exc:
+            logger.warning("Runtime unavailable for %s: %s", agent_key, exc)
+            raise HTTPException(
+                status_code=503,
+                detail=_invoke_error_detail(str(exc), agent_name, namespace, request_id),
+            ) from exc
         except Exception as exc:
             logger.error("Agent invocation failed (agent=%s, namespace=%s, request_id=%s): %s",
                          agent_name, namespace, request_id, exc)
+            if model != fallback_models[-1]:
+                logger.info("Trying fallback model: %s", model)
+                continue
             raise HTTPException(
                 status_code=502,
                 detail=_invoke_error_detail("Agent invocation failed", agent_name, namespace, request_id),
             ) from exc
 
-    if response.status_code >= 400:
-        error_payload = error_payload_from_body(response.content, "Agent invocation failed")
-        raise HTTPException(
-            status_code=502,
-            detail=_invoke_error_detail(
-                error_payload.get("error", "Agent invocation failed"), agent_name, namespace, request_id
-            ),
+        if response.status_code >= 400:
+            error_payload = error_payload_from_body(response.content, "Agent invocation failed")
+            if model != fallback_models[-1] and response.status_code in (429, 500, 502, 503, 504):
+                logger.info("Model %s failed with %d, trying fallback", model, response.status_code)
+                record_model_failure(model, error_payload.get("error", "unknown"))
+                continue
+            record_model_failure(model, error_payload.get("error", "unknown"))
+            raise HTTPException(
+                status_code=502,
+                detail=_invoke_error_detail(
+                    error_payload.get("error", "Agent invocation failed"), agent_name, namespace, request_id
+                ),
+            )
+
+        data = parse_json_object_response(response, context="Agent runtime /invoke")
+        _log_invoke_step("runtime_response_parsed")
+        record_model_success(model, (time.perf_counter() - invoke_started_at) * 1000)
+
+        latency_ms = (time.perf_counter() - invoke_started_at) * 1000
+        emit_invoke_audit(
+            user=username,
+            agent=agent_name,
+            namespace=namespace,
+            request_id=request_id,
+            status="success",
+            latency_ms=latency_ms,
+            model=model,
+        )
+        _record_invoke_response_side_effects(
+            namespace,
+            agent_name,
+            agent,
+            data,
+            user,
+            request_id,
+            normalized_memory_policy,
+        )
+        return InvokeResponse(
+            agent_name=agent_name,
+            response=data.get("response", ""),
+            thread_id=data.get("thread_id", ""),
+            model=data.get("model") or agent["spec"].get("model", "unknown"),
+            policy_name=data.get("policy_name"),
+            tool_name=data.get("tool_name"),
+            tool_result=data.get("tool_result"),
+            sandbox_session=data.get("sandbox_session"),
+            status=data.get("status", "completed"),
+            approval_name=data.get("approval_name"),
+            retry_after_seconds=data.get("retry_after_seconds"),
+            a2a=data.get("a2a"),
+            subagents=data.get("subagents"),
+            warnings=data.get("warnings") or [],
+            artifacts=data.get("artifacts") or [],
+            tool_calls=data.get("tool_calls") or [],
+            metadata=data.get("metadata"),
         )
 
-    data = parse_json_object_response(response, context="Agent runtime /invoke")
-    _log_invoke_step("runtime_response_parsed")
-    _record_invoke_response_side_effects(
-        namespace,
-        agent_name,
-        agent,
-        data,
-        user,
-        request_id,
-        normalized_memory_policy,
-    )
-    return InvokeResponse(
-        agent_name=agent_name,
-        response=data.get("response", ""),
-        thread_id=data.get("thread_id", ""),
-        model=data.get("model") or agent["spec"].get("model", "unknown"),
-        policy_name=data.get("policy_name"),
-        tool_name=data.get("tool_name"),
-        tool_result=data.get("tool_result"),
-        sandbox_session=data.get("sandbox_session"),
-        status=data.get("status", "completed"),
-        approval_name=data.get("approval_name"),
-        retry_after_seconds=data.get("retry_after_seconds"),
-        a2a=data.get("a2a"),
-        subagents=data.get("subagents"),
-        warnings=data.get("warnings") or [],
-        artifacts=data.get("artifacts") or [],
-        tool_calls=data.get("tool_calls") or [],
-        metadata=data.get("metadata"),
+    raise HTTPException(
+        status_code=502,
+        detail=_invoke_error_detail("No runtime response returned", agent_name, namespace, request_id),
     )
 
 
@@ -735,6 +786,7 @@ async def invoke_agent_stream(
     namespace: str = "default",
     user=Depends(verify_token),
 ):
+    invoke_started_at = time.perf_counter()
     agent_name, namespace = resolve_invoke_agent_reference(agent_name, namespace)
     ensure_namespace_access(user, namespace, "operator")  # P1-7: invoke is a mutating operation
     agent = await asyncio.to_thread(read_agent_cached, agent_name, namespace)
@@ -763,140 +815,207 @@ async def invoke_agent_stream(
     if request.factory_mode:
         append_system_note(request_payload, FACTORY_MODE_SYSTEM_NOTES.get(request.factory_mode))
     request_id = raw_request.headers.get("x-request-id") or str(uuid.uuid4())
+    username = _invoke_username(user) or "anonymous"
+    agent_key = f"{namespace}/{agent_name}"
+    runtime_url = agent_runtime_url(agent_name, namespace)
 
     async def event_generator():
         stream_buffer = ""
 
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0), trust_env=False) as client:
-                if memory_injected:
-                    thread_id = str(request_payload.get("thread_id") or "").strip() or str(uuid.uuid4())
-                    request_payload["thread_id"] = thread_id
-                    yield sse_event("response.started", {"thread_id": thread_id, "source": "gateway"})
-                    response = await client.post(
-                        f"{agent_runtime_url(agent_name, namespace)}/invoke",
-                        json=request_payload,
-                        headers={"x-request-id": request_id},
-                    )
-                    if response.status_code >= 400:
-                        err = error_payload_from_body(response.content, "Agent invocation failed")
-                        err["detail"] = _invoke_error_detail(
-                            err.get("error", "Agent invocation failed"), agent_name, namespace, request_id
+            # Validate model and get fallback chain
+            agent_model = agent.get("spec", {}).get("model", "")
+            fallback_models = await get_fallback_chain(agent_model) if agent_model else [agent_model]
+
+            for model in fallback_models:
+                payload = {**request_payload, "model": model} if model != agent_model else request_payload
+                try:
+                    if memory_injected:
+                        thread_id = str(payload.get("thread_id") or "").strip() or str(uuid.uuid4())
+                        payload["thread_id"] = thread_id
+                        yield sse_event("response.started", {"thread_id": thread_id, "source": "gateway"})
+                        response = await invoke_with_retry(
+                            runtime_url,
+                            "/invoke",
+                            payload,
+                            headers={"x-request-id": request_id},
+                            timeout=AGENT_RUNTIME_TIMEOUT_SECONDS,
+                            agent_key=agent_key,
+                            skip_health_check=True,
                         )
-                        yield sse_event("response.error", err)
-                        return
-                    data = parse_json_object_response(response, context="Agent runtime /invoke")
-                    _record_invoke_response_side_effects(
-                        namespace,
-                        agent_name,
-                        agent,
-                        data,
-                        user,
-                        request_id,
-                        normalized_memory_policy,
-                    )
-                    response_text = str(data.get("response") or "")
-                    if response_text:
+                        if response.status_code >= 400:
+                            err = error_payload_from_body(response.content, "Agent invocation failed")
+                            err["detail"] = _invoke_error_detail(
+                                err.get("error", "Agent invocation failed"), agent_name, namespace, request_id
+                            )
+                            if model != fallback_models[-1] and response.status_code in (429, 500, 502, 503, 504):
+                                record_model_failure(model, err.get("error", "unknown"))
+                                continue
+                            yield sse_event("response.error", err)
+                            return
+                        data = parse_json_object_response(response, context="Agent runtime /invoke")
+                        record_model_success(model, (time.perf_counter() - invoke_started_at) * 1000)
+                        _record_invoke_response_side_effects(
+                            namespace,
+                            agent_name,
+                            agent,
+                            data,
+                            user,
+                            request_id,
+                            normalized_memory_policy,
+                        )
+                        response_text = str(data.get("response") or "")
+                        if response_text:
+                            yield sse_event(
+                                "response.delta",
+                                {
+                                    "thread_id": data.get("thread_id") or thread_id,
+                                    "delta": response_text,
+                                    "source": "gateway",
+                                },
+                            )
                         yield sse_event(
-                            "response.delta",
+                            "response.completed",
                             {
                                 "thread_id": data.get("thread_id") or thread_id,
-                                "delta": response_text,
-                                "source": "gateway",
+                                "response": response_text,
+                                "model": data.get("model") or model,
+                                "status": data.get("status", "completed"),
+                                "approval_name": data.get("approval_name"),
+                                "a2a": data.get("a2a"),
+                                "warnings": data.get("warnings") or [],
+                                "artifacts": data.get("artifacts") or [],
+                                "tool_calls": data.get("tool_calls") or [],
+                                "metadata": data.get("metadata"),
                             },
                         )
-                    yield sse_event(
-                        "response.completed",
-                        {
-                            "thread_id": data.get("thread_id") or thread_id,
-                            "response": response_text,
-                            "model": data.get("model") or agent["spec"].get("model", "unknown"),
-                            "status": data.get("status", "completed"),
-                            "approval_name": data.get("approval_name"),
-                            "a2a": data.get("a2a"),
-                            "warnings": data.get("warnings") or [],
-                            "artifacts": data.get("artifacts") or [],
-                            "tool_calls": data.get("tool_calls") or [],
-                            "metadata": data.get("metadata"),
-                        },
-                    )
-                    return
-
-                async with client.stream(
-                    "POST",
-                    f"{agent_runtime_url(agent_name, namespace)}/invoke/stream",
-                    json=request_payload,
-                    headers={"x-request-id": request_id},
-                ) as response:
-                    if response.status_code >= 400:
-                        body = await response.aread()
-                        err = error_payload_from_body(body, "Agent invocation failed")
-                        err["detail"] = _invoke_error_detail(
-                            err.get("error", "Agent invocation failed"), agent_name, namespace, request_id
+                        latency_ms = (time.perf_counter() - invoke_started_at) * 1000
+                        emit_invoke_audit(
+                            user=username,
+                            agent=agent_name,
+                            namespace=namespace,
+                            request_id=request_id,
+                            status="success",
+                            latency_ms=latency_ms,
+                            model=model,
                         )
-                        yield sse_event("response.error", err)
                         return
-                    stream_iterator = response.aiter_text()
 
-                    async def _next_chunk() -> str:
-                        return await anext(stream_iterator)
-
-                    next_chunk_task = asyncio.create_task(_next_chunk())
-                    try:
-                        while True:
-                            done, _ = await asyncio.wait({next_chunk_task}, timeout=STREAM_KEEPALIVE_SECONDS)
-                            if not done:
-                                yield sse_keepalive_comment()
-                                continue
-
-                            try:
-                                chunk = next_chunk_task.result()
-                            except StopAsyncIteration:
+                    async for response in stream_with_retry(
+                        runtime_url,
+                        "/invoke/stream",
+                        payload,
+                        headers={"x-request-id": request_id},
+                        timeout=httpx.Timeout(300.0, connect=10.0),
+                        agent_key=agent_key,
+                    ):
+                        if response.status_code >= 400:
+                            body = await response.aread()
+                            err = error_payload_from_body(body, "Agent invocation failed")
+                            err["detail"] = _invoke_error_detail(
+                                err.get("error", "Agent invocation failed"), agent_name, namespace, request_id
+                            )
+                            if model != fallback_models[-1] and response.status_code in (429, 500, 502, 503, 504):
+                                record_model_failure(model, err.get("error", "unknown"))
                                 break
+                            yield sse_event("response.error", err)
+                            return
+                        stream_iterator = response.aiter_text()
 
-                            if chunk:
-                                yield chunk
-                                stream_buffer += chunk
-                                while "\n\n" in stream_buffer:
-                                    raw_event, stream_buffer = stream_buffer.split("\n\n", 1)
-                                    event_name = "message"
-                                    data_lines: list[str] = []
-                                    for line in raw_event.splitlines():
-                                        if line.startswith(":"):
-                                            continue
-                                        if line.startswith("event:"):
-                                            event_name = line[6:].strip() or "message"
-                                        elif line.startswith("data:"):
-                                            data_lines.append(line[5:].strip())
-                                    if event_name != "response.completed" or not data_lines:
-                                        continue
-                                    try:
-                                        completion_payload = json.loads("\n".join(data_lines))
-                                    except json.JSONDecodeError:
-                                        continue
-                                    if isinstance(completion_payload, dict):
-                                        _record_invoke_response_side_effects(
-                                            namespace,
-                                            agent_name,
-                                            agent,
-                                            completion_payload,
-                                            user,
-                                            request_id,
-                                            normalized_memory_policy,
-                                        )
+                        async def _next_chunk(it=stream_iterator) -> str:
+                            return await anext(it)
 
-                            next_chunk_task = asyncio.create_task(_next_chunk())
-                    finally:
+                        next_chunk_task = asyncio.create_task(_next_chunk())
                         try:
-                            if not next_chunk_task.done():
-                                next_chunk_task.cancel()
-                                with contextlib.suppress(asyncio.CancelledError):
-                                    await next_chunk_task
-                        except NameError:
-                            pass
+                            while True:
+                                done, _ = await asyncio.wait({next_chunk_task}, timeout=STREAM_KEEPALIVE_SECONDS)
+                                if not done:
+                                    yield sse_keepalive_comment()
+                                    continue
+
+                                try:
+                                    chunk = next_chunk_task.result()
+                                except StopAsyncIteration:
+                                    break
+
+                                if chunk:
+                                    yield chunk
+                                    stream_buffer += chunk
+                                    while "\n\n" in stream_buffer:
+                                        raw_event, stream_buffer = stream_buffer.split("\n\n", 1)
+                                        event_name = "message"
+                                        data_lines: list[str] = []
+                                        for line in raw_event.splitlines():
+                                            if line.startswith(":"):
+                                                continue
+                                            if line.startswith("event:"):
+                                                event_name = line[6:].strip() or "message"
+                                            elif line.startswith("data:"):
+                                                data_lines.append(line[5:].strip())
+                                        if event_name != "response.completed" or not data_lines:
+                                            continue
+                                        try:
+                                            completion_payload = json.loads("\n".join(data_lines))
+                                        except json.JSONDecodeError:
+                                            continue
+                                        if isinstance(completion_payload, dict):
+                                            _record_invoke_response_side_effects(
+                                                namespace,
+                                                agent_name,
+                                                agent,
+                                                completion_payload,
+                                                user,
+                                                request_id,
+                                                normalized_memory_policy,
+                                            )
+                                            record_model_success(model, (time.perf_counter() - invoke_started_at) * 1000)
+                                            latency_ms = (time.perf_counter() - invoke_started_at) * 1000
+                                            emit_invoke_audit(
+                                                user=username,
+                                                agent=agent_name,
+                                                namespace=namespace,
+                                                request_id=request_id,
+                                                status="success",
+                                                latency_ms=latency_ms,
+                                                model=model,
+                                            )
+
+                                next_chunk_task = asyncio.create_task(_next_chunk())
+                        finally:
+                            try:
+                                if not next_chunk_task.done():
+                                    next_chunk_task.cancel()
+                                    with contextlib.suppress(asyncio.CancelledError):
+                                        await next_chunk_task
+                            except NameError:
+                                pass
+                        return
+                except (CircuitBreakerOpenError, RuntimeUnhealthyError) as exc:
+                    logger.warning("Runtime unavailable for %s: %s", agent_key, exc)
+                    yield sse_event("response.error", {
+                        "error": "Runtime unavailable",
+                        "detail": _invoke_error_detail(str(exc), agent_name, namespace, request_id),
+                    })
+                    return
+                except Exception as exc:
+                    if model != fallback_models[-1]:
+                        logger.info("Stream failed with model %s, trying fallback", model)
+                        record_model_failure(model, str(exc))
+                        continue
+                    raise
+
         except Exception as exc:
             logger.error("Streaming invoke error (agent=%s, namespace=%s, request_id=%s): %s",
                          agent_name, namespace, request_id, exc)
+            emit_invoke_audit(
+                user=username,
+                agent=agent_name,
+                namespace=namespace,
+                request_id=request_id,
+                status="failed",
+                latency_ms=(time.perf_counter() - invoke_started_at) * 1000,
+                detail=str(exc),
+            )
             yield sse_event("response.error", {
                 "error": str(exc),
                 "detail": _invoke_error_detail("Streaming invocation error", agent_name, namespace, request_id),
@@ -1325,7 +1444,7 @@ def _validate_session_ownership(session_id: str, user: dict[str, Any]) -> tuple[
     ensure_namespace_access(user, namespace)
     caller_username = user.get("sub") or user.get("username")
     if session_username and caller_username and session_username != caller_username:
-        from error_codes import build_error_response, ErrorCode
+        from error_codes import ErrorCode, build_error_response
         raise HTTPException(
             status_code=403,
             detail=build_error_response(

@@ -71,7 +71,6 @@ from memory import (
 )
 from models import InvokeRequest, InvokeResponse
 from opencode_client import (
-    _send_prompt_with_session_recovery,
     abort_session,
     create_remote_session,
     ensure_server_running,
@@ -110,7 +109,7 @@ from utils import dedupe_items, truncate_text
 logger = logging.getLogger("opencode-runtime")
 
 StreamCallback = Any  # Callable[[str, dict[str, Any]], None] | None
-LIVE_UPDATE_POLL_SECONDS = 0.15
+LIVE_UPDATE_POLL_SECONDS = 0.08
 
 
 def validate_inbound_a2a_request(request: InvokeRequest) -> None:
@@ -625,7 +624,7 @@ def _emit_live_snapshot_updates(
         last_snapshots["reasoning"] = reasoning
 
 
-def _send_prompt_with_live_updates_and_recovery(
+def _send_prompt_async_with_session_recovery(
     *,
     session_id: str,
     prompt: str,
@@ -640,21 +639,6 @@ def _send_prompt_with_live_updates_and_recovery(
     emit: Any,
 ) -> tuple[str, dict[str, Any]]:
     """Send a streamed prompt via OpenCode's async endpoint and poll live message snapshots."""
-    if system_prompt:
-        session_id, payload = _send_prompt_with_session_recovery(
-            session_id=session_id,
-            prompt=prompt,
-            model=model,
-            system_prompt=system_prompt,
-            prompt_format=prompt_format,
-            working_directory=working_directory,
-            agent=agent,
-            logical_thread_id=logical_thread_id,
-            allow_session_recovery=allow_session_recovery,
-        )
-        if isinstance(payload, dict):
-            payload["_live_streamed"] = False
-        return session_id, payload
 
     recovered = False
     max_idle_retries = 3
@@ -793,6 +777,82 @@ def _send_prompt_with_live_updates_and_recovery(
             raise HTTPException(status_code=504, detail="Timed out waiting for OpenCode response")
 
         time.sleep(LIVE_UPDATE_POLL_SECONDS)
+
+
+def _send_prompt_with_session_recovery(
+    *,
+    session_id: str,
+    prompt: str,
+    model: str,
+    system_prompt: str | None,
+    prompt_format: dict[str, Any] | None,
+    working_directory: str,
+    agent: str,
+    logical_thread_id: str,
+    allow_session_recovery: bool,
+    turn: int = 0,
+) -> tuple[str, dict[str, Any]]:
+    """Compatibility wrapper for normal invokes using the async prompt flow."""
+    return _send_prompt_async_with_session_recovery(
+        session_id=session_id,
+        prompt=prompt,
+        model=model,
+        system_prompt=system_prompt,
+        prompt_format=prompt_format,
+        working_directory=working_directory,
+        agent=agent,
+        logical_thread_id=logical_thread_id,
+        allow_session_recovery=allow_session_recovery,
+        turn=turn,
+        emit=lambda *_args, **_kwargs: None,
+    )
+
+
+def _send_prompt_with_live_updates_and_recovery(
+    *,
+    session_id: str,
+    prompt: str,
+    model: str,
+    system_prompt: str | None,
+    prompt_format: dict[str, Any] | None,
+    working_directory: str,
+    agent: str,
+    logical_thread_id: str,
+    allow_session_recovery: bool,
+    turn: int,
+    emit: Any,
+) -> tuple[str, dict[str, Any]]:
+    """Send a streamed prompt via OpenCode's async endpoint and poll live message snapshots."""
+    if system_prompt:
+        session_id, payload = _send_prompt_with_session_recovery(
+            session_id=session_id,
+            prompt=prompt,
+            model=model,
+            system_prompt=system_prompt,
+            prompt_format=prompt_format,
+            working_directory=working_directory,
+            agent=agent,
+            logical_thread_id=logical_thread_id,
+            allow_session_recovery=allow_session_recovery,
+            turn=turn,
+        )
+        if isinstance(payload, dict):
+            payload["_live_streamed"] = False
+        return session_id, payload
+
+    return _send_prompt_async_with_session_recovery(
+        session_id=session_id,
+        prompt=prompt,
+        model=model,
+        system_prompt=system_prompt,
+        prompt_format=prompt_format,
+        working_directory=working_directory,
+        agent=agent,
+        logical_thread_id=logical_thread_id,
+        allow_session_recovery=allow_session_recovery,
+        turn=turn,
+        emit=emit,
+    )
 
 
 def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = None) -> InvokeResponse:
@@ -981,6 +1041,7 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
                     agent=current_agent,
                     logical_thread_id=logical_thread_id,
                     allow_session_recovery=(not request.no_session),
+                    turn=turn,
                 )
             recovered = bool(payload.pop("_session_recovered", False)) if isinstance(payload, dict) else False
             live_streamed = bool(payload.pop("_live_streamed", False)) if isinstance(payload, dict) else False

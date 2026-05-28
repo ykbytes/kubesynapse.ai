@@ -50,6 +50,16 @@ The gateway owns the durable, user-visible memory layer used for cross-session r
 The gateway also filters legacy false-denial memories such as `I don't have persistent memory...`
 out of recall ranking before assembling the injected system note.
 
+## Invoke Routing Notes
+
+- The canonical browser and API client surface is `/api/v1/...`.
+- The Web UI now calls `POST /api/v1/agents/{name}/invoke` and
+  `POST /api/v1/agents/{name}/invoke/stream` directly instead of relying on
+  legacy `/api/...` normalization on hot paths.
+- Model fallback is ordered from the requested model first, then healthy
+  alternatives, so the gateway does not burn latency on unrelated models before
+  trying the agent's configured model.
+
 ## Provider Registry & Live Model Discovery
 
 The Settings workspace relies on two gateway surfaces:
