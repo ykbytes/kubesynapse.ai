@@ -33,7 +33,7 @@ We wanted an AI layer that:
 Control Plane          Execution Plane         Shared Services
 ├─ Kubernetes API      ├─ OpenCode Runtime     ├─ LiteLLM (Model Router)
 ├─ Operator (Kopf)     ├─ Pi Runtime           ├─ PostgreSQL
-├─ API Gateway         ├─ MCP Sidecars (11)    ├─ Redis
+├─ API Gateway         ├─ MCP Sidecars (10)    ├─ Redis
 └─ CRDs (12 types)    └─ Worker Jobs          └─ Qdrant
 ```
 

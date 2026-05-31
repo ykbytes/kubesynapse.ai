@@ -15,7 +15,7 @@ from sqlalchemy import create_engine, pool
 # Ensure the operator package is importable.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from state_store import Base
+from state_store import ALEMBIC_VERSION_TABLE, Base
 
 target_metadata = Base.metadata
 
@@ -26,6 +26,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=url,
         target_metadata=target_metadata,
+        version_table=ALEMBIC_VERSION_TABLE,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -43,6 +44,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
+            version_table=ALEMBIC_VERSION_TABLE,
         )
 
         with context.begin_transaction():

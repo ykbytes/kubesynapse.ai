@@ -340,11 +340,18 @@ The API gateway self-heals this table at startup. If the trace tables are missin
 
 ## Demo Workflow
 
-Use `examples/context7-demo-agents.yaml` and `examples/context7-demo-workflow.yaml` for the currently verified end-to-end workflow path. This demo exercises Context7 MCP, workspace file writes and reads, A2A, workflow logs, execution traces, and semantic runtime events.
+Use `examples/context7-demo-agents.yaml` and `examples/context7-demo-workflow.yaml` for the current documentation-backed workflow path. This demo exercises Context7, Microsoft Learn, workspace file writes, workflow logs, execution traces, and semantic runtime events.
 
 ```bash
 kubectl apply -f examples/context7-demo-agents.yaml -n default
 kubectl apply -f examples/context7-demo-workflow.yaml -n default
+```
+
+Optional: add a `context7-api-key` secret for higher Context7 rate limits.
+
+```bash
+kubectl create secret generic context7-api-key -n default \
+  --from-literal=api_key='<your-context7-api-key>'
 ```
 
 Trigger the workflow through the gateway and inspect the resulting execution:
@@ -353,9 +360,12 @@ Trigger the workflow through the gateway and inspect the resulting execution:
 curl -X POST http://localhost:8080/api/v1/workflows/context7-research-analysis/trigger?namespace=default \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"input":"Research the FastAPI dependency injection system and its middleware patterns"}'
+  -d '{"input":"Prepare an implementation pack for a fictive company running a FastAPI app on Ubuntu 22.04 Azure VMs behind Nginx."}'
 
 curl http://localhost:8080/api/v1/traces/executions?namespace=default&limit=20 \
+  -H "Authorization: Bearer $TOKEN"
+
+curl http://localhost:8080/api/v1/agents/implementation-pack-writer/artifacts/list?namespace=default \
   -H "Authorization: Bearer $TOKEN"
 ```
 

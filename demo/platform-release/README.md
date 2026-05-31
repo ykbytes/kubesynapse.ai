@@ -26,7 +26,7 @@ kubectl apply -f demo/platform-release/bundle.yaml
 ## Trigger
 
 ```bash
-agentctl --gateway-url http://localhost:8080 workflows trigger ingress-upgrade-release-readiness
+agentctl --gateway http://localhost:8080 workflows trigger ingress-upgrade-release-readiness
 ```
 
 ## What To Show On Camera

@@ -10,7 +10,7 @@ commands and returns structured responses suitable for workflow steps and chat.
 
 ## Runtime Role
 
-`pi` is the supported alternative runtime in KubeSynapse. It stays wired through the CRD, gateway, operator, Helm chart, CLI, and UI as the second in-tree runtime kind beside `opencode`.
+`pi` is an alpha runtime in KubeSynapse. It remains wired through the CRD, gateway, operator, Helm chart, CLI, and UI as an in-tree runtime kind beside `opencode`, but it is not recommended for production workloads.
 
 ## Architecture
 
@@ -66,4 +66,4 @@ when the pod is recreated to avoid stale session locks.
 
 ## Current Status
 
-Supported. Pi remains part of the active runtime matrix and shares the same gateway, operator, and UI surfaces as OpenCode agents.
+Alpha. Pi remains part of the active runtime matrix and shares the same gateway, operator, and UI surfaces as OpenCode agents, but OpenCode is the production runtime.

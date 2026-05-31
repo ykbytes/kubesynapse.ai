@@ -20,12 +20,16 @@ data:
     {
       "plugin": [],
       "permission": {
-        "bash": "ask",
+        "bash": "allow",
         "external_directory": "deny",
-        "edit": "ask",
-        "write": "ask",
-        "webfetch": "deny",
-        "websearch": "deny"
+        "edit": "allow",
+        "write": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "read": {
+          "*": "allow",
+          "*clipboard*": "deny"
+        }
       },
       "mcp": {},
       "skills": { "urls": [] },

@@ -241,10 +241,7 @@ class OperatorManifestTests(unittest.TestCase):
             env["API_GATEWAY_INTERNAL_URL"],
             "http://kubesynapse-api-gateway.default.svc.cluster.local:8080",
         )
-        self.assertEqual(
-            env_refs["API_GATEWAY_SHARED_TOKEN"]["secretKeyRef"]["key"],
-            "API_GATEWAY_SHARED_TOKEN",
-        )
+        self.assertNotIn("API_GATEWAY_SHARED_TOKEN", env_refs)
 
     def test_statefulset_manifest_prefers_policy_output_token_limit(self) -> None:
         with patch.object(
@@ -632,7 +629,20 @@ class OperatorManifestTests(unittest.TestCase):
             "data": {"pi-config.json": '{"permissionLevel":"strict"}'},
         }
         core_api = Mock()
-        core_api.read_namespaced_config_map.side_effect = [source_opencode_config, source_pi_config]
+        # Mock returns for read_namespaced_config_map:
+        # Call 1: source opencode config (operator namespace)
+        # Call 2: target opencode config (tenant namespace) - 404
+        # Call 3: source pi config (operator namespace)
+        # Call 4: target pi config (tenant namespace) - 404
+        # Use the ApiException class that k8s.py actually imports (avoids test isolation issues)
+        _ApiException = _services_k8s.kubernetes.client.rest.ApiException
+        not_found_exc = _ApiException()
+        not_found_exc.status = 404
+        not_found_exc.reason = "Not Found"
+        core_api.read_namespaced_config_map.side_effect = [
+            source_opencode_config, not_found_exc,
+            source_pi_config, not_found_exc,
+        ]
 
         with (
             patch.object(_services_k8s, "SECRET_PROVISIONING_MODE", "native"),
@@ -707,34 +717,40 @@ class OperatorManifestTests(unittest.TestCase):
         self.assertEqual(template_labels["kubesynapse.ai/managed-by"], "operator")
         self.assertEqual(template_labels["kubesynapse.ai/agent-name"], "workspace-assistant")
 
+    def test_agent_service_targets_public_port_not_container_name(self) -> None:
+        manifest = _builders_manifests.create_agent_service_manifest("workspace-assistant", "default")
+
+        self.assertEqual(manifest["spec"]["ports"], [{"name": "http", "port": 8080, "targetPort": 8080}])
+
 
 class StatefulSetReconcileTests(unittest.TestCase):
     def test_ensure_statefulset_preserves_immutable_fields_and_resizes_pvc(self) -> None:
-        current_manifest = _builders_manifests.create_agent_statefulset_manifest(
-            "workspace-assistant",
-            "default",
-            {
-                "model": "gpt-4",
-                "runtime": {"kind": "opencode", "opencode": {}},
-                "storage": {"size": "1Gi"},
-                "systemPrompt": "Use opencode.",
-            },
-            None,
-            {},
-        )
-        desired_manifest = _builders_manifests.create_agent_statefulset_manifest(
-            "workspace-assistant",
-            "default",
-            {
-                "model": "gpt-4",
-                "runtime": {"kind": "opencode", "opencode": {"configFiles": {"opencode.json": {"default_agent": "build"}}}},
-                "storage": {"size": "4Gi"},
-                "systemPrompt": "Use opencode with sidecars.",
-                "mcpSidecars": [{"name": "browser", "image": "example/browser:latest", "port": 8081}],
-            },
-            None,
-            {},
-        )
+        with patch.object(_builders_manifests, "CREDENTIAL_PROXY_ENABLED", False):
+            current_manifest = _builders_manifests.create_agent_statefulset_manifest(
+                "workspace-assistant",
+                "default",
+                {
+                    "model": "gpt-4",
+                    "runtime": {"kind": "opencode", "opencode": {}},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Use opencode.",
+                },
+                None,
+                {},
+            )
+            desired_manifest = _builders_manifests.create_agent_statefulset_manifest(
+                "workspace-assistant",
+                "default",
+                {
+                    "model": "gpt-4",
+                    "runtime": {"kind": "opencode", "opencode": {"configFiles": {"opencode.json": {"default_agent": "build"}}}},
+                    "storage": {"size": "4Gi"},
+                    "systemPrompt": "Use opencode with sidecars.",
+                    "mcpSidecars": [{"name": "browser", "image": "example/browser:latest", "port": 8081}],
+                },
+                None,
+                {},
+            )
         reconciled_manifest = copy.deepcopy(desired_manifest)
         reconciled_manifest["spec"]["volumeClaimTemplates"] = current_manifest["spec"]["volumeClaimTemplates"]
 
@@ -1030,6 +1046,28 @@ class AgentControllerTests(unittest.TestCase):
                 _agent_ctrl,
                 "log_operator_event",
             ) as log_operator_event,
+            patch.object(
+                _agent_ctrl,
+                "_validate_agent_dependencies",
+                return_value=[],
+            ),
+            patch.object(
+                _agent_ctrl,
+                "_record_agent_event",
+            ),
+            patch.object(
+                _agent_ctrl,
+                "_patch_agent_status",
+            ),
+            patch.object(
+                _agent_ctrl,
+                "_check_revision_change",
+                return_value=False,
+            ),
+            patch.object(
+                _agent_ctrl,
+                "_verify_reconcile_idempotency",
+            ),
         ):
             _agent_ctrl.create_agent_resources(
                 {"model": "gpt-4", "runtime": {"kind": "opencode"}},
@@ -1062,6 +1100,11 @@ class AgentControllerTests(unittest.TestCase):
             patch.object(_agent_ctrl, "resolve_agent_policy", return_value=(None, {})),
             patch.object(_agent_ctrl, "resolve_tenant_for_namespace", return_value=None),
             patch.object(_agent_ctrl, "validate_agent_cross_namespace_targets"),
+            patch.object(_agent_ctrl, "_validate_agent_dependencies", return_value=[]),
+            patch.object(_agent_ctrl, "_record_agent_event"),
+            patch.object(_agent_ctrl, "_patch_agent_status"),
+            patch.object(_agent_ctrl, "_check_revision_change", return_value=False),
+            patch.object(_agent_ctrl, "_verify_reconcile_idempotency"),
             self.assertRaises(kopf_module.PermanentError) as context,
         ):
             _agent_ctrl.create_agent_resources(
@@ -1072,6 +1115,33 @@ class AgentControllerTests(unittest.TestCase):
             )
 
         self.assertIn("spec.model", str(context.exception))
+
+    def test_compute_revision_hash_is_deterministic(self) -> None:
+        spec = {"model": "gpt-4", "runtime": {"kind": "opencode"}, "mcpServers": [], "mcpSidecars": []}
+        hash1 = _agent_ctrl._compute_revision_hash(spec)
+        hash2 = _agent_ctrl._compute_revision_hash(spec)
+        self.assertEqual(hash1, hash2)
+
+    def test_compute_revision_hash_changes_with_model(self) -> None:
+        spec1 = {"model": "gpt-4", "runtime": {"kind": "opencode"}}
+        spec2 = {"model": "gpt-3.5", "runtime": {"kind": "opencode"}}
+        self.assertNotEqual(_agent_ctrl._compute_revision_hash(spec1), _agent_ctrl._compute_revision_hash(spec2))
+
+    def test_parse_quantity_handles_units(self) -> None:
+        self.assertAlmostEqual(_agent_ctrl._parse_quantity("100m"), 0.1)
+        self.assertAlmostEqual(_agent_ctrl._parse_quantity("1"), 1.0)
+        self.assertAlmostEqual(_agent_ctrl._parse_quantity("1.5"), 1.5)
+        self.assertAlmostEqual(_agent_ctrl._parse_quantity("1Gi"), 1024.0)
+        self.assertAlmostEqual(_agent_ctrl._parse_quantity("512Mi"), 512.0)
+
+    def test_config_map_hash_computation(self) -> None:
+        from services.k8s import _compute_config_map_hash
+        data1 = {"opencode.json": '{"permission":{"bash":"ask"}}'}
+        data2 = {"opencode.json": '{"permission":{"bash":"free"}}'}
+        hash1 = _compute_config_map_hash(data1, None)
+        hash2 = _compute_config_map_hash(data2, None)
+        self.assertNotEqual(hash1, hash2)
+        self.assertEqual(_compute_config_map_hash(data1, None), _compute_config_map_hash(data1, None))
 
 
 class OptionalCrdWatchingTests(unittest.TestCase):
@@ -1379,27 +1449,28 @@ class AllowedNamespacesTests(unittest.TestCase):
 
     def test_opencode_statefulset_manifest_includes_runtime_env_and_sidecars(self) -> None:
         sidecars = [{"name": "browser", "image": "example/browser:latest", "port": 8081}]
-        manifest = _builders_manifests.create_agent_statefulset_manifest(
-            "workspace-assistant",
-            "default",
-            {
-                "model": "gpt-4",
-                "runtime": {
-                    "kind": "opencode",
-                    "opencode": {
-                        "configFiles": {
-                            "agents/reviewer.md": "---\ndescription: Review only\nmode: subagent\n---\nReview conservatively."
-                        }
+        with patch.object(_builders_manifests, "CREDENTIAL_PROXY_ENABLED", False):
+            manifest = _builders_manifests.create_agent_statefulset_manifest(
+                "workspace-assistant",
+                "default",
+                {
+                    "model": "gpt-4",
+                    "runtime": {
+                        "kind": "opencode",
+                        "opencode": {
+                            "configFiles": {
+                                "agents/reviewer.md": "---\ndescription: Review only\nmode: subagent\n---\nReview conservatively."
+                            }
+                        },
                     },
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Be precise.",
+                    "mcpServers": ["documents"],
+                    "mcpSidecars": sidecars,
                 },
-                "storage": {"size": "1Gi"},
-                "systemPrompt": "Be precise.",
-                "mcpServers": ["documents"],
-                "mcpSidecars": sidecars,
-            },
-            None,
-            {},
-        )
+                None,
+                {},
+            )
 
         pod_spec = manifest["spec"]["template"]["spec"]
         env = {item["name"]: item.get("value") for item in pod_spec["containers"][0]["env"] if "value" in item}
@@ -1422,32 +1493,33 @@ class AllowedNamespacesTests(unittest.TestCase):
         self.assertIn("mcp-browser", container_names)
 
     def test_opencode_runtime_manifest_makes_hub_bearer_optional_for_saved_remote_mcp_connections(self) -> None:
-        manifest = _builders_manifests.create_agent_statefulset_manifest(
-            "workspace-assistant",
-            "default",
-            {
-                "model": "gpt-4",
-                "runtime": {"kind": "opencode"},
-                "storage": {"size": "1Gi"},
-                "systemPrompt": "Be precise.",
-                "mcpConnections": [
-                    {
-                        "connectionId": "conn-docs",
-                        "serverId": "microsoft-learn",
-                        "transport": "remote",
-                        "runtime": {
-                            "kind": "remote",
-                            "configKey": "microsoft-learn",
-                            "url": "https://learn.microsoft.com/api/mcp",
-                            "headers": [],
-                        },
-                    }
-                ],
-                "mcpServers": ["microsoft-learn"],
-            },
-            None,
-            {},
-        )
+        with patch.object(_builders_manifests, "CREDENTIAL_PROXY_ENABLED", False):
+            manifest = _builders_manifests.create_agent_statefulset_manifest(
+                "workspace-assistant",
+                "default",
+                {
+                    "model": "gpt-4",
+                    "runtime": {"kind": "opencode"},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Be precise.",
+                    "mcpConnections": [
+                        {
+                            "connectionId": "conn-docs",
+                            "serverId": "microsoft-learn",
+                            "transport": "remote",
+                            "runtime": {
+                                "kind": "remote",
+                                "configKey": "microsoft-learn",
+                                "url": "https://learn.microsoft.com/api/mcp",
+                                "headers": [],
+                            },
+                        }
+                    ],
+                    "mcpServers": ["microsoft-learn"],
+                },
+                None,
+                {},
+            )
 
         env_refs = {
             item["name"]: item.get("valueFrom") for item in manifest["spec"]["template"]["spec"]["containers"][0]["env"] if "valueFrom" in item
@@ -1513,7 +1585,6 @@ class AllowedNamespacesTests(unittest.TestCase):
                 "type": "oauth",
                 "refresh": "gho-test-token",
                 "access": "gho-test-token",
-                "expires": 0,
             },
         )
         self.assertEqual(payload["opencode"], {"type": "api", "key": "opencode-test-key"})
@@ -1644,6 +1715,134 @@ class AllowedNamespacesTests(unittest.TestCase):
         )
         labels = manifest["metadata"]["labels"]
         self.assertEqual(labels["kubesynapse.ai/resource-uid"], "uid-label-test")
+
+    def test_credential_proxy_enabled_injects_sidecar_container(self) -> None:
+        """When CREDENTIAL_PROXY_ENABLED=true, a credential-proxy sidecar must be added."""
+        with patch.object(_builders_manifests, "CREDENTIAL_PROXY_ENABLED", True):
+            manifest = _builders_manifests.create_agent_statefulset_manifest(
+                "test-agent",
+                "default",
+                {
+                    "model": "litellm/gpt-4",
+                    "runtime": {"kind": "opencode"},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Test.",
+                },
+                None,
+                {},
+            )
+
+        container_names = [c["name"] for c in manifest["spec"]["template"]["spec"]["containers"]]
+        self.assertIn("credential-proxy", container_names)
+
+        proxy_container = next(c for c in manifest["spec"]["template"]["spec"]["containers"] if c["name"] == "credential-proxy")
+        self.assertEqual(proxy_container["image"], _config.CREDENTIAL_PROXY_IMAGE)
+
+        proxy_env = {e["name"]: e.get("value") for e in proxy_container["env"] if "value" in e}
+        self.assertIn("PROXY_ROUTES", proxy_env)
+
+        routes = json.loads(proxy_env["PROXY_ROUTES"])
+        listen_ports = [r["listen"] for r in routes]
+        self.assertIn(":4001", listen_ports)
+        self.assertIn(":8080", listen_ports)
+
+    def test_credential_proxy_enabled_adds_provider_route_for_opencode_go(self) -> None:
+        with patch.object(_builders_manifests, "CREDENTIAL_PROXY_ENABLED", True):
+            manifest = _builders_manifests.create_agent_statefulset_manifest(
+                "test-agent",
+                "default",
+                {
+                    "model": "opencode-go/mimo-v2.5-pro",
+                    "runtime": {"kind": "opencode"},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Test.",
+                },
+                None,
+                {},
+            )
+
+        proxy_container = next(c for c in manifest["spec"]["template"]["spec"]["containers"] if c["name"] == "credential-proxy")
+        proxy_env = {e["name"]: e.get("value") for e in proxy_container["env"] if "value" in e}
+        routes = json.loads(proxy_env["PROXY_ROUTES"])
+
+        provider_route = next(r for r in routes if r["listen"] == ":4003")
+        self.assertEqual(provider_route["target"], "https://opencode.ai/zen/go/v1")
+        self.assertEqual(provider_route["secret_env"], "OPENCODE_GO_API_KEY")
+
+    def test_credential_proxy_enabled_removes_secrets_from_agent_container(self) -> None:
+        """When CREDENTIAL_PROXY_ENABLED=true, agent container must NOT have secret env vars."""
+        with patch.object(_builders_manifests, "CREDENTIAL_PROXY_ENABLED", True):
+            manifest = _builders_manifests.create_agent_statefulset_manifest(
+                "test-agent",
+                "default",
+                {
+                    "model": "litellm/gpt-4",
+                    "runtime": {"kind": "opencode"},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Test.",
+                },
+                None,
+                {},
+            )
+
+        agent_container = manifest["spec"]["template"]["spec"]["containers"][0]
+        agent_env_names = [e["name"] for e in agent_container["env"]]
+
+        self.assertNotIn("LITELLM_API_KEY", agent_env_names)
+        self.assertNotIn("MCP_BEARER_TOKEN", agent_env_names)
+        self.assertNotIn("OPENCODE_AUTH_CONTENT", agent_env_names)
+
+        agent_env_values = {e["name"]: e.get("value") for e in agent_container["env"] if "value" in e}
+        self.assertEqual(agent_env_values["CREDENTIAL_PROXY_ENABLED"], "true")
+        self.assertIn("localhost:4001", agent_env_values["LITELLM_HOST"])
+
+    def test_credential_proxy_disabled_preserves_backward_compatibility(self) -> None:
+        """When CREDENTIAL_PROXY_ENABLED=false, secrets must be in agent container (backward compat)."""
+        with patch.object(_builders_manifests, "CREDENTIAL_PROXY_ENABLED", False):
+            manifest = _builders_manifests.create_agent_statefulset_manifest(
+                "test-agent",
+                "default",
+                {
+                    "model": "litellm/gpt-4",
+                    "runtime": {"kind": "opencode"},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Test.",
+                },
+                None,
+                {},
+            )
+
+        container_names = [c["name"] for c in manifest["spec"]["template"]["spec"]["containers"]]
+        self.assertNotIn("credential-proxy", container_names)
+
+        agent_container = manifest["spec"]["template"]["spec"]["containers"][0]
+        agent_env_refs = {e["name"]: e.get("valueFrom") for e in agent_container["env"] if "valueFrom" in e}
+
+        self.assertIn("LITELLM_API_KEY", agent_env_refs)
+        self.assertEqual(
+            agent_env_refs["LITELLM_API_KEY"]["secretKeyRef"]["key"],
+            "LITELLM_MASTER_KEY",
+        )
+
+    def test_credential_proxy_agent_listens_on_internal_port(self) -> None:
+        """When CREDENTIAL_PROXY_ENABLED=true, agent container must listen on port 8081."""
+        with patch.object(_builders_manifests, "CREDENTIAL_PROXY_ENABLED", True):
+            manifest = _builders_manifests.create_agent_statefulset_manifest(
+                "test-agent",
+                "default",
+                {
+                    "model": "litellm/gpt-4",
+                    "runtime": {"kind": "opencode"},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Test.",
+                },
+                None,
+                {},
+            )
+
+        agent_container = manifest["spec"]["template"]["spec"]["containers"][0]
+        agent_ports = [p["containerPort"] for p in agent_container["ports"]]
+        self.assertIn(8081, agent_ports)
 
 
 if __name__ == "__main__":

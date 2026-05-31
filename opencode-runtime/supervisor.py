@@ -28,7 +28,7 @@ from config import (
     build_litellm_base_url,
     server_base_url,
 )
-from providers import OPENCODE_GO_PROVIDER, LITELLM_PROVIDER, get_provider
+from providers import get_provider
 
 logger = logging.getLogger("opencode-runtime")
 
@@ -77,46 +77,105 @@ def _resolve_provider_id() -> str:
     return os.getenv("OPENCODE_PROVIDER", "litellm").strip().lower() or "litellm"
 
 
+_ENV_ALLOWLIST: frozenset[str] = frozenset({
+    "HOME",
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "TERM",
+    "TZ",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "OPENCODE_CONFIG_DIR",
+    "OPENCODE_WORKDIR",
+    "OPENCODE_BIN",
+    "OPENCODE_PROVIDER",
+    "OPENCODE_MODEL",
+    "OPENCODE_SYSTEM_PROMPT",
+    "OPENCODE_DEFAULT_AGENT",
+    "OPENCODE_MODEL_OUTPUT_LIMIT",
+    "OPENCODE_AUTONOMOUS_MAX_RETRIES",
+    "OPENCODE_AUTONOMOUS_MAX_TURNS",
+    "OPENCODE_SESSION_IDLE_TIMEOUT_SECONDS",
+    "OPENCODE_SESSION_IDLE_POLL_SECONDS",
+    "OPENCODE_SESSION_IDLE_MAX_POLL_SECONDS",
+    "OPENCODE_LIVE_UPDATE_TIMEOUT_SECONDS",
+    "OPENCODE_LIVE_UPDATE_MAX_WALL_SECONDS",
+    "OPENCODE_DISABLE_DEFAULT_PLUGINS",
+    "OPENCODE_DISABLE_AUTOUPDATE",
+    "OPENCODE_DISABLE_LSP_DOWNLOAD",
+    "OPENCODE_ARTIFACT_MAX_FILES",
+    "OPENCODE_CLIENT",
+    "OPENCODE_SERVER_HOST",
+    "OPENCODE_SERVER_PORT",
+    "MCP_SERVERS",
+    "MCP_HUB_NAMESPACE",
+    "HELM_RELEASE_NAME",
+    "CREDENTIAL_PROXY_ENABLED",
+    "CREDENTIAL_PROXY_MCP_HUB_PORT",
+    "KUBESYNAPSE_AGENT_NAME",
+    "KUBESYNAPSE_NAMESPACE",
+    "AGENT_NAME",
+    "GIT_AUTHOR_NAME",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_CONFIG_GLOBAL",
+    "LITELLM_HOST",
+    "LITELLM_BASE_PATH",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OPENCODE_SELECTED_PROVIDER_JSON",
+    "OPENCODE_RUNTIME_CONFIG_FILES_JSON",
+    "OPENCODE_MCP_CONNECTIONS_JSON",
+    "OPENCODE_MCP_SIDECARS_JSON",
+    "AGENT_SKILL_FILES_JSON",
+    "AGENT_SKILL_CONFIGMAP_PATH",
+    "HITL_MODE",
+    "HITL_NOTIFICATION_WEBHOOK_URL",
+})
+
+
 def build_server_env(config_content: dict[str, Any]) -> dict[str, str]:
-    """Build the environment dict for the OpenCode subprocess."""
-    env = os.environ.copy()
-    env.update(
-        {
-            "HOME": HOME_DIR,
-            "XDG_CONFIG_HOME": XDG_CONFIG_HOME,
-            "XDG_DATA_HOME": XDG_DATA_HOME,
-            "OPENCODE_CONFIG_DIR": OPENCODE_CONFIG_DIR,
-            "OPENCODE_CONFIG_CONTENT": json.dumps(config_content, ensure_ascii=False),
-            "OPENCODE_CLIENT": "server",
-            "OPENCODE_DISABLE_AUTOUPDATE": "true",
-            "OPENCODE_DISABLE_LSP_DOWNLOAD": "true",
-            # §security-P1: Default to "true" to prevent OpenCode auto-discovering
-            # and dynamically importing plugins from .opencode/plugin/*.ts.
-            # This closes the plugin auto-discovery RCE vector (audit finding 1.1).
-            # Set to "false" only for development/debugging.
-            "OPENCODE_DISABLE_DEFAULT_PLUGINS": env.get("OPENCODE_DISABLE_DEFAULT_PLUGINS", "true") or "true",
-            "OPENCODE_SERVER_PASSWORD": env.get("OPENCODE_SERVER_PASSWORD", ""),
-        }
-    )
+    """Build a minimal, secret-free environment for the OpenCode subprocess.
+
+    Only env vars in the allowlist are passed through. Secrets (API keys,
+    bearer tokens, passwords) are never included — they are held exclusively
+    in the credential-proxy sidecar container.
+    """
+    env: dict[str, str] = {}
+    for key in _ENV_ALLOWLIST:
+        val = os.getenv(key)
+        if val is not None:
+            env[key] = val
+
+    env["HOME"] = HOME_DIR
+    env["XDG_CONFIG_HOME"] = XDG_CONFIG_HOME
+    env["XDG_DATA_HOME"] = XDG_DATA_HOME
+    env["OPENCODE_CONFIG_DIR"] = OPENCODE_CONFIG_DIR
+    env["OPENCODE_CONFIG_CONTENT"] = json.dumps(config_content, ensure_ascii=False)
+    env["OPENCODE_CLIENT"] = "server"
+    env["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
+    env["OPENCODE_DISABLE_LSP_DOWNLOAD"] = "true"
+    env["OPENCODE_DISABLE_DEFAULT_PLUGINS"] = os.getenv("OPENCODE_DISABLE_DEFAULT_PLUGINS", "true") or "true"
+
+    credential_proxy_enabled = os.getenv("CREDENTIAL_PROXY_ENABLED", "false").strip().lower() in ("true", "1", "yes")
+
+    if not credential_proxy_enabled:
+        env["OPENCODE_SERVER_PASSWORD"] = os.getenv("OPENCODE_SERVER_PASSWORD", "")
 
     provider_id = _resolve_provider_id()
     provider = get_provider(provider_id)
 
-    # Resolve provider-specific env vars from the provider mapping
-    resolved = provider.resolve_env()
-    for key, value in resolved.items():
-        env[key] = value
+    if not credential_proxy_enabled:
+        resolved = provider.resolve_env()
+        for key, value in resolved.items():
+            env[key] = value
+        _inject_auth_key_from_content(env, provider_id)
 
-    # Extract API key from OPENCODE_AUTH_CONTENT for opencode/openai-compatible providers
-    # The Vercel AI SDK reads OPENAI_API_KEY for @ai-sdk/openai-compatible
-    _inject_auth_key_from_content(env, provider_id)
-
-    # Special case: litellm constructs BASE_URL from LITELLM_HOST+LITELLM_BASE_PATH
     if provider.id == "litellm":
         base_url = build_litellm_base_url()
         if base_url:
             env["OPENAI_BASE_URL"] = base_url
-        if LITELLM_API_KEY and "OPENAI_API_KEY" not in env:
+        if not credential_proxy_enabled and LITELLM_API_KEY and "OPENAI_API_KEY" not in env:
             env["OPENAI_API_KEY"] = LITELLM_API_KEY
 
     return env

@@ -111,14 +111,16 @@ client_module.V1LimitRangeItem = MagicMock
 client_module.V1DeploymentSpec = MagicMock
 client_module.V1StatefulSet = MagicMock
 client_module.V1StatefulSetSpec = MagicMock
+client_module.CoreV1Event = MagicMock
+client_module.V1ObjectReference = MagicMock
 
 kubernetes_module.client = client_module
 kubernetes_module.config = config_module
 client_module.rest = rest_module
-sys.modules.setdefault("kubernetes", kubernetes_module)
-sys.modules.setdefault("kubernetes.client", client_module)
-sys.modules.setdefault("kubernetes.config", config_module)
-sys.modules.setdefault("kubernetes.client.rest", rest_module)
+sys.modules["kubernetes"] = kubernetes_module
+sys.modules["kubernetes.client"] = client_module
+sys.modules["kubernetes.config"] = config_module
+sys.modules["kubernetes.client.rest"] = rest_module
 
 # Add operator to path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

@@ -2,7 +2,7 @@
 
 This document describes the architecture that the repository currently implements. It focuses on the active runtime path, the current control-plane model, and the observability capabilities that now exist in code.
 
-For the diagram sources, see [`docs/kubesynapse-architecture.mmd`](kubesynapse-architecture.mmd) and the refreshed [`docs/kubesynth-architectureold.drawio`](kubesynth-architectureold.drawio).
+For the canonical diagram source, see [`docs/kubesynapse-architecture.mmd`](kubesynapse-architecture.mmd). The older [`docs/kubesynth-architectureold.drawio`](kubesynth-architectureold.drawio) file is retained as a legacy reference and should not be treated as the source of truth.
 
 ## 1. System Summary
 
@@ -24,93 +24,90 @@ flowchart TB
     UI["🖥️ Web UI"]:::client
     CLI["⌨️ agentctl CLI"]:::client
     EXT["🔗 External Apps & Webhooks"]:::client
+    GH["🐙 Git Repositories"]:::external
+    IDP["🔐 Identity Providers"]:::external
 
     GW("⚡ API Gateway
     FastAPI · Auth · CRUD · Invoke · SSE"):::gateway
 
     K8S{{"☸️ Kubernetes API
-    AIAgent · AgentWorkflow
-    AgentPolicy · AgentTenant
-    12 CRDs total"}}:::k8s
+    12 CRDs"}}:::k8s
 
     OP("🔧 Operator
-    Kopf-based · Reconcile
-    StatefulSets · PVCs · Secrets"):::operator
+    Kopf reconcile loop
+    StatefulSets · Jobs · PVCs"):::operator
 
-    SEC["🛡️ Security Layers
-    Plugin Isolation · Immutable Config
-    Traffic Enforcement · Audit Trail
-    Hardened by Default"]:::security
+    SEC["🛡️ Security Baseline
+    Immutable config · NetworkPolicy
+    Credential proxy · Audit trail"]:::security
 
     OC("🤖 OpenCode Runtime
-    FastAPI wrapper · Session persistence
-    Checkpoint recovery · SSE streaming"):::runtime
+    Per-agent StatefulSet
+    Sessions · stream · local memory"):::runtime
 
     JOB("📦 Workflow Jobs
-    Short-lived · Artifact persistence
-    DAG step execution"):::worker
+    Artifact-driven execution
+    Summary status projection"):::worker
 
-    MCP("🔌 MCP Sidecars
-    11 bundled · Hot-attach
+    MCP("🔌 MCP Access
+    10 tool sidecars + collector
     Per-agent or shared hub"):::sidecar
 
-    PVC[("💾 State PVC
-    Survives restarts
-    Workspace + sessions")]:::storage
+    PVC[("💾 Runtime PVC
+    Workspace · sessions · checkpoints")]:::storage
+
+    ART[("📁 Workflow artifacts
+    PVCs · logs")]:::storage
 
     LLM("🧪 LiteLLM
-    Provider abstraction
-    Rate limiting · Key mgmt"):::shared
+    Model proxy
+    Provider abstraction"):::shared
 
     PG[("🗄️ PostgreSQL
-    Auth · Sessions
-    Audit · Traces")]:::shared
+    Auth · durable memory · traces")]:::shared
 
     REDIS[("⚡ Redis
-    Session cache
-    LLM response cache")]:::shared
+    Gateway cache · LiteLLM cache")]:::shared
 
     QDRANT[("🔍 Qdrant
-    Vector search
-    Semantic memory")]:::shared
+    Optional semantic retrieval")]:::shared
 
     NATS("📡 NATS
-    Async messaging
-    Event bus"):::shared
+    Configured async extension point"):::shared
 
     TRACE("📊 Execution Observatory
-    Trace store · Timeline APIs
-    LLM + tool call records"):::intel
+    Timeline APIs · trace store"):::intel
 
     SIGNAL("🚨 Signal Watch
-    SQL-based anomaly detection
-    Failure rates · Token spend"):::intel
+    SQL anomaly detection"):::intel
 
     SYS("🧪 System Agents
-    ks-run-inspector
-    ks-signal-summarizer
-    ks-spend-reviewer"):::intel
+    AI-powered explanations"):::intel
 
     UI -->|"HTTPS /api/*"| GW
     CLI -->|"REST + SSE"| GW
-    EXT -->|"Signed webhooks"| GW
+    EXT -->|"Webhooks · A2A"| GW
+    GH -.->|"Git clone / repo access"| OC
 
     GW -->|"CRUD (CustomObjectsApi)"| K8S
     GW -->|"SQLAlchemy — auth, memory, traces"| PG
-    GW -->|"Agent CRD cache"| REDIS
-    GW -.->|"Configured (async ext.)"| NATS
+    GW -->|"Agent + session cache"| REDIS
+    GW -.->|"Provider/admin APIs"| LLM
+    GW -.->|"Configured async ext."| NATS
+    GW -->|"OIDC / SAML / LDAP"| IDP
 
     K8S -->|"Watch CRDs (Kopf)"| OP
 
-    OP ==>|"Provisions StatefulSet + PVC"| OC
-    OP -->|"Creates worker Job"| JOB
-    OP -.->|"Injects immutable config"| SEC
+    OP ==>|"Provision StatefulSet + PVC"| OC
+    OP -->|"Create worker Job"| JOB
+    OP -.->|"Inject immutable config"| SEC
 
-    OC -->|"localhost — per-pod sidecar"| MCP
-    OC -->|"Workspace, sessions, artifacts"| PVC
+    OC -->|"localhost or hub transport"| MCP
+    OC -->|"Workspace + checkpoints"| PVC
     OC -->|"HTTPS /v1/chat/completions"| LLM
-    OC -->|"Vector search (qdrant-client)"| QDRANT
+    OC -->|"Vector search when enabled"| QDRANT
 
+    JOB -->|"Artifacts + logs"| ART
     LLM -->|"Response cache"| REDIS
 
     OC -.->|"POST runtime-events"| TRACE
@@ -120,6 +117,7 @@ flowchart TB
     SIGNAL -.->|"Invokes for explanation"| SYS
 
     classDef client fill:#1a2332,stroke:#326CE5,stroke-width:2px,color:#7baaf7
+    classDef external fill:#1a1a2e,stroke:#555,stroke-width:1px,color:#888
     classDef gateway fill:#1a1a3e,stroke:#7c3aed,stroke-width:3px,color:#c4b5fd
     classDef k8s fill:#0d2137,stroke:#326CE5,stroke-width:3px,color:#93c5fd
     classDef operator fill:#1a2332,stroke:#f59e0b,stroke-width:2px,color:#fcd34d
@@ -134,12 +132,12 @@ flowchart TB
 
 ### What the diagram shows
 
-- **Clients** (blue) — Web UI, CLI, and external apps all hit the gateway via HTTPS
-- **Control Plane** (blue/purple/amber) — Gateway handles auth + CRUD (reads/writes CRDs via the Kubernetes API), persists app state to Postgres and caches in Redis; Operator watches CRDs and reconciles them into real resources
-- **Security** (green) — Defense-in-depth enforced at the operator level: plugin isolation, immutable config, traffic enforcement, audit trail. Hardened baseline injected into every runtime pod.
-- **Execution Plane** (green/pink/teal) — The OpenCode runtime runs as an isolated StatefulSet with optional MCP sidecars on localhost and persistent state (Pi and Mistral Vibe are available in alpha)
-- **Shared Services** (gray) — LiteLLM proxies all LLM calls with Redis-backed response caching; PostgreSQL stores durable state (auth, sessions, memory, audit, traces); Qdrant handles semantic memory; NATS provides async messaging (extension point for A2A)
-- **Run Intelligence** (purple) — Runtime events flow into the Execution Observatory (Postgres-backed trace store), signal watch runs periodic SQL anomaly detection queries, system agents are invoked for AI-powered analysis of detected anomalies
+- **Clients** (blue) — Web UI, CLI, and external apps hit the gateway via HTTPS; Git repositories and identity providers are external systems used by the runtime and gateway
+- **Control Plane** (blue/purple/amber) — The gateway handles auth, CRUD, invoke routing, durable memory, traces, and provider/admin APIs; the operator watches 12 CRDs and reconciles them into real Kubernetes workloads
+- **Security** (green) — The hardened baseline includes immutable runtime config, credential isolation, network policy, and audit propagation into runtime pods
+- **Execution Plane** (green/pink/teal) — OpenCode runs as the production runtime in isolated StatefulSets; workflow Jobs persist detailed evidence as artifacts and logs; MCP access can come from 10 bundled tool sidecars, the separate collector sidecar, or shared hub services
+- **Shared Services** (gray) — The primary model-call path is runtime -> LiteLLM -> provider; PostgreSQL stores auth, durable memory, and traces; Redis backs gateway and LiteLLM caching; Qdrant supports optional semantic retrieval; NATS remains a configured async extension point
+- **Run Intelligence** (purple) — Runtime and worker events flow into the Execution Observatory, Signal Watch runs SQL anomaly detection, and system agents are invoked for AI-powered explanations
 
 ## 3. Control Plane
 
@@ -251,25 +249,22 @@ These agents are invoked on triggers (failures, thresholds) rather than running 
 
 ## 6. Shared Services
 
-The default chart values currently wire these shared platform services:
+The default chart values currently wire these core shared services and extension workloads:
 
-- API Gateway
-- Operator
-- OpenCode runtime image for agents
-- LiteLLM
-- Redis
-- Qdrant
-- NATS
-- PostgreSQL
-- Web UI
-- MCP hub namespace and selected hub services
-- collector DaemonSet path when enabled
+- LiteLLM for model proxying and provider abstraction
+- PostgreSQL for auth, chat sessions, durable memory, audit, and traces
+- Redis for gateway caches and LiteLLM response caching
+- Qdrant for optional semantic retrieval
+- NATS as a configured async extension point
+- the MCP hub namespace and selected shared MCP services
+- the collector DaemonSet path when enabled
 
 ## 7. MCP Architecture
 
 The current platform uses two MCP access patterns:
 
-- per-agent sidecars for tools that should stay tightly scoped to one runtime
+- per-agent tool sidecars for tools that should stay tightly scoped to one runtime
+- a separate per-agent `collector` sidecar used for intelligence and observability workflows
 - shared MCP hub services plus structured connection records managed through the gateway
 
 The `AIAgent` contract now includes connection-oriented MCP metadata, and the UI uses gateway-provided validation and runtime preview information to present attachable MCP connections.
@@ -296,7 +291,7 @@ Current behavior includes:
 - the operator registers `observation_controller` when those CRDs are present
 - the controller synthesizes target, policy, connector, and report status
 - the web UI presents observability dashboards and editors for connectors, targets, and policies
-- the repository includes a collector agent image and an MCP collector sidecar for cluster intelligence workflows
+- the repository includes a collector agent image and a separate MCP collector sidecar for cluster intelligence workflows
 
 The current implementation uses demo-friendly report generation so operators can make the observability flow visible without wiring a full external telemetry backend first.
 
@@ -327,7 +322,7 @@ If you need the shortest possible architectural summary, these are the points th
 2. The gateway is now a substantive application backend, not just a thin router.
 3. Workflow detail lives in worker artifacts more than CRD status.
 4. MCP is both sidecar-based and connection-driven.
-5. Observability is implemented through CRDs, controller logic, UI views, and collector support.
+5. Observability is implemented through CRDs, controller logic, UI views, collector support, and trace-backed run intelligence.
 6. The Run Intelligence Layer provides semantic event indexing, deterministic anomaly detection, and AI-powered analysis across all runtimes.
 7. Explicit A2A delegation exists today, while NATS remains an extension point for deeper async coordination later.
 8. Agent runtimes are hardened by default with plugin isolation, immutable config, traffic enforcement, and model governance.

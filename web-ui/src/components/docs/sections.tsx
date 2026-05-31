@@ -24,6 +24,7 @@ import {
 import { CodeBlock, Callout, DocsTable, QuickRefCard, StepGuide, SectionHeading } from "./shared";
 import { MermaidDiagram } from "../shared/MermaidDiagram";
 import type { DocSection } from "./types";
+import architectureOverviewChart from "../../content/docs/kubesynapse-architecture.mmd?raw";
 
 // ---------------------------------------------------------------------------
 // Section content components (one per doc section, each <200 lines)
@@ -229,68 +230,21 @@ function ArchitectureSection() {
       <QuickRefCard
         title="Architecture Quick Reference"
         items={[
-          { label: "Control Plane", value: "CRDs + Operator + Gateway" },
-          { label: "Execution Plane", value: "StatefulSet + PVC + Sidecars" },
+          { label: "Control Plane", value: "12 CRDs + Operator + Gateway" },
+          { label: "Execution Plane", value: "StatefulSets + Jobs + MCP" },
+          { label: "Model Path", value: "Runtime -> LiteLLM" },
           { label: "Operator", value: "Kopf-based Python controller" },
-          { label: "Runtime", value: "OpenCode (FastAPI wrapper)" },
-          { label: "Min K8s", value: "1.25+" },
+          { label: "Runtime", value: "OpenCode (production)" },
         ]}
       />
       <div id="arch-overview">
         <SectionHeading icon={Layers}>System Overview</SectionHeading>
         <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
-          kubesynapse separates the <strong>control plane</strong> (CRDs, operator, gateway) from the{" "}
-          <strong>execution plane</strong> (per-agent runtimes and sidecars). All desired state is stored in the
-          Kubernetes API and reconciled by a Kopf-based operator.
+          kubesynapse separates the <strong>control plane</strong> (12 CRDs, operator, gateway) from the{" "}
+          <strong>execution plane</strong> (per-agent runtimes, worker Jobs, and MCP access). The gateway owns auth,
+          CRUD, durable memory, and trace APIs, while the runtime makes the primary LiteLLM model calls.
         </p>
-        <MermaidDiagram
-          chart={`flowchart TB
-    subgraph Clients
-        UI[Web UI React 18 + Vite]
-        CLI[agentctl CLI]
-        EXT[External Clients]
-    end
-    subgraph CP[Control Plane]
-        GW[API Gateway FastAPI]
-        OP[Operator Kopf]
-        K8S[Kubernetes API Server]
-        PG[Postgres Auth · Sessions · Traces]
-        SEC[Security Layers]
-    end
-    subgraph EP[Execution Plane]
-        OC[OpenCode Runtime StatefulSet]
-        MCP[MCP Sidecars localhost]
-        PVC[State PVC]
-        JOB[Workflow Jobs]
-    end
-    subgraph Shared[Shared Services]
-        LLM[LiteLLM Model Proxy]
-        REDIS[Redis Cache]
-        QDRANT[Qdrant Semantic Memory]
-    end
-    subgraph Intel[Intelligence]
-        TRACE[Observatory Trace Store]
-        SIGNAL[Signal Watch Anomaly Detection]
-    end
-    UI -->|HTTPS| GW
-    CLI -->|REST + SSE| GW
-    EXT -->|Webhooks| GW
-    GW -->|CRUD via K8s API| K8S
-    GW -->|SQLAlchemy| PG
-    GW -->|Agent cache| REDIS
-    K8S -->|Watch CRDs Kopf| OP
-    OP -->|Provision| OC
-    OP -->|Create Job| JOB
-    OP -.->|Immutable config| SEC
-    OC -->|localhost| MCP
-    OC -->|Read/write| PVC
-    OC -->|LLM calls| LLM
-    OC -->|Vector search| QDRANT
-    LLM -->|Response cache| REDIS
-    OC -.->|Runtime events| TRACE
-    JOB -.->|Runtime events| TRACE
-    TRACE -->|Anomaly queries| SIGNAL`}
-        />
+        <MermaidDiagram chart={architectureOverviewChart} />
       </div>
       <div id="arch-control">
         <SectionHeading icon={FileCode}>Control Plane — CRDs</SectionHeading>
@@ -316,16 +270,16 @@ function ArchitectureSection() {
         />
         <MermaidDiagram
           chart={`erDiagram
-    AIAgent ||--o{ AgentPolicy : references
-    AIAgent ||--o{ AgentApproval : creates
-    AIAgent ||--o{ McpConnection : uses
-    AgentWorkflow ||--o{ AIAgent : steps_use
-    AgentWorkflow ||--o{ AgentApproval : gates_with
-    AgentWorkflow ||--o{ WorkflowTrigger : launched_by
-    WorkflowTrigger ||--o{ WebhookReceiver : listens_to
-    AIAgent ||--o{ ConnectorPlugin : observes_via
-    ConnectorPlugin ||--o{ ObservationTarget : targets
-    ObservationTarget ||--o{ ObservationPolicy : evaluates_with
+    AgentPolicy ||--o{ AIAgent : referenced_by
+    McpConnection ||--o{ AIAgent : used_by
+    AIAgent ||--o{ AgentWorkflow : referenced_by
+    AgentWorkflow ||--o{ AgentApproval : creates
+    WebhookReceiver ||--o{ WorkflowTrigger : feeds
+    WorkflowTrigger ||--o{ AgentWorkflow : starts
+    AgentTenant ||--o{ AIAgent : scopes
+    AgentTenant ||--o{ AgentWorkflow : scopes
+    ConnectorPlugin ||--o{ ObservationTarget : collects_for
+    ObservationPolicy ||--o{ ObservationTarget : evaluates
     ObservationPolicy ||--o{ ObservationReport : produces`}
         />
       </div>
@@ -333,21 +287,23 @@ function ArchitectureSection() {
         <SectionHeading icon={Server}>Execution Plane</SectionHeading>
         <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           Each agent runs as an isolated singleton StatefulSet backed by the <strong>OpenCode</strong> runtime
-          with session persistence and checkpoint recovery.
-          Additional runtimes (Pi, Mistral Vibe) are available in alpha but not recommended for production.
-          Optional <strong>MCP sidecars</strong> run alongside the runtime to provide tools such as code execution,
-          web search, browser automation, and database access.
+          with session persistence and checkpoint recovery. Additional runtimes (Pi, Mistral Vibe) are available in
+          alpha but not recommended for production. Workflow runs use short-lived Jobs whose detailed evidence lives in
+          artifacts and logs. MCP access can come from 10 bundled tool sidecars, a separate collector sidecar, or
+          shared MCP hub connections.
         </p>
         <MermaidDiagram
           chart={`flowchart TB
     subgraph Pod[Agent Pod]
         RT[OpenCode Runtime<br/>FastAPI + opencode serve]
-        SC1[MCP Sidecar<br/>e.g., Code Execution]
-        SC2[MCP Sidecar<br/>e.g., Web Search]
-        PVC[(State PVC<br/>Sessions + Artifacts)]
+        SC1[Tool Sidecar<br/>e.g., Code Execution]
+        SC2[Collector Sidecar<br/>optional]
+        PVC[(State PVC<br/>Sessions + Workspace)]
     end
+    HUB[MCP Hub<br/>shared services]
     RT <-->|localhost| SC1
     RT <-->|localhost| SC2
+    RT -.->|remote connection| HUB
     RT -->|read/write| PVC`}
         />
       </div>
@@ -355,11 +311,11 @@ function ArchitectureSection() {
         <SectionHeading icon={Globe}>API Gateway Responsibilities</SectionHeading>
         <ul className="mt-2 list-disc space-y-1.5 pl-5 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           <li>Authentication and authorization (Bearer tokens, OIDC, SAML, LDAP, local auth)</li>
-          <li>RESTful CRUD for agents, workflows, policies, tenants, and observability resources</li>
+          <li>RESTful CRUD for agents, workflows, policies, tenants, MCP connections, and observability resources</li>
+          <li>Invoke routing, workflow triggers, approval decisions, and webhook dispatch</li>
           <li>A2A JSON-RPC 2.0 and Server-Sent Events (SSE) for real-time streaming</li>
-          <li>Workflow triggers, approval decisions, and webhook dispatch</li>
-          <li>Durable chat session persistence, memory recall, and ranking</li>
-          <li>LLM routing through LiteLLM with model fallbacks and cost tracking</li>
+          <li>Durable chat sessions, memory recall, trace storage, and UI-facing runtime metadata</li>
+          <li>Provider and admin APIs for LiteLLM-backed model discovery and configuration</li>
         </ul>
         <Callout variant="info" title="Security hardening (updated 2026-05-24)">
           The gateway runs with a dedicated service account and least-privilege ClusterRole.
@@ -900,7 +856,7 @@ function McpSection() {
       <SectionHeading icon={Plug}>MCP (Model Context Protocol)</SectionHeading>
       <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
         MCP connections provide tool surfaces to agents. KubeSynapse supports three transport models
-        and ships 11 bundled sidecars.
+        and documents 10 bundled MCP tool sidecars in the current chart values.
       </p>
 
       <div id="mcp-transports">
@@ -925,7 +881,6 @@ function McpSection() {
           ["messaging", "Slack, Discord, email integrations"],
           ["rag", "Retrieval-augmented generation with vector search"],
           ["documents", "PDF, DOCX, Markdown parsing"],
-          ["collector", "Intelligence collector for observability data"],
         ]} />
       </div>
 

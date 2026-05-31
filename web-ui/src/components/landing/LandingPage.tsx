@@ -15,6 +15,7 @@ import {
   X,
   Star,
   GitCommitHorizontal,
+  type LucideIcon,
 } from "lucide-react";
 import { BRAND } from "@/lib/brand";
 import { cn } from "@/lib/utils";
@@ -23,6 +24,9 @@ import { KubeSynapseLogo } from "@/components/shared/KubeSynapseLogo";
 const DocumentationPanel = lazy(() =>
   import("../docs/DocumentationPanel").then((m) => ({ default: m.DocumentationPanel })),
 );
+
+const REPO_BLOB_BASE = "https://github.com/ykbytes/kubesynapse.ai/blob/main";
+const REPO_TREE_BASE = "https://github.com/ykbytes/kubesynapse.ai/tree/main";
 
 // ─── Types ───
 
@@ -70,7 +74,19 @@ interface TerminalLine {
   text: string;
   color?: string;
   prefix?: string;
-  type?: "input" | "output" | "blank";
+  lineNumber?: string;
+  type?: "input" | "output" | "blank" | "status";
+}
+
+interface TerminalScene {
+  id: string;
+  icon: LucideIcon;
+  label: string;
+  summary: string;
+  badge: string;
+  mode: "shell" | "editor";
+  lines: TerminalLine[];
+  footnote?: string;
 }
 
 const colorMap: Record<string, string> = {
@@ -83,7 +99,488 @@ const colorMap: Record<string, string> = {
   yamlVal: "text-[oklch(0.85_0.01_264)]",
   prompt: "text-[oklch(0.76_0.16_154)]",
   list: "text-[oklch(0.85_0.01_264)]",
+  accent: "text-[oklch(0.742_0.132_233)]",
+  success: "text-[oklch(0.76_0.16_154)]",
+  muted: "text-[oklch(0.62_0.01_264)]",
+  warning: "text-amber-300",
 };
+
+const installScenes: TerminalScene[] = [
+  {
+    id: "setup",
+    icon: Boxes,
+    label: "Setup",
+    summary: "Install the chart, port-forward the gateway, and point agentctl at the cluster.",
+    badge: "Helm",
+    mode: "shell",
+    footnote: "Helm is shown here because it is the cluster-agnostic path. For repeatable local Windows installs, the repo-supported quickstart remains scripts/deploy-kind.ps1.",
+    lines: [
+      { text: "helm upgrade --install kubesynapse ./charts/kubesynapse \\", color: "command", prefix: "$", type: "input" },
+      { text: "  -n kubesynapse \\", color: "command", type: "input" },
+      { text: "  --create-namespace \\", color: "command", type: "input" },
+      { text: "  --set-file skillsCatalog.catalogJson=catalog/skills-catalog.json", color: "command", type: "input" },
+      { text: "", type: "blank" },
+      { text: "Release \"kubesynapse\" does not exist. Installing it now.", color: "output", type: "output" },
+      { text: "NAME: kubesynapse", color: "output", type: "output" },
+      { text: "LAST DEPLOYED: Thu May 28 12:41:18 2026", color: "output", type: "output" },
+      { text: "NAMESPACE: kubesynapse", color: "output", type: "output" },
+      { text: "STATUS: deployed", color: "success", type: "output" },
+      { text: "REVISION: 1", color: "output", type: "output" },
+      { text: "TEST SUITE: None", color: "output", type: "output" },
+      { text: "NOTES:", color: "accent", type: "output" },
+      { text: "Thank you for installing kubesynapse!", color: "output", type: "output" },
+      { text: "", type: "blank" },
+      { text: "kubectl port-forward svc/kubesynapse-api-gateway 8080:8080 -n kubesynapse", color: "command", prefix: "$", type: "input" },
+      { text: "Forwarding from 127.0.0.1:8080 -> 8080", color: "output", type: "output" },
+      { text: "agentctl profile create demo --gateway http://localhost:8080 --namespace default", color: "command", prefix: "$", type: "input" },
+      { text: "OK Profile demo created", color: "success", type: "output" },
+      { text: "agentctl profile use demo", color: "command", prefix: "$", type: "input" },
+      { text: "OK Switched to profile demo", color: "success", type: "output" },
+      { text: "agentctl auth login -u admin -p ********", color: "command", prefix: "$", type: "input" },
+      { text: "OK Logged in as admin (role: admin) - token saved to profile", color: "success", type: "output" },
+    ],
+  },
+  {
+    id: "policy-editor",
+    icon: Shield,
+    label: "Policy",
+    summary: "Split the incident flow into coordinator, observe, research, and execute policies so only one agent gets remote MCP egress.",
+    badge: "policy",
+    mode: "editor",
+    lines: [
+      { text: "apiVersion: kubesynapse.ai/v1alpha1", color: "yamlKey", lineNumber: "1", type: "input" },
+      { text: "kind: AgentPolicy", color: "yamlKey", lineNumber: "2", type: "input" },
+      { text: "metadata: { name: incident-commander-policy, namespace: default }", color: "yamlVal", lineNumber: "3", type: "input" },
+      { text: "spec:", color: "yamlKey", lineNumber: "4", type: "input" },
+      { text: "  inputGuardrails: { blockPromptInjection: true, maxInputTokens: 12000 }", color: "flag", lineNumber: "5", type: "input" },
+      { text: "  outputGuardrails: { maskPII: true, maxOutputTokens: 6000 }", color: "flag", lineNumber: "6", type: "input" },
+      { text: "  allowedModels: [github-copilot/gpt-5-mini]", color: "yamlVal", lineNumber: "7", type: "input" },
+      { text: "  allowedMcpServers: []", color: "yamlVal", lineNumber: "8", type: "input" },
+      { text: "  mcpRequireHitl: true", color: "flag", lineNumber: "9", type: "input" },
+      { text: "  toolPolicy: { maxDelegationDepth: 2 }", color: "yamlVal", lineNumber: "10", type: "input" },
+      { text: "  a2a:", color: "yamlKey", lineNumber: "11", type: "input" },
+      { text: "    allowedTargets:", color: "yamlKey", lineNumber: "12", type: "input" },
+      { text: "      - { name: signal-watch, namespace: default }", color: "yamlVal", lineNumber: "13", type: "input" },
+      { text: "      - { name: runbook-researcher, namespace: default }", color: "yamlVal", lineNumber: "14", type: "input" },
+      { text: "      - { name: remediation-executor, namespace: default }", color: "yamlVal", lineNumber: "15", type: "input" },
+      { text: "    requireHitl: true", color: "flag", lineNumber: "16", type: "input" },
+      { text: "---", color: "muted", lineNumber: "17", type: "input" },
+      { text: "apiVersion: kubesynapse.ai/v1alpha1", color: "yamlKey", lineNumber: "18", type: "input" },
+      { text: "kind: AgentPolicy", color: "yamlKey", lineNumber: "19", type: "input" },
+      { text: "metadata: { name: incident-observe-policy, namespace: default }", color: "yamlVal", lineNumber: "20", type: "input" },
+      { text: "spec:", color: "yamlKey", lineNumber: "21", type: "input" },
+      { text: "  allowedModels: [github-copilot/gpt-5-mini]", color: "yamlVal", lineNumber: "22", type: "input" },
+      { text: "  allowedMcpServers: []", color: "yamlVal", lineNumber: "23", type: "input" },
+      { text: "  mcpRequireHitl: true", color: "flag", lineNumber: "24", type: "input" },
+      { text: "---", color: "muted", lineNumber: "25", type: "input" },
+      { text: "apiVersion: kubesynapse.ai/v1alpha1", color: "yamlKey", lineNumber: "26", type: "input" },
+      { text: "kind: AgentPolicy", color: "yamlKey", lineNumber: "27", type: "input" },
+      { text: "metadata: { name: incident-research-policy, namespace: default }", color: "yamlVal", lineNumber: "28", type: "input" },
+      { text: "spec:", color: "yamlKey", lineNumber: "29", type: "input" },
+      { text: "  allowedModels: [github-copilot/gpt-5-mini]", color: "yamlVal", lineNumber: "30", type: "input" },
+      { text: "  allowedMcpServers: [grafana, azure-mcp, context7, microsoft-learn]", color: "yamlVal", lineNumber: "31", type: "input" },
+      { text: "  mcpRequireHitl: true", color: "flag", lineNumber: "32", type: "input" },
+      { text: "---", color: "muted", lineNumber: "33", type: "input" },
+      { text: "apiVersion: kubesynapse.ai/v1alpha1", color: "yamlKey", lineNumber: "34", type: "input" },
+      { text: "kind: AgentPolicy", color: "yamlKey", lineNumber: "35", type: "input" },
+      { text: "metadata: { name: incident-execute-policy, namespace: default }", color: "yamlVal", lineNumber: "36", type: "input" },
+      { text: "spec:", color: "yamlKey", lineNumber: "37", type: "input" },
+      { text: "  allowedModels: [github-copilot/gpt-5-mini]", color: "yamlVal", lineNumber: "38", type: "input" },
+      { text: "  allowedMcpServers: []", color: "yamlVal", lineNumber: "39", type: "input" },
+      { text: "  mcpRequireHitl: true", color: "flag", lineNumber: "40", type: "input" },
+      { text: "  toolPolicy: { requireApprovalFor: [kubectl, helm] }", color: "yamlVal", lineNumber: "41", type: "input" },
+    ],
+  },
+  {
+    id: "agent-editor",
+    icon: Bot,
+    label: "Agent",
+    summary: "Declare a small agent mesh: internal-only evidence and execution agents, plus one tightly scoped remote research agent.",
+    badge: "vim",
+    mode: "editor",
+    lines: [
+      { text: "apiVersion: kubesynapse.ai/v1alpha1", color: "yamlKey", lineNumber: "1", type: "input" },
+      { text: "kind: AIAgent", color: "yamlKey", lineNumber: "2", type: "input" },
+      { text: "metadata: { name: incident-commander, namespace: default }", color: "yamlVal", lineNumber: "3", type: "input" },
+      { text: "spec:", color: "yamlKey", lineNumber: "4", type: "input" },
+      { text: "  model: github-copilot/gpt-5-mini", color: "yamlVal", lineNumber: "5", type: "input" },
+      { text: "  policyRef: incident-commander-policy", color: "yamlVal", lineNumber: "6", type: "input" },
+      { text: "  runtime: { kind: opencode }", color: "yamlVal", lineNumber: "7", type: "input" },
+      { text: "  systemPrompt: >", color: "yamlKey", lineNumber: "8", type: "input" },
+      { text: "    Coordinate incident response. Delegate only to signal-watch, runbook-researcher, and remediation-executor.", color: "string", lineNumber: "9", type: "input" },
+      { text: "---", color: "muted", lineNumber: "10", type: "input" },
+      { text: "apiVersion: kubesynapse.ai/v1alpha1", color: "yamlKey", lineNumber: "11", type: "input" },
+      { text: "kind: AIAgent", color: "yamlKey", lineNumber: "12", type: "input" },
+      { text: "metadata: { name: signal-watch, namespace: default }", color: "yamlVal", lineNumber: "13", type: "input" },
+      { text: "spec:", color: "yamlKey", lineNumber: "14", type: "input" },
+      { text: "  model: github-copilot/gpt-5-mini", color: "yamlVal", lineNumber: "15", type: "input" },
+      { text: "  policyRef: incident-observe-policy", color: "yamlVal", lineNumber: "16", type: "input" },
+      { text: "  runtime: { kind: opencode }", color: "yamlVal", lineNumber: "17", type: "input" },
+      { text: "  mcpSidecars:", color: "yamlKey", lineNumber: "18", type: "input" },
+      { text: "    - { name: kubernetes, image: docker.io/kubesynapse/mcp-kubernetes:deploy-20260401-212102, port: 8097 }", color: "yamlVal", lineNumber: "19", type: "input" },
+      { text: "  systemPrompt: >", color: "yamlKey", lineNumber: "20", type: "input" },
+      { text: "    Inspect pods, events, rollout history, and logs. Do not use internet sources. Write /workspace/signal-findings.md.", color: "string", lineNumber: "21", type: "input" },
+      { text: "---", color: "muted", lineNumber: "22", type: "input" },
+      { text: "apiVersion: kubesynapse.ai/v1alpha1", color: "yamlKey", lineNumber: "23", type: "input" },
+      { text: "kind: AIAgent", color: "yamlKey", lineNumber: "24", type: "input" },
+      { text: "metadata: { name: runbook-researcher, namespace: default }", color: "yamlVal", lineNumber: "25", type: "input" },
+      { text: "spec:", color: "yamlKey", lineNumber: "26", type: "input" },
+      { text: "  model: github-copilot/gpt-5-mini", color: "yamlVal", lineNumber: "27", type: "input" },
+      { text: "  policyRef: incident-research-policy", color: "yamlVal", lineNumber: "28", type: "input" },
+      { text: "  runtime: { kind: opencode }", color: "yamlVal", lineNumber: "29", type: "input" },
+      { text: "  mcpConnections:", color: "yamlKey", lineNumber: "30", type: "input" },
+      { text: "    - { connectionId: grafana-prod, serverId: grafana, transport: remote, source: saved }", color: "yamlVal", lineNumber: "31", type: "input" },
+      { text: "    - { connectionId: azure-prod, serverId: azure-mcp, transport: remote, source: saved }", color: "yamlVal", lineNumber: "32", type: "input" },
+      { text: "    - { connectionId: context7-docs, serverId: context7, transport: remote, source: saved }", color: "yamlVal", lineNumber: "33", type: "input" },
+      { text: "    - { connectionId: microsoft-learn, serverId: microsoft-learn, runtime: { kind: remote, configKey: microsoft-learn, url: https://learn.microsoft.com/api/mcp } }", color: "yamlVal", lineNumber: "34", type: "input" },
+      { text: "  mcpServers: [grafana, azure-mcp, context7, microsoft-learn]", color: "yamlVal", lineNumber: "35", type: "input" },
+      { text: "  systemPrompt: >", color: "yamlKey", lineNumber: "36", type: "input" },
+      { text: "    Correlate Grafana, Azure, Microsoft Learn, and Context7 into /workspace/research-brief.md.", color: "string", lineNumber: "37", type: "input" },
+      { text: "---", color: "muted", lineNumber: "38", type: "input" },
+      { text: "apiVersion: kubesynapse.ai/v1alpha1", color: "yamlKey", lineNumber: "39", type: "input" },
+      { text: "kind: AIAgent", color: "yamlKey", lineNumber: "40", type: "input" },
+      { text: "metadata: { name: remediation-executor, namespace: default }", color: "yamlVal", lineNumber: "41", type: "input" },
+      { text: "spec:", color: "yamlKey", lineNumber: "42", type: "input" },
+      { text: "  model: github-copilot/gpt-5-mini", color: "yamlVal", lineNumber: "43", type: "input" },
+      { text: "  policyRef: incident-execute-policy", color: "yamlVal", lineNumber: "44", type: "input" },
+      { text: "  runtime: { kind: opencode }", color: "yamlVal", lineNumber: "45", type: "input" },
+      { text: "  mcpSidecars:", color: "yamlKey", lineNumber: "46", type: "input" },
+      { text: "    - { name: kubernetes, image: docker.io/kubesynapse/mcp-kubernetes:deploy-20260401-212102, port: 8097 }", color: "yamlVal", lineNumber: "47", type: "input" },
+      { text: "  systemPrompt: >", color: "yamlKey", lineNumber: "48", type: "input" },
+      { text: "    Apply only the smallest approved patch with Kubernetes MCP and verify rollout health.", color: "string", lineNumber: "49", type: "input" },
+    ],
+  },
+  {
+    id: "workflow-editor",
+    icon: Workflow,
+    label: "Workflow",
+    summary: "Run one approval-gated workflow through the commander so evidence, research, and execution stay separated.",
+    badge: "vim",
+    mode: "editor",
+    lines: [
+      { text: "apiVersion: kubesynapse.ai/v1alpha1", color: "yamlKey", lineNumber: "1", type: "input" },
+      { text: "kind: AgentWorkflow", color: "yamlKey", lineNumber: "2", type: "input" },
+      { text: "metadata: { name: incident-response-mesh, namespace: default }", color: "yamlVal", lineNumber: "3", type: "input" },
+      { text: "spec:", color: "yamlKey", lineNumber: "4", type: "input" },
+      { text: "  description: Multi-agent incident workflow with isolated cluster evidence, remote research, and approval-gated remediation", color: "yamlVal", lineNumber: "5", type: "input" },
+      { text: "  input: Checkout API latency spike in prod-aks-eastus", color: "yamlVal", lineNumber: "6", type: "input" },
+      { text: "  steps:", color: "yamlKey", lineNumber: "7", type: "input" },
+      { text: "    - name: collect-evidence", color: "yamlVal", lineNumber: "8", type: "input" },
+      { text: "      agentRef: incident-commander", color: "yamlVal", lineNumber: "9", type: "input" },
+      { text: "      prompt: \"Delegate over A2A to signal-watch for Kubernetes evidence and to runbook-researcher for Grafana, Azure, and docs context. Write /workspace/evidence-brief.md.\"", color: "string", lineNumber: "10", type: "input" },
+      { text: "    - name: draft-remediation", color: "yamlVal", lineNumber: "11", type: "input" },
+      { text: "      agentRef: incident-commander", color: "yamlVal", lineNumber: "12", type: "input" },
+      { text: "      dependsOn: [collect-evidence]", color: "yamlVal", lineNumber: "13", type: "input" },
+      { text: "      prompt: \"Combine signal-findings.md and research-brief.md into /workspace/remediation-plan.yaml. Ask remediation-executor for the smallest safe patch, but do not apply it yet.\"", color: "string", lineNumber: "14", type: "input" },
+      { text: "    - name: approval-gate", color: "yamlVal", lineNumber: "15", type: "input" },
+      { text: "      type: review", color: "yamlVal", lineNumber: "16", type: "input" },
+      { text: "      agentRef: incident-commander", color: "yamlVal", lineNumber: "17", type: "input" },
+      { text: "      dependsOn: [draft-remediation]", color: "yamlVal", lineNumber: "18", type: "input" },
+      { text: "      requireApproval: true", color: "flag", lineNumber: "19", type: "input" },
+      { text: "      prompt: \"Review the plan, summarize risk, and wait for human approval.\"", color: "string", lineNumber: "20", type: "input" },
+      { text: "    - name: apply-fix", color: "yamlVal", lineNumber: "21", type: "input" },
+      { text: "      agentRef: incident-commander", color: "yamlVal", lineNumber: "22", type: "input" },
+      { text: "      dependsOn: [approval-gate]", color: "yamlVal", lineNumber: "23", type: "input" },
+      { text: "      prompt: \"After approval, delegate the change to remediation-executor and return rollout verification notes.\"", color: "string", lineNumber: "24", type: "input" },
+    ],
+  },
+  {
+    id: "apply-manifests",
+    icon: CheckCircle2,
+    label: "Apply",
+    summary: "Create the policies, agents, and workflow, then inspect the generated per-agent MCP and A2A network policies.",
+    badge: "kubectl",
+    mode: "shell",
+    footnote: "The operator emits per-agent `*-sandbox-mcp-egress`, `*-sandbox-a2a-egress`, and `*-sandbox-a2a-ingress` NetworkPolicies. Empty `allowedMcpServers` keeps remote MCP egress closed while still allowing the internal Kubernetes sidecar pattern.",
+    lines: [
+      { text: "kubectl apply -f incident-policies.yaml", color: "command", prefix: "$", type: "input" },
+      { text: "agentpolicy.kubesynapse.ai/incident-commander-policy created", color: "success", type: "output" },
+      { text: "agentpolicy.kubesynapse.ai/incident-observe-policy created", color: "success", type: "output" },
+      { text: "agentpolicy.kubesynapse.ai/incident-research-policy created", color: "success", type: "output" },
+      { text: "agentpolicy.kubesynapse.ai/incident-execute-policy created", color: "success", type: "output" },
+      { text: "", type: "blank" },
+      { text: "kubectl apply -f incident-agents.yaml", color: "command", prefix: "$", type: "input" },
+      { text: "aiagent.kubesynapse.ai/incident-commander created", color: "success", type: "output" },
+      { text: "aiagent.kubesynapse.ai/signal-watch created", color: "success", type: "output" },
+      { text: "aiagent.kubesynapse.ai/runbook-researcher created", color: "success", type: "output" },
+      { text: "aiagent.kubesynapse.ai/remediation-executor created", color: "success", type: "output" },
+      { text: "kubectl apply -f incident-workflow.yaml", color: "command", prefix: "$", type: "input" },
+      { text: "agentworkflow.kubesynapse.ai/incident-response-mesh created", color: "success", type: "output" },
+      { text: "", type: "blank" },
+      { text: "kubectl get aiagents -n default", color: "command", prefix: "$", type: "input" },
+      { text: "NAME                  MODEL                          RUNTIME   AGE", color: "output", type: "output" },
+      { text: "incident-commander    github-copilot/gpt-5-mini      opencode  6s", color: "output", type: "output" },
+      { text: "signal-watch          github-copilot/gpt-5-mini      opencode  6s", color: "output", type: "output" },
+      { text: "runbook-researcher    github-copilot/gpt-5-mini      opencode  5s", color: "output", type: "output" },
+      { text: "remediation-executor  github-copilot/gpt-5-mini      opencode  5s", color: "output", type: "output" },
+      { text: "", type: "blank" },
+      { text: "kubectl get networkpolicy -n default", color: "command", prefix: "$", type: "input" },
+      { text: "NAME                                       POD-SELECTOR                              AGE", color: "output", type: "output" },
+      { text: "incident-commander-sandbox-a2a-egress      app=ai-agent,agent-name=incident-commander    5s", color: "output", type: "output" },
+      { text: "incident-commander-sandbox-a2a-ingress     app=ai-agent,agent-name=incident-commander    5s", color: "output", type: "output" },
+      { text: "signal-watch-sandbox-mcp-egress            app=ai-agent,agent-name=signal-watch          5s", color: "output", type: "output" },
+      { text: "runbook-researcher-sandbox-mcp-egress      app=ai-agent,agent-name=runbook-researcher    5s", color: "output", type: "output" },
+      { text: "remediation-executor-sandbox-a2a-ingress   app=ai-agent,agent-name=remediation-executor  5s", color: "output", type: "output" },
+    ],
+  },
+  {
+    id: "workflow-run",
+    icon: Activity,
+    label: "Run",
+    summary: "Discover the commander's peers, trigger the workflow, inspect the approval gate, and release execution only after review.",
+    badge: "agentctl",
+    mode: "shell",
+    footnote: "`signal-watch` and `remediation-executor` stay on the bundled Kubernetes sidecar with no remote MCP allowlist. `runbook-researcher` is the only agent with registry-backed remote MCP egress to Grafana, Azure, Context7, and Microsoft Learn.",
+    lines: [
+      { text: "agentctl agents discover incident-commander", color: "command", prefix: "$", type: "input" },
+      { text: "Agent: incident-commander  Namespace: default", color: "output", type: "output" },
+      { text: "NAME                  NAMESPACE  REACHABLE  STATUS  RUNTIME   MODEL", color: "output", type: "output" },
+      { text: "signal-watch          default    True       ready   opencode  github-copilot/gpt-5-mini", color: "output", type: "output" },
+      { text: "runbook-researcher    default    True       ready   opencode  github-copilot/gpt-5-mini", color: "output", type: "output" },
+      { text: "remediation-executor  default    True       ready   opencode  github-copilot/gpt-5-mini", color: "output", type: "output" },
+      { text: "", type: "blank" },
+      { text: "agentctl workflows trigger incident-response-mesh \"Checkout API latency spike in prod-aks-eastus\"", color: "command", prefix: "$", type: "input" },
+      { text: "OK Workflow incident-response-mesh triggered in default", color: "success", type: "output" },
+      { text: "  Phase: pending  Step: collect-evidence", color: "output", type: "output" },
+      { text: "", type: "blank" },
+      { text: "agentctl workflows status incident-response-mesh", color: "command", prefix: "$", type: "input" },
+      { text: "Name              incident-response-mesh", color: "output", type: "output" },
+      { text: "Phase             waiting-approval", color: "warning", type: "output" },
+      { text: "Current Step      approval-gate", color: "output", type: "output" },
+      { text: "Run ID            run-91b7e204", color: "output", type: "output" },
+      { text: "Pending Approval  approval-gate", color: "warning", type: "output" },
+      { text: "", type: "blank" },
+      { text: "Step States", color: "accent", type: "output" },
+      { text: "collect-evidence  completed         incident-commander", color: "output", type: "output" },
+      { text: "draft-remediation completed         incident-commander", color: "output", type: "output" },
+      { text: "approval-gate     waiting-approval  incident-commander", color: "warning", type: "output" },
+      { text: "", type: "blank" },
+      { text: "agentctl workflows logs incident-response-mesh --tail 12", color: "command", prefix: "$", type: "input" },
+      { text: "[collect-evidence] incident-commander -> signal-watch: checkout-api pods restarted twice; OOMKilled events confirmed", color: "output", type: "output" },
+      { text: "[collect-evidence] incident-commander -> runbook-researcher: Grafana p95 3.4s and Azure nodepool memory pressure confirmed", color: "output", type: "output" },
+      { text: "[collect-evidence] runbook-researcher: Microsoft Learn and Context7 guidance written to /workspace/research-brief.md", color: "output", type: "output" },
+      { text: "[draft-remediation] wrote /workspace/remediation-plan.yaml", color: "output", type: "output" },
+      { text: "[approval-gate] waiting for human approval before delegation to remediation-executor", color: "warning", type: "output" },
+      { text: "", type: "blank" },
+      { text: "agentctl runs approvals", color: "command", prefix: "$", type: "input" },
+      { text: "APPROVAL                    WORKFLOW                STEP            PHASE", color: "output", type: "output" },
+      { text: "approval-incident-mesh-91b7 incident-response-mesh  approval-gate   waiting-approval", color: "output", type: "output" },
+      { text: "agentctl runs approve approval-incident-mesh-91b7 --reason \"Patch is safe for rollout\"", color: "command", prefix: "$", type: "input" },
+      { text: "Approval approval-incident-mesh-91b7 -> approved", color: "success", type: "output" },
+      { text: "agentctl workflows logs incident-response-mesh --tail 4", color: "command", prefix: "$", type: "input" },
+      { text: "[apply-fix] incident-commander -> remediation-executor: memory request patch applied to checkout-api", color: "output", type: "output" },
+      { text: "[apply-fix] remediation-executor: rollout status successful; no new restarts observed after 5m", color: "success", type: "output" },
+    ],
+  },
+];
+
+function TerminalExperience({ className }: { className?: string }) {
+  const terminalBodyRef = useRef<HTMLDivElement | null>(null);
+  const [activeSceneIndex, setActiveSceneIndex] = useState(0);
+  const [copied, setCopied] = useState(false);
+  const currentScene = installScenes[activeSceneIndex];
+  const previousScene = installScenes[(activeSceneIndex - 1 + installScenes.length) % installScenes.length];
+  const nextScene = installScenes[(activeSceneIndex + 1) % installScenes.length];
+  const CurrentSceneIcon = currentScene.icon;
+
+  useEffect(() => {
+    const terminalBody = terminalBodyRef.current;
+    if (!terminalBody) {
+      return;
+    }
+    terminalBody.scrollTop = 0;
+  }, [activeSceneIndex]);
+
+  useEffect(() => {
+    if (!copied) {
+      return;
+    }
+    const timeout = window.setTimeout(() => setCopied(false), 1400);
+    return () => window.clearTimeout(timeout);
+  }, [copied]);
+
+  const copyText = currentScene.lines
+    .map((line) => `${line.prefix ? `${line.prefix} ` : ""}${line.text}`)
+    .join("\n");
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(copyText).then(() => setCopied(true)).catch(() => setCopied(false));
+  };
+
+  const moveScene = (direction: -1 | 1) => {
+    setActiveSceneIndex((currentIndex) => (currentIndex + direction + installScenes.length) % installScenes.length);
+  };
+
+  return (
+    <div className={cn("w-full text-left", className)}>
+      <div className="overflow-hidden rounded-[30px] border border-[oklch(0.31_0.012_264)] bg-[oklch(0.12_0.006_264)] shadow-[0_28px_90px_-36px_rgba(0,0,0,0.75)] ring-1 ring-[oklch(0.25_0.01_264)]">
+        <div className="border-b border-[oklch(0.25_0.01_264)] bg-[linear-gradient(180deg,oklch(0.16_0.009_264),oklch(0.138_0.008_264))]">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex items-center gap-1.5">
+                <span className="h-2.5 w-2.5 rounded-full bg-[oklch(0.65_0.18_24)]" />
+                <span className="h-2.5 w-2.5 rounded-full bg-[oklch(0.82_0.16_84)]" />
+                <span className="h-2.5 w-2.5 rounded-full bg-[oklch(0.76_0.16_154)]" />
+              </div>
+              <div className="min-w-0">
+                <div className="truncate text-xs font-semibold text-[oklch(0.958_0.004_264)] sm:text-sm">
+                  kubesynapse-demo
+                </div>
+                <p className="truncate text-[11px] text-[oklch(0.62_0.01_264)]">
+                  Real Helm, CLI, YAML, and workflow scenes
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="inline-flex items-center gap-2 rounded-xl border border-[oklch(0.3_0.01_264)] bg-[linear-gradient(180deg,oklch(0.19_0.008_264),oklch(0.17_0.008_264))] px-3 py-2 text-xs font-medium text-[oklch(0.84_0.01_264)] transition-all hover:border-[oklch(0.708_0.101_188/0.4)] hover:text-[oklch(0.958_0.004_264)] hover:shadow-[0_12px_30px_-18px_rgba(94,234,212,0.55)]"
+              title="Copy current scene"
+            >
+              {copied ? <Check className="h-3.5 w-3.5 text-[oklch(0.76_0.16_154)]" /> : <Copy className="h-3.5 w-3.5" />}
+              <span>{copied ? "Copied" : "Copy Code"}</span>
+            </button>
+          </div>
+
+          <div className="px-2 pb-2 sm:px-3">
+            <div className="grid grid-cols-6 gap-1" role="tablist" aria-label="Install flow scenes">
+              {installScenes.map((scene, index) => {
+                const SceneIcon = scene.icon;
+                const isActive = index === activeSceneIndex;
+
+                return (
+                  <button
+                    key={scene.id}
+                    id={`terminal-scene-tab-${scene.id}`}
+                    role="tab"
+                    aria-selected={isActive}
+                    aria-controls={`terminal-scene-panel-${scene.id}`}
+                    tabIndex={isActive ? 0 : -1}
+                    type="button"
+                    onClick={() => setActiveSceneIndex(index)}
+                    className={cn(
+                      "group relative isolate flex min-w-0 items-center gap-1.5 overflow-hidden rounded-t-[14px] border border-b-0 px-1.5 py-2 text-left transition-all duration-200",
+                      isActive
+                        ? "border-[oklch(0.34_0.018_264)] text-[oklch(0.958_0.004_264)]"
+                        : "border-transparent text-[oklch(0.67_0.01_264)] hover:border-[oklch(0.26_0.01_264)] hover:bg-[oklch(0.17_0.008_264/0.92)] hover:text-[oklch(0.9_0.01_264)]",
+                    )}
+                  >
+                    {isActive && (
+                      <motion.span
+                        layoutId="terminal-scene-tab"
+                        transition={{ type: "spring", stiffness: 280, damping: 30 }}
+                        className="absolute inset-0 rounded-t-[14px] border border-[oklch(0.33_0.018_264)] bg-[linear-gradient(180deg,oklch(0.225_0.016_264),oklch(0.16_0.008_264))] shadow-[0_22px_60px_-30px_rgba(94,234,212,0.45)]"
+                      />
+                    )}
+                    <span className={cn("absolute inset-x-2.5 top-0 h-px bg-gradient-to-r from-transparent via-[oklch(0.708_0.101_188)] to-transparent transition-opacity", isActive ? "opacity-100" : "opacity-0")} />
+                    <span className={cn("relative z-10 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition-all", isActive ? "border-[oklch(0.708_0.101_188/0.22)] bg-[oklch(0.708_0.101_188/0.12)] text-[oklch(0.76_0.16_154)] shadow-[0_10px_24px_-18px_rgba(110,231,183,0.8)]" : "border-[oklch(0.28_0.01_264)] bg-[oklch(0.18_0.008_264/0.9)] text-[oklch(0.6_0.01_264)] group-hover:border-[oklch(0.708_0.101_188/0.18)] group-hover:text-[oklch(0.82_0.01_264)]")}>
+                      <SceneIcon className="h-3 w-3" />
+                    </span>
+                    <span className={cn("relative z-10 min-w-0 flex-1 truncate text-[10px] font-semibold leading-none sm:text-[11px]", isActive ? "text-[oklch(0.958_0.004_264)]" : "text-[oklch(0.82_0.01_264)]")}>{scene.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[oklch(0.25_0.01_264)] bg-[linear-gradient(180deg,oklch(0.145_0.008_264),oklch(0.134_0.007_264))] px-4 py-3 sm:px-5">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-2 rounded-full border border-[oklch(0.708_0.101_188/0.2)] bg-[oklch(0.708_0.101_188/0.09)] px-3 py-1 text-[11px] font-medium text-[oklch(0.708_0.101_188)]">
+                <CurrentSceneIcon className="h-3.5 w-3.5" />
+                Scene {activeSceneIndex + 1}/{installScenes.length}
+              </span>
+              <span className="rounded-full border border-[oklch(0.28_0.01_264)] bg-[oklch(0.18_0.008_264/0.92)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[oklch(0.78_0.01_264)]">
+                {currentScene.mode === "editor" ? "editor" : "shell"}
+              </span>
+              <span className="rounded-full border border-[oklch(0.28_0.01_264)] bg-[oklch(0.18_0.008_264/0.92)] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-[oklch(0.742_0.132_233)]">
+                {currentScene.badge}
+              </span>
+            </div>
+            <p className="mt-2 truncate text-sm text-[oklch(0.78_0.01_264)]">{currentScene.summary}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => moveScene(-1)}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[oklch(0.28_0.01_264)] bg-[oklch(0.18_0.008_264/0.92)] text-[oklch(0.8_0.01_264)] transition-all hover:border-[oklch(0.708_0.101_188/0.35)] hover:text-[oklch(0.958_0.004_264)]"
+              title={`Previous scene: ${previousScene.label}`}
+              aria-label={`Previous scene: ${previousScene.label}`}
+            >
+              <ChevronRight className="h-4 w-4 rotate-180" />
+            </button>
+            <button
+              type="button"
+              onClick={() => moveScene(1)}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[oklch(0.28_0.01_264)] bg-[oklch(0.18_0.008_264/0.92)] text-[oklch(0.8_0.01_264)] transition-all hover:border-[oklch(0.708_0.101_188/0.35)] hover:text-[oklch(0.958_0.004_264)]"
+              title={`Next scene: ${nextScene.label}`}
+              aria-label={`Next scene: ${nextScene.label}`}
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        <div
+          id={`terminal-scene-panel-${currentScene.id}`}
+          role="tabpanel"
+          aria-labelledby={`terminal-scene-tab-${currentScene.id}`}
+          ref={terminalBodyRef}
+          className="relative max-h-[31rem] min-h-[18rem] overflow-auto bg-[radial-gradient(circle_at_top,oklch(0.19_0.012_264)_0%,oklch(0.12_0.006_264)_58%)] px-4 py-4 font-mono text-[12px] leading-6 sm:px-5 sm:py-5 sm:text-[13px]"
+        >
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,oklch(0.2_0.012_264/0.35),transparent)]" />
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={currentScene.id}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.16 }}
+              className="relative space-y-0.5 text-left"
+            >
+              {currentScene.lines.map((line, index) => (
+                <motion.div
+                  key={`${currentScene.id}-${index}`}
+                  initial={{ opacity: 0.98 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.12 }}
+                  className="min-h-[1.5rem]"
+                >
+                  {line.type === "blank" ? (
+                    <span>&nbsp;</span>
+                  ) : currentScene.mode === "editor" ? (
+                    <div className="grid grid-cols-[2.25rem_minmax(0,1fr)] items-start gap-x-4 text-left">
+                      <span className="select-none text-right tabular-nums text-[oklch(0.45_0.01_264)]">
+                        {line.lineNumber ?? ""}
+                      </span>
+                      <span className={cn("min-w-0 whitespace-pre-wrap break-words text-left", colorMap[line.color || "output"] || "text-[oklch(0.82_0.01_264)]")}>
+                        {line.text}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-[1rem_minmax(0,1fr)] items-start gap-x-3 text-left">
+                      <span className="select-none text-[oklch(0.76_0.16_154/0.8)]">{line.prefix ?? ""}</span>
+                      <span className={cn("min-w-0 whitespace-pre-wrap break-words text-left", colorMap[line.color || "output"] || "text-[oklch(0.82_0.01_264)]")}>
+                        {line.text}
+                      </span>
+                    </div>
+                  )}
+                </motion.div>
+              ))}
+            </motion.div>
+          </AnimatePresence>
+        </div>
+      </div>
+
+      {currentScene.footnote && (
+        <div className="mt-4 rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[linear-gradient(180deg,oklch(0.19_0.008_264/0.7),oklch(0.17_0.008_264/0.6))] px-4 py-3 text-sm leading-relaxed text-[oklch(0.72_0.01_264)] shadow-[0_16px_40px_-28px_rgba(0,0,0,0.7)]">
+          {currentScene.footnote}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ─── Navbar ───
 
@@ -334,7 +831,7 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[oklch(0.76_0.16_154)] opacity-75" />
             <span className="relative inline-flex h-2 w-2 rounded-full bg-[oklch(0.76_0.16_154)]" />
           </span>
-          v0.3.0 &middot; Self-Hosted &middot; Hardened by Default &middot; Apache 2.0
+          Open Source &middot; Self-Hosted &middot; Hardened by Default &middot; Apache 2.0
         </motion.div>
 
         <motion.h1
@@ -361,44 +858,15 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           hardened by default, no security team required.
         </motion.p>
 
-        {/* Security config preview */}
+        {/* Hero terminal */}
         <motion.div
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.7, delay: 0.4 }}
-          className="mx-auto mt-8 max-w-lg"
+          id="install"
+          className="mx-auto mt-8 max-w-5xl scroll-mt-24"
         >
-          <div className="overflow-hidden rounded-xl border border-[oklch(0.28_0.015_264)] bg-[oklch(0.16_0.009_264/0.9)] shadow-lg shadow-black/30 backdrop-blur-sm">
-            <div className="flex items-center gap-1.5 border-b border-[oklch(0.28_0.015_264)] px-4 py-2">
-              <div className="h-2.5 w-2.5 rounded-full bg-[oklch(0.55_0.01_264)]" />
-              <div className="h-2.5 w-2.5 rounded-full bg-[oklch(0.55_0.01_264)]/60" />
-              <div className="h-2.5 w-2.5 rounded-full bg-[oklch(0.55_0.01_264)]/30" />
-              <span className="ml-2 text-[10px] font-medium text-[oklch(0.55_0.01_264)]">runtime security baseline</span>
-            </div>
-            <div className="px-4 py-3 font-mono text-xs leading-relaxed text-[oklch(0.78_0.01_264)]">
-              <span className="text-[oklch(0.62_0.01_264)]">$</span>{" "}
-              <span className="text-[oklch(0.82_0.10_188)]">helm install</span>{" "}
-              kubesynapse ./charts/kubesynapse{"\n"}
-              <span className="text-[oklch(0.62_0.01_264)]">  --set</span>{" "}
-              <span className="text-[oklch(0.82_0.12_308)]">opencodeRuntime.immutableConfig</span>
-              <span className="text-[oklch(0.50_0.01_264)]">=</span>
-              <span className="text-[oklch(0.76_0.16_154)]">true</span>{"\n"}
-              <span className="text-[oklch(0.62_0.01_264)]">  --set</span>{" "}
-              <span className="text-[oklch(0.82_0.12_308)]">opencodeRuntime.admin.OPENCODE_DISABLE_DEFAULT_PLUGINS</span>
-              <span className="text-[oklch(0.50_0.01_264)]">=</span>
-              <span className="text-[oklch(0.76_0.16_154)]">true</span>{"\n"}
-              <span className="text-[oklch(0.62_0.01_264)]">  -n kubesynapse --create-namespace</span>{"\n\n"}
-              <motion.span
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 1.2, duration: 0.5 }}
-                className="text-[oklch(0.76_0.16_154)]"
-              >
-                ✓ Agent runtime hardened — plugin isolation active,{"\n"}
-                {"  "}config baseline enforced, traffic routed through proxy.
-              </motion.span>
-            </div>
-          </div>
+          <TerminalExperience />
         </motion.div>
 
         <motion.div
@@ -413,7 +881,7 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           >
             <span className="absolute inset-0 -z-10 rounded-xl bg-[oklch(0.708_0.101_188)] opacity-0 blur-xl motion-safe:group-hover:opacity-50 transition-opacity" />
             <Terminal className="h-4 w-4" />
-            Deploy with Helm
+            Start with Kind
             <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
           </a>
           <button
@@ -435,7 +903,7 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
         >
           {[
             { label: "CRD Types", value: 12, suffix: "" },
-            { label: "MCP Sidecars", value: 11, suffix: "" },
+            { label: "MCP Sidecars", value: 10, suffix: "" },
             { label: "CLI Commands", value: 82, suffix: "" },
             { label: "Security Layers", value: 4, suffix: "" },
           ].map((stat) => (
@@ -1039,9 +1507,9 @@ function FaithfulComposerPanel() {
     { id: "triage", label: "Triage Alert", x: 248, y: 48, h: 112, status: "completed", agent: "security-analyst", runtime: "opencode", prompt: "Analyze severity, affected systems, IOC indicators.", approval: false },
     { id: "collect", label: "Collect Evidence", x: 248, y: 270, h: 112, status: "completed", agent: "forensics", runtime: "opencode", prompt: "Collect logs, memory dumps, network captures.", approval: false },
     { id: "assess", label: "Assess Impact", x: 506, y: 159, h: 112, status: "running", agent: "security-analyst", runtime: "opencode", prompt: "Assess blast radius, data exposure, business impact.", approval: false },
-    { id: "contain", label: "Contain Threat", x: 766, y: 48, h: 112, status: "waiting", agent: "incident-response", runtime: "pi", prompt: "Isolate systems, block IPs, revoke credentials.", approval: true },
+    { id: "contain", label: "Contain Threat", x: 766, y: 48, h: 112, status: "waiting", agent: "incident-response", runtime: "opencode", prompt: "Isolate systems, block IPs, revoke credentials.", approval: true },
     { id: "eradicate", label: "Eradicate & Recover", x: 766, y: 270, h: 112, status: "waiting", agent: "incident-response", runtime: "opencode", prompt: "Remove malware, patch vulns, restore backups.", approval: false },
-    { id: "report", label: "Post-Incident Report", x: 980, y: 159, h: 112, status: "waiting", agent: "doc-writer", runtime: "mistral-vibe", prompt: "Generate report with timeline, root cause, remediation.", approval: false },
+    { id: "report", label: "Post-Incident Report", x: 980, y: 159, h: 112, status: "waiting", agent: "doc-writer", runtime: "opencode", prompt: "Generate report with timeline, root cause, remediation.", approval: false },
   ];
 
   const edges = [
@@ -1054,8 +1522,8 @@ function FaithfulComposerPanel() {
   const paletteAgents = [
     { name: "security-analyst", runtime: "opencode", status: "Running" },
     { name: "forensics", runtime: "opencode", status: "Running" },
-    { name: "incident-response", runtime: "pi", status: "Idle" },
-    { name: "doc-writer", runtime: "mistral-vibe", status: "Idle" },
+    { name: "incident-response", runtime: "opencode", status: "Idle" },
+    { name: "doc-writer", runtime: "opencode", status: "Idle" },
     { name: "network-monitor", runtime: "opencode", status: "Running" },
   ];
 
@@ -1066,8 +1534,6 @@ function FaithfulComposerPanel() {
   function nodeAccentColor(r: string) {
     switch (r) {
       case "opencode": return "border-l-emerald-400";
-      case "pi": return "border-l-violet-400";
-      case "mistral-vibe": return "border-l-fuchsia-400";
       default: return "border-l-[oklch(0.80_0.01_264)]";
     }
   }
@@ -1120,8 +1586,6 @@ function FaithfulComposerPanel() {
   function runtimeIcon(r: string) {
     switch (r) {
       case "opencode": return <Code className="h-3 w-3 text-emerald-400" />;
-      case "pi": return <Cpu className="h-3 w-3 text-violet-400" />;
-      case "mistral-vibe": return <Sparkles className="h-3 w-3 text-fuchsia-400" />;
       default: return <Cpu className="h-3 w-3 text-[oklch(0.80_0.01_264)]" />;
     }
   }
@@ -1244,8 +1708,6 @@ function FaithfulComposerPanel() {
               <div className="flex-1 overflow-auto px-2 py-1">
                 {[
                   { runtime: "opencode", icon: <Code className="h-2.5 w-2.5 text-emerald-400" /> },
-                  { runtime: "pi", icon: <Cpu className="h-2.5 w-2.5 text-violet-400" /> },
-                  { runtime: "mistral-vibe", icon: <Sparkles className="h-2.5 w-2.5 text-fuchsia-400" /> },
                 ].map(group => {
                   const agents = paletteAgents.filter(a => a.runtime === group.runtime);
                   if (!agents.length) return null;
@@ -1640,7 +2102,7 @@ function FaithfulAgentManagementPanel() {
           {activeTab === "runtime" && (
             <div className="rounded-xl border border-[oklch(0.72_0.012_264)]/10 bg-[oklch(0.10_0.015_264)] p-4">
               <h4 className="text-sm font-semibold text-[oklch(0.958_0.004_264)] mb-1">Runtime profile</h4>
-              <p className="text-[10px] text-[oklch(0.72_0.012_264)]/50 mb-3">Choose the agent runtime that fits your use case. Each runtime provides different capabilities and models.</p>
+              <p className="text-[10px] text-[oklch(0.72_0.012_264)]/50 mb-3">OpenCode is the production runtime used by the current examples, quickstart flows, and hardened agent path.</p>
               <div className="space-y-1.5">
                 {RUNTIMES.map(rid => {
                   const info = runtimeMeta[rid];
@@ -2082,8 +2544,8 @@ function FeaturesSection() {
       icon: Puzzle,
       title: "MCP Tool Ecosystem",
       description:
-        "11 bundled sidecars: Kubernetes ops, web search, browser automation, file system, messaging, and more. Hot-attach any MCP server.",
-      tags: ["11 Sidecars", "Hot Attach", "Tools"],
+        "10 bundled MCP tool sidecars: code execution, web search, browser, documents, database, git, and more. Hot-attach any MCP server.",
+      tags: ["10 Sidecars", "Hot Attach", "Tools"],
     },
     {
       icon: Shield,
@@ -2183,7 +2645,7 @@ function TrustBar() {
     { icon: Lock, label: "RBAC + NetworkPolicy + provider enforcement" },
     { icon: Eye, label: "Request tracing with x-request-id propagation" },
     { icon: Code, label: "Apache 2.0 — free forever" },
-    { icon: Terminal, label: "Helm install in under 5 minutes" },
+    { icon: Terminal, label: "Kind quickstart in under 5 minutes" },
   ];
 
   const ref = useRef(null);
@@ -2242,7 +2704,7 @@ function UseCasesSection() {
       title: "Harness Engineering via MCP",
       tags: ["Tools", "Sidecars"],
       description:
-        "11 pre-built MCP sidecars give agents safe, governed access to kubectl, GitHub, web search, databases, messaging, and file systems. Hot-attach new tools without rebuilding images.",
+        "10 pre-built MCP tool sidecars give agents safe, governed access to kubectl, GitHub, web search, databases, messaging, and documents. Hot-attach new tools without rebuilding images.",
     },
     {
       icon: Shield,
@@ -2426,241 +2888,6 @@ function HowItWorks() {
   );
 }
 
-// ─── Install Terminal Section ───
-
-type TabKey = "install" | "agent" | "workflow" | "operate";
-
-function InstallSection() {
-  const ref = useRef(null);
-  const inView = useInView(ref, { once: true, margin: "-60px" });
-  const [activeTab, setActiveTab] = useState<TabKey>("install");
-  const [visibleLines, setVisibleLines] = useState(0);
-  const prevTabRef = useRef<TabKey>(activeTab);
-
-  useEffect(() => {
-    if (prevTabRef.current !== activeTab) {
-      setVisibleLines(0);
-      prevTabRef.current = activeTab;
-    }
-    if (visibleLines < tabLines[activeTab].length) {
-      const timer = setTimeout(() => setVisibleLines((v) => v + 1), 50);
-      return () => clearTimeout(timer);
-    }
-  }, [activeTab, visibleLines]);
-
-  const tabs: { key: TabKey; label: string; icon: typeof Terminal }[] = [
-    { key: "install", label: "Install", icon: Terminal },
-    { key: "agent", label: "AIAgent", icon: Bot },
-    { key: "workflow", label: "Workflow", icon: Workflow },
-    { key: "operate", label: "Operate", icon: Play },
-  ];
-
-  const tabLines: Record<TabKey, TerminalLine[]> = {
-    install: [
-      { text: "# Install KubeSynapse on your Kubernetes cluster", color: "comment", type: "input" },
-      { text: "helm repo add kubesynapse https://kubesynapse.ai/charts", color: "command", prefix: "$", type: "input" },
-      { text: "helm install kubesynapse kubesynapse/kubesynapse \\", color: "command", prefix: "$", type: "input" },
-      { text: "  --namespace kubesynapse --create-namespace \\", color: "command", type: "input" },
-      { text: "  --set platformSecrets.native.openaiApiKey=\"sk-...\"", color: "command", type: "input" },
-      { text: "", type: "blank" },
-      { text: "NAME: kubesynapse", color: "output", type: "output" },
-      { text: "NAMESPACE: kubesynapse", color: "output", type: "output" },
-      { text: "STATUS: deployed", color: "string", type: "output" },
-      { text: "REVISION: 1", color: "output", type: "output" },
-      { text: "", type: "blank" },
-      { text: "kubectl port-forward -n kubesynapse \\", color: "command", prefix: "$", type: "input" },
-      { text: "  svc/kubesynapse-api-gateway 8080:8080", color: "command", type: "input" },
-      { text: "Forwarding from 127.0.0.1:8080 -> 8080", color: "string", type: "output" },
-      { text: "", type: "blank" },
-      { text: "  Open http://localhost:8080 in your browser", color: "comment", type: "input" },
-    ],
-    agent: [
-      { text: "apiVersion: kubesynapse.ai/v1alpha1", color: "yamlKey", type: "input" },
-      { text: "kind: AIAgent", color: "yamlKey", type: "input" },
-      { text: "metadata:", color: "yamlKey", type: "input" },
-      { text: "  name: incident-triage", color: "yamlVal", type: "input" },
-      { text: "  namespace: production", color: "yamlVal", type: "input" },
-      { text: "spec:", color: "yamlKey", type: "input" },
-      { text: "  model: claude-sonnet-4-20250514", color: "yamlVal", type: "input" },
-      { text: "  runtime:", color: "yamlKey", type: "input" },
-      { text: "    kind: opencode", color: "yamlVal", type: "input" },
-      { text: "  storage:", color: "yamlKey", type: "input" },
-      { text: "    size: 2Gi", color: "yamlVal", type: "input" },
-      { text: "  systemPrompt: |", color: "yamlKey", type: "input" },
-      { text: "    You are an SRE agent. When an alert fires,", color: "string", type: "input" },
-      { text: "    correlate logs, check pod status, and suggest", color: "string", type: "input" },
-      { text: "    remediation. Ask before destructive commands.", color: "string", type: "input" },
-      { text: "  mcpServers:", color: "yamlKey", type: "input" },
-      { text: "    - kubernetes", color: "yamlVal", type: "input" },
-      { text: "    - web-search", color: "yamlVal", type: "input" },
-      { text: "    - messaging", color: "yamlVal", type: "input" },
-      { text: "  policyRef: sre-governed", color: "yamlVal", type: "input" },
-    ],
-    workflow: [
-      { text: "apiVersion: kubesynapse.ai/v1alpha1", color: "yamlKey", type: "input" },
-      { text: "kind: AgentWorkflow", color: "yamlKey", type: "input" },
-      { text: "metadata:", color: "yamlKey", type: "input" },
-      { text: "  name: incident-response", color: "yamlVal", type: "input" },
-      { text: "spec:", color: "yamlKey", type: "input" },
-      { text: "  description: Automated incident response pipeline", color: "yamlVal", type: "input" },
-      { text: "  input: Alert payload from Prometheus webhook", color: "yamlVal", type: "input" },
-      { text: "  autoRetry:", color: "yamlKey", type: "input" },
-      { text: "    enabled: true", color: "flag", type: "input" },
-      { text: "    maxAttempts: 1", color: "yamlVal", type: "input" },
-      { text: "  steps:", color: "yamlKey", type: "input" },
-      { text: "    - name: triage", color: "yamlVal", type: "input" },
-      { text: "      agentRef: incident-triage", color: "yamlVal", type: "input" },
-      { text: "      prompt: |", color: "yamlKey", type: "input" },
-      { text: "        Analyze this alert and correlate with recent", color: "string", type: "input" },
-      { text: "        pod events. Identify root cause.", color: "string", type: "input" },
-      { text: "      execution:", color: "yamlKey", type: "input" },
-      { text: "        timeoutSeconds: 180", color: "yamlVal", type: "input" },
-      { text: "    - name: analyze-logs", color: "yamlVal", type: "input" },
-      { text: "      agentRef: log-analyzer", color: "yamlVal", type: "input" },
-      { text: "      dependsOn: [triage]", color: "yamlVal", type: "input" },
-      { text: "      prompt: |", color: "yamlKey", type: "input" },
-      { text: "        Deep-dive into logs for the affected pods.", color: "string", type: "input" },
-      { text: "    - name: remediate", color: "yamlVal", type: "input" },
-      { text: "      agentRef: incident-triage", color: "yamlVal", type: "input" },
-      { text: "      dependsOn: [analyze-logs]", color: "yamlVal", type: "input" },
-      { text: "      requireApproval: true", color: "flag", type: "input" },
-      { text: "      prompt: |", color: "yamlKey", type: "input" },
-      { text: "        Apply the recommended fix from the analysis.", color: "string", type: "input" },
-    ],
-    operate: [
-      { text: "kubectl apply -f agent.yaml", color: "command", prefix: "$", type: "input" },
-      { text: "aiagent.kubesynapse.ai/incident-triage created", color: "string", type: "output" },
-      { text: "", type: "blank" },
-      { text: "kubectl apply -f workflow.yaml", color: "command", prefix: "$", type: "input" },
-      { text: "agentworkflow.kubesynapse.ai/incident-response created", color: "string", type: "output" },
-      { text: "", type: "blank" },
-      { text: "kubectl get aiagents -n production", color: "command", prefix: "$", type: "input" },
-      { text: "NAME              RUNTIME    STATUS    AGE", color: "output", type: "output" },
-      { text: "incident-triage   opencode   Running   2m", color: "string", type: "output" },
-      { text: "log-analyzer      pi         Running   2m", color: "string", type: "output" },
-      { text: "", type: "blank" },
-      { text: "agentctl workflow trigger incident-response", color: "command", prefix: "$", type: "input" },
-      { text: "Workflow triggered: incident-response (run-4f2a)", color: "string", type: "output" },
-      { text: "Step [triage]: running...", color: "output", type: "output" },
-      { text: "Step [analyze-logs]: waiting on [triage]", color: "output", type: "output" },
-      { text: "Step [remediate]: pending approval", color: "flag", type: "output" },
-    ],
-  };
-
-  return (
-    <section id="install" className="px-4 py-24 sm:px-6 md:py-32" ref={ref}>
-      <div className="mx-auto max-w-5xl">
-        <motion.div
-          initial="hidden"
-          animate={inView ? "visible" : "hidden"}
-          variants={containerVariants}
-          className="mb-12 text-center"
-        >
-          <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
-            Quick Start
-          </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
-            Deploy in <span className="text-[oklch(0.708_0.101_188)]">5 Minutes</span>
-          </motion.h2>
-          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-[oklch(0.82_0.01_264)]">
-            One Helm install gives you the full control plane. Then declare agents with YAML and manage them with kubectl.
-          </motion.p>
-        </motion.div>
-
-        {/* Tabbed Terminal */}
-        <motion.div
-          variants={itemVariants}
-          initial="hidden"
-          animate={inView ? "visible" : "hidden"}
-          className="overflow-hidden rounded-xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.12_0.006_264)] shadow-2xl shadow-black/40 ring-1 ring-[oklch(0.25_0.01_264)]"
-        >
-          {/* Tabs */}
-          <div className="flex flex-wrap items-center border-b border-[oklch(0.25_0.01_264)] bg-[oklch(0.149_0.008_264)]">
-            {tabs.map((tab) => {
-              const Icon = tab.icon;
-              const isActive = activeTab === tab.key;
-              return (
-                <button
-                  key={tab.key}
-                  onClick={() => { setActiveTab(tab.key); setVisibleLines(0); }}
-                    className={`flex shrink-0 items-center gap-2 px-4 py-3 text-sm font-medium transition-all sm:px-5 ${
-                    isActive
-                      ? "bg-[oklch(0.12_0.006_264)] text-[oklch(0.708_0.101_188)] border-t-2 border-t-[oklch(0.708_0.101_188)]"
-                      : "text-[oklch(0.62_0.01_264)] hover:text-[oklch(0.82_0.01_264)] hover:bg-[oklch(0.18_0.008_264)]"
-                  }`}
-                >
-                  <Icon className="h-4 w-4" />
-                  {tab.label}
-                </button>
-              );
-            })}
-            <button
-              onClick={() => {
-                const text = tabLines[activeTab].map((l) => `${l.prefix ? l.prefix + " " : ""}${l.text}`).join("\n");
-                navigator.clipboard.writeText(text).catch(() => {});
-              }}
-              className="ml-auto px-4 py-3 text-[oklch(0.4_0.01_264)] transition-colors hover:text-[oklch(0.82_0.01_264)]"
-              title="Copy to clipboard"
-            >
-              <Copy className="h-4 w-4" />
-            </button>
-          </div>
-
-          {/* Terminal Content */}
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activeTab}
-              className="overflow-x-auto p-4 font-mono text-[12px] leading-6 sm:p-5 sm:text-[13px]"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-            >
-              {tabLines[activeTab].slice(0, visibleLines).map((line, i) => (
-                <motion.div
-                  key={i}
-                  initial={{ opacity: 0, x: -8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: i * 0.04, duration: 0.25 }}
-                  className="min-h-[1.5rem]"
-                >
-                  {line.text === "" ? (
-                    <span>&nbsp;</span>
-                  ) : (
-                    <span className={`whitespace-pre-wrap break-words sm:whitespace-pre ${colorMap[line.color || "output"] || "text-[oklch(0.82_0.01_264)]"}`}>
-                      {line.prefix && (
-                        <span className="select-none text-[oklch(0.76_0.16_154/0.8)]">{line.prefix} </span>
-                      )}
-                      {line.text}
-                    </span>
-                  )}
-                </motion.div>
-              ))}
-            </motion.div>
-          </AnimatePresence>
-        </motion.div>
-
-        {/* Feature pills */}
-        <motion.div
-          variants={itemVariants}
-          initial="hidden"
-          animate={inView ? "visible" : "hidden"}
-          className="mt-8 flex flex-wrap justify-center gap-3"
-        >
-          {["Helm OCI", "CRDs", "kubectl", "agentctl CLI", "A2A JSON-RPC", "SSE Streaming"].map((item) => (
-            <span
-              key={item}
-              className="rounded-full border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.6)] px-4 py-1.5 text-xs font-medium text-[oklch(0.82_0.01_264)]"
-            >
-              {item}
-            </span>
-          ))}
-        </motion.div>
-      </div>
-    </section>
-  );
-}
-
 // ─── Architecture Section ───
 
 function ArchitectureSection() {
@@ -2685,7 +2912,7 @@ function ArchitectureSection() {
       iconColor: "text-violet-400",
       items: [
         { name: "OpenCode Runtime", sub: "Persistent StatefulSet" },
-        { name: "MCP Sidecars (11)", sub: "Tools, search, browser…" },
+        { name: "MCP Sidecars (10)", sub: "Code, search, browser…" },
         { name: "Worker Jobs", sub: "Workflow step execution" },
       ],
     },
@@ -2774,14 +3001,14 @@ function DocsSection() {
   const inView = useInView(ref, { once: true, margin: "-80px" });
 
   const docs = [
-    { icon: BookOpen, title: "Getting Started", description: "5-minute tutorial from install to your first agent", href: "#install" },
-    { icon: Layers, title: "Architecture Guide", description: "Control plane, execution plane, and data flow diagrams", href: "#architecture" },
-    { icon: Code, title: "API Reference", description: "OpenAPI schema, REST endpoints, SSE streaming, A2A protocol", href: "#" },
-    { icon: Boxes, title: "Helm Chart Docs", description: "Values reference, production examples, upgrade guides", href: "#" },
-    { icon: Terminal, title: "CLI Reference", description: "agentctl commands for agent, workflow, and eval management", href: "#" },
-    { icon: FolderTree, title: "CRD Schema", description: "AIAgent, AgentWorkflow, AgentPolicy, AgentTenant specifications", href: "#" },
-    { icon: Shield, title: "Security Guide", description: "Network policies, RBAC, secret management, auth flows", href: "#" },
-    { icon: GitBranch, title: "Contributing", description: "Development setup, PR process, coding standards", href: "https://github.com/ykbytes/kubesynapse.ai/blob/main/CONTRIBUTING.md" },
+    { icon: BookOpen, title: "Getting Started", description: "Repo-supported Kind quickstart from install to your first agent", href: `${REPO_BLOB_BASE}/docs/getting-started.md` },
+    { icon: Layers, title: "Architecture Guide", description: "Control plane, execution plane, and runtime data flow", href: `${REPO_BLOB_BASE}/docs/architecture-overview.md` },
+    { icon: Code, title: "API Reference", description: "REST paths, auth flows, SSE, webhooks, and A2A", href: `${REPO_BLOB_BASE}/docs/api-reference.md` },
+    { icon: Boxes, title: "Helm Chart Docs", description: "Values, quickstart overlays, and production hardening", href: `${REPO_BLOB_BASE}/charts/kubesynapse/README.md` },
+    { icon: Terminal, title: "CLI Reference", description: "agentctl profiles, invoke, workflows, and observability", href: `${REPO_BLOB_BASE}/cli/README.md` },
+    { icon: FolderTree, title: "CRD Schema", description: "Installed CRDs for agents, workflows, MCP, and observability", href: `${REPO_TREE_BASE}/charts/kubesynapse/crds` },
+    { icon: Shield, title: "Security Model", description: "Runtime hardening, auth, secrets, and policy boundaries", href: `${REPO_BLOB_BASE}/docs/architecture-overview.md#10-security-model` },
+    { icon: GitBranch, title: "Contributing", description: "Development setup, PR process, and coding standards", href: `${REPO_BLOB_BASE}/CONTRIBUTING.md` },
   ];
 
   return (
@@ -2811,6 +3038,8 @@ function DocsSection() {
               <motion.a
                 key={doc.title}
                 href={doc.href}
+                target="_blank"
+                rel="noopener noreferrer"
                 variants={itemVariants}
                 initial="hidden"
                 animate={inView ? "visible" : "hidden"}
@@ -3023,11 +3252,11 @@ function BottomCTA() {
                 <div className="min-w-0 overflow-x-auto">
                   <code className="block whitespace-nowrap text-[11px] text-[oklch(0.75_0.12_188)] sm:text-xs">
                     <span className="text-[oklch(0.76_0.16_154/0.8)]">$ </span>
-                    helm install kubesynapse oci://docker.io/kubesynapse/charts/kubesynapse
+                    pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1
                   </code>
                 </div>
                 <button
-                  onClick={() => navigator.clipboard.writeText("helm install kubesynapse oci://docker.io/kubesynapse/charts/kubesynapse --namespace kubesynapse --create-namespace").catch(() => {})}
+                  onClick={() => navigator.clipboard.writeText("pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1").catch(() => {})}
                   className="self-end text-[oklch(0.4_0.01_264)] transition-colors hover:text-[oklch(0.82_0.01_264)] sm:ml-2 sm:self-auto"
                   title="Copy"
                 >
@@ -3042,7 +3271,7 @@ function BottomCTA() {
                 className="group relative flex w-full items-center justify-center gap-2 rounded-xl bg-[oklch(0.708_0.101_188)] px-8 py-3.5 text-sm font-semibold text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)] transition-all hover:shadow-xl active:scale-[0.98] sm:w-auto"
               >
                 <span className="absolute inset-0 -z-10 rounded-xl bg-[oklch(0.708_0.101_188)] opacity-0 blur-xl motion-safe:group-hover:opacity-50 transition-opacity" />
-                Deploy Now
+                Run Quickstart
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
               </a>
               <a
@@ -3196,8 +3425,6 @@ export function LandingPage({ onLogin, showLogin }: LandingPageProps) {
             <UseCasesSection />
             <SectionDivider />
             <HowItWorks />
-            <SectionDivider />
-            <InstallSection />
             <SectionDivider />
             <ArchitectureSection />
             <DocsSection />

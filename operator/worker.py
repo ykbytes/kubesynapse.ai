@@ -1488,10 +1488,14 @@ def execute_workflow_step(
                             TARGET_NAMESPACE,
                             {
                                 "prompt": verify_prompt,
-                                "thread_id": build_thread_id("verify", TARGET_NAME, run_id, step_name),
                                 "caller_agent_name": TARGET_NAME,
                                 "caller_agent_namespace": TARGET_NAMESPACE,
-                                "parent_thread_id": run_id,
+                                # Verification should be a fresh one-shot judgment over the
+                                # provided output, not a continuation of the workspace session.
+                                "no_session": True,
+                                "autonomous": False,
+                                "max_turns": 1,
+                                "output_format": "text",
                             },
                             timeout_seconds=float(execution_policy["timeoutSeconds"]),
                         )

@@ -1,15 +1,13 @@
 # KubeSynapse MCP Sidecars
 
-Inventory of bundled MCP (Model Context Protocol) tool sidecars that extend
-agent capabilities.
+Inventory of the MCP (Model Context Protocol) sidecars that ship with KubeSynapse.
 
 ## Purpose
 
-Sidecars attach additional tools to agents without bloating the runtime image.
-Each sidecar runs as a standalone container and exposes a well-defined tool
-surface via MCP.
+Sidecars attach tools or intelligence capabilities to agents without bloating the runtime image.
+Each sidecar runs as a standalone container and exposes a well-defined MCP surface.
 
-## Bundled Sidecars
+## Bundled Tool Sidecars
 
 | Sidecar | Capability |
 |---------|------------|
@@ -23,15 +21,23 @@ surface via MCP.
 | `messaging` | Slack, Discord, and email send/receive |
 | `rag` | Retrieval-augmented generation over uploaded documents |
 | `documents` | PDF, DOCX, and Markdown parsing and extraction |
-| `collector` | Intelligence collector for observability data |
+
+These 10 images are the bundled tool sidecars referenced by the public docs and landing page.
+
+## Collector Sidecar
+
+`collector` is shipped separately from the 10 bundled tool sidecars above.
+
+- Purpose: intelligence and observability workflows that query cluster-state data through deployed collector agents.
+- Usage: optional per-agent sidecar, typically attached only to agents that need cluster intelligence.
+- Chart nuance: the image is configured under the same `mcpToolSidecars` values block, but it is documented separately because it is not part of the bundled tool-sidecar count.
 
 ## Architecture
 
-Each sidecar is a standalone container. The runtime connects to it via:
+Each sidecar is a standalone container. The runtime connects to MCP capabilities via:
 
-- **localhost** — When co-located in the same pod (default for most sidecars).
-- **Shared MCP Hub** — A central MCP router that sidecars register with,
-  allowing dynamic discovery and load balancing.
+- **localhost** — When co-located in the same pod.
+- **Shared MCP Hub** — The runtime can also connect to shared MCP services through `McpConnection` records managed by the platform.
 
 ## Security
 
@@ -49,7 +55,7 @@ Each sidecar is a standalone container. The runtime connects to it via:
 1. Create a new directory under `mcp-sidecars/<name>/`.
 2. Implement the MCP server handshake and at least one tool handler.
 3. Add a `Dockerfile` that builds to a small image (Alpine or distroless).
-4. Update the Helm chart `values.yaml` under `mcpSidecars.<name>` with default
+4. Update the Helm chart `values.yaml` under `mcpToolSidecars.<name>` with default
    resource limits and image coordinates.
 5. Document the tool schema in this README.
 6. Open a PR with a smoke test that exercises the health endpoint.

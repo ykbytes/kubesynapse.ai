@@ -23,7 +23,7 @@ kubectl apply -f demo/creative-production/bundle.yaml
 ## Trigger
 
 ```bash
-agentctl --gateway-url http://localhost:8080 workflows trigger conference-launch-pack
+agentctl --gateway http://localhost:8080 workflows trigger conference-launch-pack
 ```
 
 ## What To Show On Camera

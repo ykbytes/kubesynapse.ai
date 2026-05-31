@@ -2021,7 +2021,7 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
                 api_gateway_main.asyncio,
                 "to_thread",
                 return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
-            ),
+            ) as to_thread,
             patch.object(
                 api_gateway_main.httpx,
                 "AsyncClient",
@@ -2035,10 +2035,98 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
                 user={},
             )
 
+        to_thread.assert_awaited_once_with(api_gateway_main.read_agent_cached, "demo", "default")
         self.assertEqual(fake_client.kwargs["params"], {"path": "/tmp/AZ305_summary.pdf"})
         self.assertEqual(proxied.media_type, "application/pdf")
         self.assertEqual(proxied.headers.get("content-disposition"), 'attachment; filename="AZ305_summary.pdf"')
         self.assertEqual(proxied.body, b"%PDF-1.4 sample")
+
+    async def test_list_agent_artifacts_uses_cached_agent_lookup(self) -> None:
+        response = httpx.Response(
+            200,
+            json={
+                "files": [{"path": "/workspace/notes.md", "name": "notes.md", "size": 12, "modified": 1, "directory": "/workspace"}],
+                "truncated": False,
+                "roots": ["/workspace"],
+            },
+        )
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, url, **kwargs):
+                self.url = url
+                self.kwargs = kwargs
+                return response
+
+        fake_client = FakeAsyncClient()
+
+        with (
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
+            ) as to_thread,
+            patch.object(
+                api_gateway_main.httpx,
+                "AsyncClient",
+                return_value=fake_client,
+            ),
+        ):
+            listed = await api_gateway_main.list_agent_artifacts("demo", "default", user={})
+
+        to_thread.assert_awaited_once_with(api_gateway_main.read_agent_cached, "demo", "default")
+        self.assertEqual(fake_client.kwargs["params"], {})
+        self.assertEqual(listed["files"][0]["path"], "/workspace/notes.md")
+
+    async def test_download_agent_artifacts_zip_uses_cached_agent_lookup(self) -> None:
+        response = httpx.Response(
+            200,
+            content=b"PK\x03\x04",
+            headers={
+                "content-type": "application/zip",
+                "content-disposition": 'attachment; filename="demo-workspace.zip"',
+                "content-length": "4",
+            },
+        )
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, url, **kwargs):
+                self.url = url
+                self.kwargs = kwargs
+                return response
+
+        fake_client = FakeAsyncClient()
+
+        with (
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
+            ) as to_thread,
+            patch.object(
+                api_gateway_main.httpx,
+                "AsyncClient",
+                return_value=fake_client,
+            ),
+        ):
+            proxied = await api_gateway_main.download_agent_artifacts_zip("demo", "default", user={})
+
+        to_thread.assert_awaited_once_with(api_gateway_main.read_agent_cached, "demo", "default")
+        self.assertEqual(fake_client.kwargs["params"], {})
+        self.assertEqual(proxied.media_type, "application/zip")
+        self.assertEqual(proxied.headers.get("content-disposition"), 'attachment; filename="demo-workspace.zip"')
+        self.assertEqual(proxied.body, b"PK\x03\x04")
 
     async def test_invoke_agent_rejects_invalid_runtime_json(self) -> None:
         request = api_gateway_main.InvokeRequest(prompt="hello")

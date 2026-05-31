@@ -6,7 +6,8 @@ flowchart TB
     UI["🖥️ Web UI"]:::client
     CLI["⌨️ agentctl CLI"]:::client
     EXT["🔗 External Apps & Webhooks"]:::client
-    GH["🐙 GitHub"]:::external
+    GH["🐙 Git Repositories"]:::external
+    IDP["🔐 Identity Providers"]:::external
 
     %% ═══════════════════════════════════════════════════
     %% CONTROL PLANE
@@ -15,111 +16,105 @@ flowchart TB
     FastAPI · Auth · CRUD · Invoke · SSE"):::gateway
 
     K8S{{"☸️ Kubernetes API
-    AIAgent · AgentWorkflow
-    AgentPolicy · AgentTenant
-    12 CRDs total"}}:::k8s
+    12 CRDs"}}:::k8s
 
     OP("🔧 Operator
-    Kopf-based · Reconcile · StatefulSets
-    PVCs · NetworkPolicy · Secrets"):::operator
+    Kopf reconcile loop
+    StatefulSets · Jobs · PVCs"):::operator
 
     %% ═══════════════════════════════════════════════════
     %% SECURITY
     %% ═══════════════════════════════════════════════════
-    SEC["🛡️ Security Layers
-    Plugin Isolation · Immutable Config
-    Traffic Enforcement · Audit Trail
-    Hardened by Default"]:::security
+    SEC["🛡️ Security Baseline
+    Immutable config · NetworkPolicy
+    Credential proxy · Audit trail"]:::security
 
     %% ═══════════════════════════════════════════════════
     %% EXECUTION PLANE
     %% ═══════════════════════════════════════════════════
     OC("🤖 OpenCode Runtime
-    FastAPI wrapper · Session persistence
-    Checkpoint recovery · SSE streaming"):::runtime
+    Per-agent StatefulSet
+    Sessions · stream · local memory"):::runtime
 
     JOB("📦 Workflow Jobs
-    Short-lived · Artifact persistence
-    DAG step execution"):::worker
+    Artifact-driven execution
+    Summary status projection"):::worker
 
-    MCP("🔌 MCP Sidecars
-    11 bundled · Hot-attach
+    MCP("🔌 MCP Access
+    10 tool sidecars + collector
     Per-agent or shared hub"):::sidecar
 
-    PVC[("💾 State PVC
-    Survives restarts
-    Workspace + sessions")]:::storage
+    PVC[("💾 Runtime PVC
+    Workspace · sessions · checkpoints")]:::storage
+
+    ART[("📁 Workflow artifacts
+    PVCs · logs")]:::storage
 
     %% ═══════════════════════════════════════════════════
     %% SHARED SERVICES
     %% ═══════════════════════════════════════════════════
     LLM("🧪 LiteLLM
-    Provider abstraction
-    Rate limiting · Key mgmt"):::shared
+    Model proxy
+    Provider abstraction"):::shared
 
     PG[("🗄️ PostgreSQL
-    Auth · Sessions
-    Audit · Traces")]:::shared
+    Auth · durable memory · traces")]:::shared
 
     REDIS[("⚡ Redis
-    Session cache
-    LLM response cache")]:::shared
+    Gateway cache · LiteLLM cache")]:::shared
 
     QDRANT[("🔍 Qdrant
-    Vector search
-    Semantic memory")]:::shared
+    Optional semantic retrieval")]:::shared
 
     NATS("📡 NATS
-    Async messaging
-    Event bus"):::shared
+    Configured async extension point"):::shared
 
     %% ═══════════════════════════════════════════════════
     %% INTELLIGENCE
     %% ═══════════════════════════════════════════════════
     TRACE("📊 Execution Observatory
-    Trace store · Timeline APIs
-    LLM call + tool invocation records"):::intel
+    Timeline APIs · trace store"):::intel
 
     SIGNAL("🚨 Signal Watch
-    SQL-based anomaly detection
-    Failure rates · Token spend"):::intel
+    SQL anomaly detection"):::intel
 
     SYS("🧪 System Agents
-    ks-run-inspector
-    ks-signal-summarizer
-    ks-spend-reviewer"):::intel
+    AI-powered explanations"):::intel
 
     %% ═══════════════════════════════════════════════════
     %% CONNECTIONS
     %% ═══════════════════════════════════════════════════
     UI -->|"HTTPS /api/*"| GW
     CLI -->|"REST + SSE"| GW
-    EXT -->|"Webhooks · HMAC-signed"| GW
-    GH -. "git clone" .-> OC
+    EXT -->|"Webhooks · A2A"| GW
 
     GW -->|"CRUD (CustomObjectsApi)"| K8S
     GW -->|"SQLAlchemy — auth, memory, traces"| PG
-    GW -->|"Agent CRD cache"| REDIS
-    GW -.->|"Configured (async ext.)"| NATS
+    GW -->|"Agent + session cache"| REDIS
+    GW -.->|"Provider/admin APIs"| LLM
+    GW -.->|"Configured async ext."| NATS
+    GW -->|"OIDC / SAML / LDAP"| IDP
 
     K8S -->|"Watch CRDs (Kopf)"| OP
 
-    OP ==>|"Provisions StatefulSet + PVC"| OC
-    OP -->|"Creates worker Job"| JOB
-    OP -.->|"Injects immutable config"| SEC
+    OP ==>|"Provision StatefulSet + PVC"| OC
+    OP -->|"Create worker Job"| JOB
+    OP -.->|"Inject immutable config"| SEC
 
-    OC -->|"localhost — per-pod sidecar"| MCP
-    OC -->|"Workspace, sessions, artifacts"| PVC
+    OC -->|"Git clone / repo access"| GH
+    OC -->|"localhost or hub transport"| MCP
+    OC -->|"Workspace + checkpoints"| PVC
     OC -->|"HTTPS /v1/chat/completions"| LLM
-    OC -->|"Vector search (qdrant-client)"| QDRANT
+    OC -->|"Vector search when enabled"| QDRANT
 
+    JOB -->|"Artifacts + logs"| ART
     LLM -->|"Response cache"| REDIS
 
     OC -.->|"POST runtime-events"| TRACE
     JOB -.->|"POST runtime-events"| TRACE
 
     TRACE -->|"SQL anomaly queries"| SIGNAL
-    SIGNAL -.->|"Invokes for explanation"| SYS
+    SIGNAL -.->|"Invoke for analysis"| SYS
 
     %% ═══════════════════════════════════════════════════
     %% STYLING

@@ -1,0 +1,66 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: docresearcher
+  namespace: default
+spec:
+  enableGVisor: false
+  mcpConnections:
+  - attachable: true
+    config:
+      endpoint_url: https://mcp.context7.com/mcp
+    connectionId: b3e03b0ac38246f4b9135f432055fb9c
+    credentialMetadata:
+    - configured: true
+      group: credentials
+      key: api_key
+      label: Context7 API Key
+      required: false
+      type: password
+    name: Context7 2
+    runtime:
+      configKey: context7-2
+      headers:
+      - envVar: MCP_CONNECTION_B3E03B0AC38246F4B9135F432055FB9C_API_KEY
+        name: CONTEXT7_API_KEY
+        prefix: null
+        secretKeyRef:
+          key: api_key
+          name: mcp-conn-b3e03b0ac38246f4b9135f432055fb9c
+          optional: false
+      kind: remote
+      url: https://mcp.context7.com/mcp
+    serverId: context7
+    serverName: Context7
+    slug: context7-2
+    source: saved
+    statusReason: Attachable with a saved namespace-scoped connection. The published remote MCP endpoint is prefilled from the registry; add credentials or optional overrides only when needed.
+    supportLevel: ready
+    transport: remote
+    validation:
+      detail: null
+      last_validated_at: null
+      message: Saved but not validated yet.
+      status: draft
+  mcpServers:
+  - context7
+  mcpSidecars: []
+  model: github-copilot/gpt-5-mini
+  runtime:
+    kind: opencode
+  storage:
+    size: 1Gi
+  systemPrompt: |
+    You are a documentation researcher and PDF creator. Your primary capabilities:
+    1. Use the Context7 MCP server to fetch the latest documentation, tutorials, and technical references for any technology or framework.
+    2. Synthesize the retrieved documentation into well-structured, comprehensive reports.
+    3. Create PDF documents from the gathered information using available tools (e.g., weasyprint, reportlab, or markdown-to-pdf converters).
+    4. Always cite sources and include version information when available.
+    5. When creating PDFs, ensure proper formatting: title page, table of contents, headers/footers, and page numbers.
+
+    Workflow:
+    - Ask the user what topic they want documentation for
+    - Use Context7 MCP to fetch relevant docs
+    - Organize the content logically
+    - Generate a PDF and save it to /workspace/
+    - Provide the file path to the user

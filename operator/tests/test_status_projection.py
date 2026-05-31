@@ -17,7 +17,7 @@ def _identity_decorator(*_args, **_kwargs):
     return decorator
 
 
-def _install_stub_modules() -> object:
+def _install_stub_modules() -> tuple[object, dict[str, object]]:
     kopf_module = types.ModuleType("kopf")
 
     class _KopfOn:
@@ -32,18 +32,21 @@ def _install_stub_modules() -> object:
     state_store_module.safe_record_workflow_state = MagicMock()
     state_store_module.record_workflow_log_archive = MagicMock()
 
+    # Save originals before overwriting
+    originals = {}
     for name, module in [
         ("kopf", kopf_module),
         ("services", services_module),
         ("state_store", state_store_module),
     ]:
+        originals[name] = sys.modules.get(name)
         sys.modules[name] = module
 
-    return state_store_module.safe_record_workflow_state
+    return state_store_module.safe_record_workflow_state, originals
 
 
-def load_status_projection() -> tuple[str, object, object]:
-    workflow_mock = _install_stub_modules()
+def load_status_projection() -> tuple[str, object, object, dict[str, object]]:
+    workflow_mock, originals = _install_stub_modules()
     module_name = f"operator_status_projection_test_{uuid.uuid4().hex}"
     spec = importlib.util.spec_from_file_location(module_name, MODULE_PATH)
     if spec is None or spec.loader is None:
@@ -56,18 +59,22 @@ def load_status_projection() -> tuple[str, object, object]:
     except Exception:
         sys.modules.pop(module_name, None)
         raise
-    return module_name, module, workflow_mock
+    return module_name, module, workflow_mock, originals
 
 
 class StatusProjectionTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.module_name, self.module, self.workflow_record_mock = load_status_projection()
+        self.module_name, self.module, self.workflow_record_mock, self._originals = load_status_projection()
         self.addCleanup(lambda: sys.modules.pop(self.module_name, None))
         self.addCleanup(self._cleanup_stub_modules)
 
     def _cleanup_stub_modules(self) -> None:
-        for module_name in reversed(STUB_MODULE_NAMES):
-            sys.modules.pop(module_name, None)
+        # Restore original modules
+        for name, original in self._originals.items():
+            if original is not None:
+                sys.modules[name] = original
+            else:
+                sys.modules.pop(name, None)
 
     def test_projects_workflow_state_on_run_id_change(self) -> None:
         self.module.project_workflow_run_id(

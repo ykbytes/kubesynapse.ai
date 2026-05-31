@@ -40,11 +40,13 @@ def _ensure_stdlib_operator_module() -> None:
 
 _ensure_stdlib_operator_module()
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, Integer, String, UniqueConstraint, create_engine
+from sqlalchemy import JSON, Boolean, Column, DateTime, Integer, String, UniqueConstraint, create_engine, inspect
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 logger = logging.getLogger("operator.state-store")
+
+ALEMBIC_VERSION_TABLE = "operator_alembic_version"
 
 Base = declarative_base()
 STATE_DB_ENABLED = os.getenv("STATE_DB_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -197,6 +199,12 @@ def init_database() -> None:
 
             cfg = AlembicConfig(str(alembic_ini))
             cfg.set_main_option("sqlalchemy.url", DATABASE_URL)
+            inspector = inspect(ENGINE)
+            if inspector.has_table("workflow_runs") and not inspector.has_table(ALEMBIC_VERSION_TABLE):
+                Base.metadata.create_all(bind=ENGINE)
+                alembic_command.stamp(cfg, "head")
+                logger.info("Database schema is up to date (bootstrapped existing tables into Alembic).")
+                return
             alembic_command.upgrade(cfg, "head")
             logger.info("Database schema is up to date (via Alembic).")
             return
@@ -247,7 +255,7 @@ def check_workflow_run_conflict(namespace: str, resource_name: str, generation: 
         return None
     try:
         with db_session() as session:
-            query = (
+            candidates = (
                 session.query(WorkflowRun)
                 .filter(
                     WorkflowRun.namespace == namespace,
@@ -256,14 +264,13 @@ def check_workflow_run_conflict(namespace: str, resource_name: str, generation: 
                     WorkflowRun.phase.in_(["queued", "running"]),
                     WorkflowRun.run_id != run_id,
                 )
+                .all()
             )
-            if resource_uid:
-                # Only conflict with rows from the same resource UID
-                query = query.filter(
-                    WorkflowRun.summary_json.contains(f'"resourceUid": "{resource_uid}"')
-                )
-            record = query.first()
-            if record is not None:
+            for record in candidates:
+                if resource_uid:
+                    summary = record.summary_json if isinstance(record.summary_json, dict) else {}
+                    if summary.get("resourceUid") != resource_uid:
+                        continue
                 return str(record.run_id)
     except OperationalError as exc:
         logger.error(

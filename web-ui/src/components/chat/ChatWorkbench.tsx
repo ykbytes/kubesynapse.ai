@@ -1888,7 +1888,8 @@ export function ChatWorkbench({
     const files: File[] = [];
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
-      if (item.kind === "file") {
+      // Only capture explicit image files, not generic clipboard content
+      if (item.kind === "file" && item.type.startsWith("image/")) {
         const file = item.getAsFile();
         if (file) files.push(file);
       }

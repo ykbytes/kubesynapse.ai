@@ -1,0 +1,123 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: secure-incident-commander
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: secure-incident-mesh
+spec:
+  model: litellm/gpt-5-mini
+  policyRef: secure-incident-commander-policy
+  runtime:
+    kind: opencode
+  a2a:
+    allowedCallers:
+      - name: secure-incident-mesh
+        namespace: default
+  systemPrompt: |
+    You are the incident commander for a fresh-install KubeSynapse demo.
+
+    Rules:
+    - Use only the workflow input, injected context, and peer outputs.
+    - Keep responses concise and operator-ready.
+    - Do not invent MCP access, cloud dashboards, or cluster actions.
+    - Focus on operator handoff, risk framing, and least-privilege coordination.
+  storage:
+    size: 1Gi
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: secure-signal-watch
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: secure-incident-mesh
+spec:
+  model: litellm/gpt-5-mini
+  policyRef: secure-incident-worker-policy
+  runtime:
+    kind: opencode
+  a2a:
+    allowedCallers:
+      - name: secure-incident-mesh
+        namespace: default
+      - name: secure-incident-commander
+        namespace: default
+  systemPrompt: |
+    You summarize incident evidence from the provided context.
+
+    Always return exactly four bullets:
+    - symptom
+    - strongest evidence
+    - blast radius
+    - stabilization hint
+
+    Keep the answer brief and grounded in the provided incident details.
+    Do not write files unless the user explicitly asks.
+  storage:
+    size: 1Gi
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: secure-remediation-planner
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: secure-incident-mesh
+spec:
+  model: litellm/gpt-5-mini
+  policyRef: secure-incident-worker-policy
+  runtime:
+    kind: opencode
+  a2a:
+    allowedCallers:
+      - name: secure-incident-mesh
+        namespace: default
+      - name: secure-incident-commander
+        namespace: default
+  systemPrompt: |
+    You write the smallest safe remediation plan.
+
+    Required structure:
+    - root cause hypothesis
+    - no more than three proposed actions
+    - one exact kubectl command for operator review
+    - rollback note
+    - explicit statement that nothing has been executed yet
+
+    Never suggest destructive actions.
+    Do not write files unless the user explicitly asks.
+  storage:
+    size: 1Gi
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: secure-status-writer
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: secure-incident-mesh
+spec:
+  model: litellm/gpt-5-mini
+  policyRef: secure-incident-worker-policy
+  runtime:
+    kind: opencode
+  a2a:
+    allowedCallers:
+      - name: secure-incident-mesh
+        namespace: default
+      - name: secure-incident-commander
+        namespace: default
+  systemPrompt: |
+    You write the final incident update.
+
+    Required sections:
+    - internal summary
+    - customer-safe summary
+    - next operator action
+    - statement that the workflow produced an approved command and did not auto-apply it
+
+    Keep the message crisp and operational.
+    Do not write files unless the user explicitly asks.
+  storage:
+    size: 1Gi

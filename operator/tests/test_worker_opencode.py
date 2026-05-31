@@ -753,6 +753,14 @@ class ExecuteWorkflowStepOpenCodeTests(unittest.TestCase):
         self.assertNotIn("failed JSON validation", retry_prompt)
         mock_cancel.assert_called_once()
 
+        first_verify_payload = mock_invoke_verify.call_args_list[0].args[2]
+        self.assertTrue(first_verify_payload["no_session"])
+        self.assertFalse(first_verify_payload["autonomous"])
+        self.assertEqual(first_verify_payload["max_turns"], 1)
+        self.assertEqual(first_verify_payload["output_format"], "text")
+        self.assertNotIn("thread_id", first_verify_payload)
+        self.assertNotIn("parent_thread_id", first_verify_payload)
+
 
 class WorkflowStatusLifecycleTests(unittest.TestCase):
     def test_patch_workflow_status_clears_failure_fields_on_completion(self) -> None:

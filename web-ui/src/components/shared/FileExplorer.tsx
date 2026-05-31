@@ -467,7 +467,7 @@ export const FileExplorer = memo(function FileExplorer({
   );
   const diffOriginalText = useMemo(() => {
     if (!selectedDiff || preview?.text === undefined) return null;
-    if (preview.kind !== "text" && preview.kind !== "markdown") return null;
+    if (preview.kind !== "text" && preview.kind !== "markdown" && preview.kind !== "mermaid") return null;
     return reconstructOriginalText(preview.text, selectedDiff);
   }, [preview, selectedDiff]);
 
@@ -599,11 +599,11 @@ export const FileExplorer = memo(function FileExplorer({
   }, [onDownloadAll]);
 
   const handleSelect = useCallback((path: string) => {
+    if (path === selectedPath) return;
     setManualPreviewMode(false);
     setPreviewMode(viewMode === "changed" ? "diff" : "preview");
     setSelectedPath(path);
-    setPreviewNonce((current) => current + 1);
-  }, [viewMode]);
+  }, [selectedPath, viewMode]);
 
   const handleRetryPreview = useCallback(() => {
     setPreviewNonce((current) => current + 1);

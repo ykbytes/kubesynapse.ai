@@ -1184,6 +1184,14 @@ def _emit_llm_call_from_response(
     )
 
 
+ARTIFACT_WALK_SKIP_DIRS = {".git", "node_modules", "__pycache__", ".next", ".venv", "venv", "dist", ".cache"}
+
+
+def _prune_artifact_walk_dirs(dirnames: list[str]) -> None:
+    # Keep list and ZIP traversal aligned so workspace browsing avoids obvious cache/build trees.
+    dirnames[:] = [name for name in dirnames if name not in ARTIFACT_WALK_SKIP_DIRS and not name.startswith(".")]
+
+
 @app.get("/artifacts/download")
 def download_artifact(path: str) -> FileResponse:
     artifact_path = resolve_download_path(path)
@@ -1213,7 +1221,8 @@ def list_artifacts(root: str = "") -> dict[str, Any]:
     files: list[dict[str, Any]] = []
     seen: set[str] = set()
     for walk_root in walk_roots:
-        for dirpath, _dirnames, filenames in os.walk(walk_root):
+        for dirpath, dirnames, filenames in os.walk(walk_root):
+            _prune_artifact_walk_dirs(dirnames)
             dp = Path(dirpath)
             if any(part.startswith(".") for part in dp.parts[len(walk_root.parts) :]):
                 continue
@@ -1263,13 +1272,11 @@ def download_artifacts_zip(root: str = "") -> StreamingResponse:
     if not walk_root.is_dir():
         raise HTTPException(status_code=404, detail="workspace directory does not exist")
 
-    SKIP_DIRS = {".git", "node_modules", "__pycache__", ".next", ".venv", "venv", "dist", ".cache"}
-
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         file_count = 0
         for dirpath, dirnames, filenames in os.walk(walk_root):
-            dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
+            _prune_artifact_walk_dirs(dirnames)
             dp = Path(dirpath)
             for fname in filenames:
                 if fname.startswith("."):
@@ -1299,6 +1306,9 @@ def download_artifacts_zip(root: str = "") -> StreamingResponse:
 
 
 if __name__ == "__main__":
+    import os
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    credential_proxy_enabled = os.getenv("CREDENTIAL_PROXY_ENABLED", "false").strip().lower() in ("true", "1", "yes")
+    port = 8081 if credential_proxy_enabled else 8080
+    uvicorn.run(app, host="0.0.0.0", port=port)

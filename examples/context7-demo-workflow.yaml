@@ -1,0 +1,136 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: context7-research-analysis
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: context7-demo
+spec:
+  description: >
+    Single-agent implementation-pack workflow that uses Context7 and Microsoft
+    Learn, then writes real workspace artifacts for demo review.
+  input: >
+    Prepare an implementation pack for the fictive company Fabrikam Commerce.
+    The deliverable must cover an Ubuntu 22.04 Azure VM running a FastAPI app
+    behind Nginx, and it must include research notes, a README, deployment
+    notes, and an Ansible playbook.
+  contextRef: context7-demo-context
+  messageBus: in-memory
+  autoRetry:
+    enabled: true
+    maxAttempts: 1
+    retryableFailureClasses:
+      - TimeoutError
+      - ConnectTimeout
+      - ReadTimeout
+      - RemoteProtocolError
+      - ConnectError
+  steps:
+    - name: collect-research
+      type: agent
+      agentRef: implementation-pack-writer
+      prompt: |
+        Use the available `research-pack` skill.
+
+        Research target:
+        - Ubuntu 22.04 application VM in Azure
+        - FastAPI app served by systemd
+        - Nginx reverse proxy in front of the app
+        - Azure Monitor onboarding placeholders
+        - Operator-ready artifacts for Fabrikam Commerce
+
+        You MUST do all of the following:
+        1. Read the project context.
+        2. Use Context7 and Microsoft Learn for source-backed guidance.
+        3. Write /workspace/research-notes.md.
+        4. Include sections named:
+           - objective
+           - source-backed findings
+           - implementation decisions
+           - open questions
+        5. Add a short citations section naming which docs shaped the decisions.
+
+        Return a concise summary of the recommended implementation pack.
+      execution:
+        timeoutSeconds: 240
+        maxAttempts: 1
+        maxTurns: 8
+        sessionGroup: context7-demo-session
+
+    - name: draft-pack
+      type: agent
+      agentRef: implementation-pack-writer
+      dependsOn:
+        - collect-research
+      prompt: |
+        Use the available `ansible-playbook-author` and `implementation-docs` skills.
+
+        Read /workspace/research-notes.md and the project context.
+
+        You MUST write all of these files:
+        - /workspace/README.md
+        - /workspace/site.yml
+        - /workspace/deployment-notes.md
+
+        Requirements for /workspace/README.md:
+        - explain the scenario
+        - list prerequisites
+        - list every file in the pack
+        - explain how to run the playbook
+        - include validation and rollback sections
+
+        Requirements for /workspace/site.yml:
+        - valid Ansible playbook YAML
+        - idempotent tasks
+        - named tasks
+        - no hardcoded secrets
+        - variables or placeholders for environment-specific values
+        - handlers for restart or reload when config changes
+        - tags for nginx, app, and monitor
+
+        Requirements for /workspace/deployment-notes.md:
+        - assumptions
+        - policy checks
+        - validation evidence to collect
+        - rollback triggers
+
+        Use obvious placeholders such as CHANGE_ME_FQDN or CHANGE_ME_PACKAGE_URL where needed.
+        Do not merely describe the files. Actually write them.
+
+        Return a bullet list of generated files and the biggest operator assumption.
+      execution:
+        timeoutSeconds: 300
+        maxAttempts: 1
+        maxTurns: 12
+        sessionGroup: context7-demo-session
+
+    - name: finalize-pack
+      type: agent
+      agentRef: implementation-pack-writer
+      dependsOn:
+        - draft-pack
+      prompt: |
+        Read all current artifacts:
+        - /workspace/research-notes.md
+        - /workspace/README.md
+        - /workspace/site.yml
+        - /workspace/deployment-notes.md
+
+        Make a final consistency pass and update the files in place if needed.
+
+        Then write /workspace/showcase-summary.md with these sections:
+        - artifact inventory
+        - why Context7 mattered
+        - why Microsoft Learn mattered
+        - first demo talking points
+        - operator validation order
+
+        Confirm that the files are coherent with each other and that the playbook
+        follows the Fabrikam policy in the project context.
+
+        Return a short final summary that names every generated file.
+      execution:
+        timeoutSeconds: 240
+        maxAttempts: 1
+        maxTurns: 10
+        sessionGroup: context7-demo-session

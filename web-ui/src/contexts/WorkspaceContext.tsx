@@ -317,7 +317,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           note: a.namespace,
           signals: deriveAgentVisualSignals(agentDetailCache[a.name] ?? { runtime_kind: a.runtime_kind }),
         }))
-      : activeView === "workflows" || activeView === "composer"
+      : activeView === "workflows" || activeView === "composer" || activeView === "intelligence"
         ? workflows.map((w) => ({ id: w.name, title: w.name, subtitle: w.description || `${w.steps.length} step${w.steps.length === 1 ? "" : "s"}`, status: w.phase, note: w.current_step ? `Current step: ${w.current_step}` : `${w.steps.length} steps` }))
         : activeView === "policies"
           ? policies.map((p) => ({ id: p.name, title: p.name, subtitle: `${p.allowed_models.length} model${p.allowed_models.length === 1 ? "" : "s"}`, status: "active", note: p.namespace }))
@@ -325,7 +325,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [activeView, agents, workflows, policies, agentDetailCache],
   );
 
-  const sidebarSelectedId = activeView === "agents" || activeView === "chat" ? selectedAgentName : (activeView === "workflows" || activeView === "composer") ? selectedWorkflowName : activeView === "policies" ? selectedPolicyName : "";
+  const sidebarSelectedId = activeView === "agents" || activeView === "chat" ? selectedAgentName : (activeView === "workflows" || activeView === "composer" || activeView === "intelligence") ? selectedWorkflowName : activeView === "policies" ? selectedPolicyName : "";
 
   const emptySidebarMessage = useMemo(() => !token.trim()
     ? "Authenticate with a gateway token and load the namespace catalog."
@@ -333,12 +333,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       ? `No agents are provisioned in namespace '${namespace}'. Create an agent to start a runtime.`
       : activeView === "chat"
         ? `No agents are provisioned in namespace '${namespace}'. Create one in the Agents view, then return here to chat.`
-      : activeView === "workflows" || activeView === "composer"
-        ? `No workflows are defined in namespace '${namespace}'. Create one to orchestrate agent steps.`
-        : activeView === "catalog"
-          ? "Browse skills and MCP integrations in the main panel."
+        : activeView === "workflows" || activeView === "composer"
+          ? `No workflows are defined in namespace '${namespace}'. Create one to orchestrate agent steps.`
           : activeView === "intelligence"
-            ? "Browse cluster intelligence and execution observability in the main panel."
+            ? `No workflows are defined in namespace '${namespace}'. Create or trigger a workflow to inspect run observability.`
+          : activeView === "catalog"
+            ? "Browse skills and MCP integrations in the main panel."
             : activeView === "settings"
             ? "Manage LLM providers and API keys."
             : activeView === "admin"
@@ -766,7 +766,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         setChatFocused(false);
       }
     }
-    else if (activeView === "workflows" || activeView === "composer") { setWorkflowCreateMode(false); setSelectedWorkflowName(name); }
+    else if (activeView === "workflows" || activeView === "composer" || activeView === "intelligence") { setWorkflowCreateMode(false); setSelectedWorkflowName(name); }
     else if (activeView === "policies") { setSelectedPolicyName(name); }
   }, [activeView]);
 

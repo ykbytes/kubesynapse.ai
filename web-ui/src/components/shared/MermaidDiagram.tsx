@@ -2,27 +2,41 @@ import React, { useEffect, useRef, useState } from "react";
 import mermaid from "mermaid";
 import { Loader2 } from "lucide-react";
 
-let mermaidInitialized = false;
+import { useTheme } from "@/contexts/ThemeContext";
 
-function initMermaid() {
-  if (mermaidInitialized) return;
+let mermaidInitializedTheme: string | null = null;
+
+function initMermaid(theme: "base" | "dark") {
+  if (mermaidInitializedTheme === theme) return;
   mermaid.initialize({
     startOnLoad: false,
-    theme: "dark",
+    theme,
     securityLevel: "strict",
     fontFamily: "'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif",
-    darkMode: true,
-    themeVariables: {
-      primaryColor: "#2b2d35",
-      primaryTextColor: "#f4f4f6",
-      primaryBorderColor: "#4b4e5a",
-      lineColor: "#8b8e97",
-      secondaryColor: "#373942",
-      tertiaryColor: "#32343c",
-      fontFamily: "'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif",
-    },
+    darkMode: theme === "dark",
+    themeVariables: theme === "base"
+      ? {
+          primaryColor: "#FFFFFF",
+          primaryTextColor: "#111827",
+          primaryBorderColor: "#CBD5E1",
+          lineColor: "#64748B",
+          secondaryColor: "#F8FAFC",
+          tertiaryColor: "#EEF2F7",
+          mainBkg: "#FFFFFF",
+          fontFamily: "'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif",
+        }
+      : {
+          primaryColor: "#2b2d35",
+          primaryTextColor: "#f4f4f6",
+          primaryBorderColor: "#4b4e5a",
+          lineColor: "#8b8e97",
+          secondaryColor: "#373942",
+          tertiaryColor: "#32343c",
+          mainBkg: "#101318",
+          fontFamily: "'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif",
+        },
   });
-  mermaidInitialized = true;
+  mermaidInitializedTheme = theme;
 }
 
 interface MermaidDiagramProps {
@@ -31,13 +45,14 @@ interface MermaidDiagramProps {
 }
 
 export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart, className }) => {
+  const { theme } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
   const [svg, setSvg] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    initMermaid();
+    initMermaid(theme === "light" ? "base" : "dark");
     let cancelled = false;
 
     async function render() {
@@ -62,11 +77,11 @@ export const MermaidDiagram: React.FC<MermaidDiagramProps> = ({ chart, className
     return () => {
       cancelled = true;
     };
-  }, [chart]);
+  }, [chart, theme]);
 
   return (
     <div
-      className={`my-4 overflow-hidden rounded-xl border border-border/60 bg-card/40 p-3 shadow-sm sm:p-4 ${className ?? ""}`}
+      className={`my-4 overflow-hidden rounded-xl border border-border/60 bg-card p-3 text-card-foreground shadow-sm sm:p-4 ${className ?? ""}`}
     >
       {loading && (
         <div className="flex items-center justify-center py-8">

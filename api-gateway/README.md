@@ -15,9 +15,9 @@ the web console.
 
 The gateway validates and serves three runtime kinds:
 
-- `opencode` is the default runtime path used by the checked-in examples and the OpenCode config-file workflow.
-- `pi` is the supported alternative runtime and uses the same CRUD, invoke, artifact, and SSE surfaces.
-- `mistral-vibe` is the supported Mistral-backed runtime bridge and uses the same CRUD, invoke, artifact, and SSE surfaces.
+- `opencode` is the default and production runtime path used by the checked-in examples and the OpenCode config-file workflow.
+- `pi` is available as an alpha runtime kind and uses the same CRUD, invoke, artifact, and SSE surfaces.
+- `mistral-vibe` is available as an alpha runtime kind and uses the same CRUD, invoke, artifact, and SSE surfaces.
 
 Only `opencode`, `pi`, and `mistral-vibe` belong to the supported request surface.
 
@@ -56,6 +56,7 @@ out of recall ranking before assembling the injected system note.
 - The Web UI now calls `POST /api/v1/agents/{name}/invoke` and
   `POST /api/v1/agents/{name}/invoke/stream` directly instead of relying on
   legacy `/api/...` normalization on hot paths.
+- The gateway routes invoke requests to the selected runtime; the runtime then performs the primary LiteLLM-backed model call.
 - Model fallback is ordered from the requested model first, then healthy
   alternatives, so the gateway does not burn latency on unrelated models before
   trying the agent's configured model.

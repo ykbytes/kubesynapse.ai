@@ -56,14 +56,14 @@ kubectl port-forward -n kubesynapse svc/kubesynapse-web-ui 3000:80
 ### Log In
 
 ```bash
-agentctl --gateway-url http://localhost:8080 auth login -u admin -p "<your-password>"
+agentctl --gateway http://localhost:8080 auth login -u admin -p "<your-password>"
 export AGENT_GATEWAY_TOKEN="<token-from-login-output>"
 ```
 
 PowerShell:
 
 ```powershell
-agentctl --gateway-url http://localhost:8080 auth login -u admin -p "<your-password>"
+agentctl --gateway http://localhost:8080 auth login -u admin -p "<your-password>"
 $env:AGENT_GATEWAY_TOKEN = "<token-from-login-output>"
 ```
 
@@ -113,7 +113,7 @@ What to say:
 Trigger:
 
 ```bash
-agentctl --gateway-url http://localhost:8080 workflows trigger ingress-upgrade-release-readiness
+agentctl --gateway http://localhost:8080 workflows trigger ingress-upgrade-release-readiness
 ```
 
 What to show:
@@ -127,7 +127,7 @@ Approve:
 
 ```bash
 kubectl get agentapprovals -n default
-agentctl --gateway-url http://localhost:8080 approvals approve <approval-name> --reason "Reviewed live on camera"
+agentctl --gateway http://localhost:8080 runs approve <approval-name> --reason "Reviewed live on camera"
 ```
 
 ### Shot 3: Event-Driven Incident Workflow
@@ -155,7 +155,7 @@ Approve:
 
 ```bash
 kubectl get agentapprovals -n default
-agentctl --gateway-url http://localhost:8080 approvals approve <approval-name> --reason "Approved incident stabilization"
+agentctl --gateway http://localhost:8080 runs approve <approval-name> --reason "Approved incident stabilization"
 ```
 
 ### Shot 4: Cloud Architecture Workflow
@@ -163,7 +163,7 @@ agentctl --gateway-url http://localhost:8080 approvals approve <approval-name> -
 Trigger:
 
 ```bash
-agentctl --gateway-url http://localhost:8080 workflows trigger multi-cluster-platform-decision
+agentctl --gateway http://localhost:8080 workflows trigger multi-cluster-platform-decision
 ```
 
 What to show:
@@ -177,7 +177,7 @@ What to show:
 Trigger:
 
 ```bash
-agentctl --gateway-url http://localhost:8080 workflows trigger conference-launch-pack
+agentctl --gateway http://localhost:8080 workflows trigger conference-launch-pack
 ```
 
 What to show:

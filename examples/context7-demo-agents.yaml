@@ -1,0 +1,237 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: context7-demo-context
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: context7-demo
+data:
+  company-profile.md: |
+    # Company Profile
+
+    - Company: Fabrikam Commerce
+    - Company type: fictive mid-market commerce company
+    - Platform baseline: Azure-hosted Ubuntu 22.04 application VMs
+    - App shape: FastAPI service behind an Nginx reverse proxy
+    - Operators want artifacts they can review and run offline after the demo
+    - Secrets must come from Azure Key Vault, Ansible Vault, or another external secret store
+
+  delivery-policy.md: |
+    # Delivery Policy
+
+    - Prefer the smallest safe rollout.
+    - Produce idempotent Ansible.
+    - Use Ansible modules instead of shell or command unless there is no module fit.
+    - Never hardcode secrets, passwords, tokens, subscription IDs, tenant IDs, or private hostnames.
+    - Put environment-specific values behind obvious placeholders or variables.
+    - Include validation and rollback guidance in every operator-facing artifact.
+    - Keep language operational, specific, and easy to scan.
+
+  artifact-format.md: |
+    # Artifact Format
+
+    ## research-notes.md
+    - objective
+    - source-backed findings
+    - implementation decisions
+    - open questions
+
+    ## README.md
+    - title
+    - scenario
+    - prerequisites
+    - files in this pack
+    - how to run the playbook
+    - validation checklist
+    - rollback checklist
+
+    ## deployment-notes.md
+    - summary
+    - assumptions
+    - policy checks
+    - validation evidence to collect
+    - rollback triggers
+
+    ## site.yml
+    - one play
+    - named tasks
+    - handlers for restart or reload
+    - tags for nginx, app, and monitor
+    - variables at the top when values may change by environment
+
+  scenario.md: |
+    # Demo Scenario
+
+    Prepare an implementation pack for Fabrikam Commerce.
+
+    Scope:
+    - Ubuntu 22.04 web nodes in Azure
+    - FastAPI app served by systemd from /opt/fabrikam-api
+    - Nginx reverse proxy on ports 80 and 443
+    - Azure Monitor onboarding placeholder tasks and notes
+    - Validation and rollback guidance for operators
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: context7-demo-policy
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: context7-demo
+spec:
+  inputGuardrails:
+    blockPromptInjection: true
+    maxInputTokens: 12000
+  outputGuardrails:
+    maskPII: true
+    maxOutputTokens: 6000
+  allowedModels:
+    - litellm/gpt-5-mini
+  allowedMcpServers: []
+  mcpRequireHitl: false
+  toolPolicy:
+    maxDelegationDepth: 0
+  memoryPolicy:
+    maxInjectedMemories: 0
+    autoPromote: false
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: implementation-pack-writer
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: context7-demo
+spec:
+  model: litellm/gpt-5-mini
+  policyRef: context7-demo-policy
+  runtime:
+    kind: opencode
+  mcpConnections:
+    - attachable: true
+      config:
+        endpoint_url: https://mcp.context7.com/mcp
+      connectionId: context7
+      credentialMetadata:
+        - configured: false
+          group: credentials
+          key: api_key
+          label: Context7 API Key
+          required: false
+          type: password
+      name: Context7
+      runtime:
+        configKey: context7
+        headers:
+          - envVar: MCP_CONNECTION_CONTEXT7_API_KEY
+            name: CONTEXT7_API_KEY
+            secretKeyRef:
+              key: api_key
+              name: context7-api-key
+              optional: true
+        kind: remote
+        url: https://mcp.context7.com/mcp
+      serverId: context7
+      serverName: Context7
+      slug: context7
+      source: example-inline
+      statusReason: Example inline remote MCP connection for documentation research.
+      supportLevel: ready
+      transport: remote
+      validation:
+        message: Provide the optional context7-api-key secret for higher rate limits.
+        status: draft
+    - attachable: true
+      config:
+        endpoint_url: https://learn.microsoft.com/api/mcp
+      connectionId: microsoft-learn
+      credentialMetadata: []
+      name: Microsoft Learn
+      runtime:
+        configKey: microsoft-learn
+        headers: []
+        kind: remote
+        url: https://learn.microsoft.com/api/mcp
+      serverId: microsoft-learn
+      serverName: Microsoft Learn
+      slug: microsoft-learn
+      source: example-inline
+      statusReason: Example inline remote MCP connection for official Microsoft guidance.
+      supportLevel: ready
+      transport: remote
+      validation:
+        message: Public endpoint; validate live after apply.
+        status: draft
+  systemPrompt: |
+    You create operator-ready implementation packs for a fictive company demo.
+
+    Rules:
+    - Use Context7 and Microsoft Learn when current documentation is needed.
+    - Use only source-backed guidance and the provided project context.
+    - Always write the requested files to /workspace; a prose-only answer is not enough.
+    - Keep outputs concrete, conservative, and easy for an operator to review.
+    - Never hardcode secrets, passwords, tokens, subscription IDs, tenant IDs, or private hostnames.
+    - Use obvious placeholders when a value is company-specific.
+  skills:
+    files:
+      skills/research-pack/SKILL.md: |
+        ---
+        name: research-pack
+        description: Gather source-backed implementation notes from Context7 and Microsoft Learn.
+        allowedSandboxTools:
+          - sandbox.filesystem.read
+          - sandbox.filesystem.write
+          - sandbox.filesystem.mkdir
+        allowedMcpServers:
+          - context7
+          - microsoft-learn
+        allowSubagents: false
+        ---
+        Use this skill when the workflow needs current technical guidance.
+
+        Requirements:
+        - Use Context7 for Ansible, FastAPI, or Nginx authoring guidance.
+        - Use Microsoft Learn for Azure or Ubuntu-on-Azure operational guidance.
+        - Separate source-backed facts from assumptions.
+        - Write the detailed research artifact to /workspace/research-notes.md.
+      skills/ansible-playbook-author/SKILL.md: |
+        ---
+        name: ansible-playbook-author
+        description: Write idempotent Ansible playbooks that follow Fabrikam demo policy.
+        allowedSandboxTools:
+          - sandbox.filesystem.read
+          - sandbox.filesystem.write
+          - sandbox.filesystem.mkdir
+        allowedMcpServers:
+          - context7
+          - microsoft-learn
+        allowSubagents: false
+        ---
+        Use this skill when the request needs a runnable Ansible playbook.
+
+        Playbook rules:
+        - Prefer apt, file, copy, template, service, and ufw modules over shell or command.
+        - Keep tasks named and idempotent.
+        - Put environment-specific values behind variables.
+        - Do not hardcode secrets or company-private identifiers.
+        - Include handlers when config changes require service reload or restart.
+        - Write the playbook to /workspace/site.yml.
+      skills/implementation-docs/SKILL.md: |
+        ---
+        name: implementation-docs
+        description: Produce README and deployment notes for the fictive company delivery pack.
+        allowedSandboxTools:
+          - sandbox.filesystem.read
+          - sandbox.filesystem.write
+          - sandbox.filesystem.mkdir
+        allowSubagents: false
+        ---
+        Use this skill when the workflow needs operator-facing documentation.
+
+        Documentation rules:
+        - README.md must explain purpose, prerequisites, files, usage, validation, and rollback.
+        - deployment-notes.md must capture assumptions, policy checks, validation evidence, and rollback triggers.
+        - Keep language operational, specific, and review-friendly.
+        - Write /workspace/README.md and /workspace/deployment-notes.md.
+  storage:
+    size: 1Gi

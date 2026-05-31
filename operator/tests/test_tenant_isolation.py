@@ -82,27 +82,38 @@ sys.modules.setdefault("kopf", kopf_module)
 import kubernetes.client as _k8s_client
 
 _missing_k8s_attrs = {
+    "V1ObjectMeta": lambda **kwargs: types.SimpleNamespace(**kwargs),
+    "V1LimitRange": lambda **kwargs: types.SimpleNamespace(**kwargs),
     "V1RoleRef": MagicMock,
     "V1Subject": MagicMock,
     "V1ResourceQuotaSpec": MagicMock,
-    "V1LimitRangeSpec": MagicMock,
-    "V1LimitRangeItem": MagicMock,
+    "V1LimitRangeSpec": lambda **kwargs: types.SimpleNamespace(**kwargs),
+    "V1LimitRangeItem": lambda **kwargs: types.SimpleNamespace(**kwargs),
     "V1DeploymentSpec": MagicMock,
     "V1StatefulSet": MagicMock,
     "V1StatefulSetSpec": MagicMock,
+    "V1Role": lambda **kwargs: types.SimpleNamespace(**kwargs),
+    "V1PolicyRule": lambda **kwargs: types.SimpleNamespace(**kwargs),
+    "V1RoleBinding": lambda **kwargs: types.SimpleNamespace(**kwargs),
+    "V1ResourceQuota": lambda **kwargs: types.SimpleNamespace(**kwargs),
 }
+# Force-set these attributes (conftest.py may have already set them to MagicMock)
 for _attr, _val in _missing_k8s_attrs.items():
-    if not hasattr(_k8s_client, _attr):
-        setattr(_k8s_client, _attr, _val)
+    setattr(_k8s_client, _attr, _val)
 
 # Mock SQLAlchemy (must handle constructor calls like Column(String(64), primary_key=True))
 sqlalchemy_module = types.ModuleType("sqlalchemy")
 sqlalchemy_orm_module = types.ModuleType("sqlalchemy.orm")
+sqlalchemy_exc_module = types.ModuleType("sqlalchemy.exc")
+sqlalchemy_exc_module.IntegrityError = Exception
+sqlalchemy_exc_module.OperationalError = Exception
+sqlalchemy_exc_module.SQLAlchemyError = Exception
 sqlalchemy_orm_module.Session = Mock
 sqlalchemy_orm_module.declarative_base = lambda **kw: type("Base", (), {"metadata": MagicMock()})
 sqlalchemy_orm_module.sessionmaker = lambda **kw: MagicMock()
 sqlalchemy_orm_module.relationship = MagicMock()
 sqlalchemy_module.orm = sqlalchemy_orm_module
+sqlalchemy_module.exc = sqlalchemy_exc_module
 _sa_column = lambda *args, **kwargs: MagicMock()
 sqlalchemy_module.Column = _sa_column
 sqlalchemy_module.String = lambda *args, **kwargs: MagicMock()
@@ -121,6 +132,7 @@ sqlalchemy_module.text = lambda *args, **kwargs: MagicMock()
 sqlalchemy_module.event = MagicMock()
 sys.modules.setdefault("sqlalchemy", sqlalchemy_module)
 sys.modules.setdefault("sqlalchemy.orm", sqlalchemy_orm_module)
+sys.modules.setdefault("sqlalchemy.exc", sqlalchemy_exc_module)
 
 # ---------------------------------------------------------------------------
 # Import after mocking
@@ -266,6 +278,23 @@ class TestMultiTenancyIsolation(unittest.TestCase):
 
     def test_reconcile_tenant_removes_stale_role_bindings(self):
         """Verify that AgentTenant updates remove stale tenant-managed role bindings."""
+        # Ensure kubernetes.client has SimpleNamespace factories for K8s resource types
+        import kubernetes.client as _k8s_c
+        for _cls in ("V1LimitRange", "V1LimitRangeSpec", "V1LimitRangeItem",
+                     "V1ObjectMeta", "V1Role", "V1PolicyRule", "V1RoleBinding",
+                     "V1ResourceQuota", "V1ResourceQuotaSpec", "V1Namespace",
+                     "V1ServiceAccount", "V1Service", "V1ConfigMap", "V1Secret",
+                     "V1Container", "V1PodSpec", "V1PodTemplateSpec",
+                     "V1ResourceRequirements", "V1EnvVar", "V1Volume", "V1VolumeMount",
+                     "V1PersistentVolumeClaim", "V1PersistentVolumeClaimSpec",
+                     "V1Deployment", "V1DeploymentSpec", "V1StatefulSet", "V1StatefulSetSpec",
+                     "V1NetworkPolicy", "V1ClusterRole", "V1ClusterRoleBinding",
+                     "V1RoleRef", "V1Subject"):
+            _attr = getattr(_k8s_c, _cls, None)
+            # Replace MagicMock class or missing attributes with SimpleNamespace factory
+            if _attr is None or (_attr is MagicMock) or (isinstance(_attr, type) and _attr.__name__ == "MagicMock"):
+                setattr(_k8s_c, _cls, lambda **kw: types.SimpleNamespace(**kw))
+
         from controllers.tenant_controller import _reconcile_tenant
 
         self.mock_rbac_api.list_namespaced_role_binding.return_value = types.SimpleNamespace(
@@ -285,6 +314,18 @@ class TestMultiTenancyIsolation(unittest.TestCase):
             ]
         )
 
+        # Mock ConfigMap reads for immutable config sync
+        mock_config_map = {
+            "metadata": {"name": "kubesynapse-opencode-safe-config", "labels": {}},
+            "data": {"opencode.json": "{}"},
+        }
+        from kubernetes.client.rest import ApiException
+        mock_api_exc = ApiException()
+        mock_api_exc.status = 404
+        self.mock_core_api.read_namespaced_config_map.side_effect = [
+            mock_config_map, mock_api_exc,
+        ]
+
         spec = {
             "tenantName": "team-a",
             "namespace": "agent-tenant-team-a",
@@ -292,9 +333,12 @@ class TestMultiTenancyIsolation(unittest.TestCase):
             "adminUsers": ["alice"],
         }
 
-        with patch(
-            "kubernetes.client.V1LimitRange",
-            side_effect=lambda **kwargs: types.SimpleNamespace(**kwargs),
+        with (
+            patch("services.k8s.kubernetes.client.CoreV1Api", return_value=self.mock_core_api),
+            patch("services.k8s.kubernetes.client.RbacAuthorizationV1Api", return_value=self.mock_rbac_api),
+            patch("services.k8s.ensure_config_map"),
+            patch("services.k8s.OPENCODE_IMMUTABLE_CONFIG", True),
+            patch("services.k8s.PI_IMMUTABLE_CONFIG", False),
         ):
             _reconcile_tenant(spec, "team-a", self.mock_logger)
 

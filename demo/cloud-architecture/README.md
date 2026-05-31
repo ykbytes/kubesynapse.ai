@@ -23,7 +23,7 @@ kubectl apply -f demo/cloud-architecture/bundle.yaml
 ## Trigger
 
 ```bash
-agentctl --gateway-url http://localhost:8080 workflows trigger multi-cluster-platform-decision
+agentctl --gateway http://localhost:8080 workflows trigger multi-cluster-platform-decision
 ```
 
 ## What To Show On Camera

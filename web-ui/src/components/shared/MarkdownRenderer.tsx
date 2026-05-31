@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { CopyButton } from "./CopyButton";
+import { MermaidDiagram } from "./MermaidDiagram";
 import type { Components } from "react-markdown";
 
 interface MarkdownRendererProps {
@@ -28,9 +29,24 @@ const components: Components = {
     // Block code (has language class from rehype-highlight, or is inside pre)
     const isBlock = !!lang || (codeString.includes("\n"));
     if (isBlock) {
+      if (lang === "mermaid") {
+        return (
+          <div className="group relative my-3 overflow-hidden rounded-xl border border-border/50 bg-card/70">
+            <div className="flex items-center justify-between border-b border-border/30 bg-muted/40 px-4 py-1.5">
+              <span className="text-[11px] font-medium text-muted-foreground/70 select-none">
+                mermaid
+              </span>
+              <CopyButton value={codeString} className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity" />
+            </div>
+            <div className="p-4">
+              <MermaidDiagram chart={codeString} className="my-0 border-0 bg-transparent p-0 shadow-none" />
+            </div>
+          </div>
+        );
+      }
       return (
-        <div className="mk-code-block group relative my-3 rounded-xl border border-border/50 bg-[oklch(0.13_0.008_274)] overflow-hidden">
-          <div className="flex items-center justify-between border-b border-border/30 bg-[oklch(0.16_0.008_274)] px-4 py-1.5">
+        <div className="mk-code-block group relative my-3 overflow-hidden rounded-xl border border-border/50 bg-card/70">
+          <div className="flex items-center justify-between border-b border-border/30 bg-muted/40 px-4 py-1.5">
             <span className="text-[11px] font-medium text-muted-foreground/70 select-none">
               {lang || "text"}
             </span>

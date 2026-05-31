@@ -642,7 +642,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }
 
   function applyInvocationFailure(agentName: string, messageId: string, message: string) {
-    const nextMessage = sanitizeErrorMessage(message, "Agent invocation failed.");
+    let nextMessage = sanitizeErrorMessage(message, "Agent invocation failed.");
+    
+    // Enhance error message for vision/image support issues
+    if (nextMessage.toLowerCase().includes("does not support image input") || 
+        nextMessage.toLowerCase().includes("vision") && nextMessage.toLowerCase().includes("image")) {
+      nextMessage = `${nextMessage}\n\n💡 This model doesn't support image inputs. Try:\n• Remove image attachments from your message\n• Switch to a vision-capable model (e.g., gpt-4o, claude-3-sonnet)\n• Use text-only descriptions instead of images`;
+    }
+    
     pendingRequestRef.current[agentName] = null;
     setPendingAssistantContent(agentName, messageId, nextMessage, "error");
     setChatError(nextMessage);

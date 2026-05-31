@@ -114,6 +114,10 @@ PI_DEFAULT_THINKING_LEVEL: str = get_string_env("PI_DEFAULT_THINKING_LEVEL", "me
 MISTRAL_VIBE_RUNTIME_IMAGE: str = os.getenv("MISTRAL_VIBE_RUNTIME_IMAGE", "kubesynapse-vibe-rt:v0.1.0")
 MISTRAL_VIBE_RUNTIME_IMAGE_PULL_POLICY: str = get_string_env("MISTRAL_VIBE_RUNTIME_IMAGE_PULL_POLICY", "IfNotPresent")
 
+CREDENTIAL_PROXY_IMAGE: str = os.getenv("CREDENTIAL_PROXY_IMAGE", "docker.io/kubesynapse/credential-proxy:v1.0.0")
+CREDENTIAL_PROXY_IMAGE_PULL_POLICY: str = get_string_env("CREDENTIAL_PROXY_IMAGE_PULL_POLICY", "IfNotPresent")
+CREDENTIAL_PROXY_ENABLED: bool = os.getenv("CREDENTIAL_PROXY_ENABLED", "true").strip().lower() in ("true", "1", "yes")
+
 RUNTIME_SERVICE_ACCOUNT: str = os.getenv("RUNTIME_SERVICE_ACCOUNT", "kubesynapse-agent-runtime")
 RUNTIME_CLUSTER_ROLE: str = os.getenv("RUNTIME_CLUSTER_ROLE", "kubesynapse-agent-runtime-role")
 

@@ -8,6 +8,8 @@ and their private helpers from operator/main.py into operator/services/.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import logging
 import random
 import time
@@ -494,8 +496,14 @@ def _runtime_immutable_config_map_names() -> list[str]:
     return names
 
 
+def _compute_config_map_hash(data: dict[str, str] | None, binary_data: dict[str, str] | None) -> str:
+    """Compute a SHA-256 hash of ConfigMap data for drift detection."""
+    content = json.dumps({"data": data or {}, "binaryData": binary_data or {}}, sort_keys=True)
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+
+
 def _ensure_runtime_namespace_immutable_config_maps(namespace: str, logger: logging.Logger) -> None:
-    """Mirror immutable runtime ConfigMaps into agent namespaces."""
+    """Mirror immutable runtime ConfigMaps into agent namespaces with drift detection."""
     if namespace == OPERATOR_NAMESPACE:
         return
 
@@ -535,6 +543,29 @@ def _ensure_runtime_namespace_immutable_config_maps(namespace: str, logger: logg
                 delay=30,
             )
 
+        source_data = source_config_map.get("data") or {}
+        source_binary_data = source_config_map.get("binaryData") or {}
+        source_hash = _compute_config_map_hash(source_data, source_binary_data)
+
+        # Check if target ConfigMap exists and compare hashes
+        target_hash = None
+        try:
+            target_config_map = _sanitize_kube_resource(
+                core_api.read_namespaced_config_map(name=config_map_name, namespace=namespace)
+            )
+            if isinstance(target_config_map, dict):
+                target_annotations = (target_config_map.get("metadata") or {}).get("annotations") or {}
+                target_hash = target_annotations.get("kubesynapse.ai/config-hash")
+                target_data = target_config_map.get("data") or {}
+                target_binary_data = target_config_map.get("binaryData") or {}
+                computed_target_hash = _compute_config_map_hash(target_data, target_binary_data)
+                if target_hash == computed_target_hash and target_hash == source_hash:
+                    logger.debug("ConfigMap '%s' in namespace '%s' is in sync (hash=%s)", config_map_name, namespace, source_hash)
+                    continue
+        except ApiException as exc:
+            if exc.status != 404:
+                logger.warning("Failed to read target ConfigMap '%s/%s': %s", namespace, config_map_name, exc)
+
         source_metadata = source_config_map.get("metadata") or {}
         source_labels = source_metadata.get("labels") or {}
         labels = {
@@ -545,6 +576,13 @@ def _ensure_runtime_namespace_immutable_config_maps(namespace: str, logger: logg
         if component_label:
             labels["app.kubernetes.io/component"] = component_label
 
+        annotations = {
+            "kubesynapse.ai/config-hash": source_hash,
+            "kubesynapse.ai/synced-at": _datetime.now(_UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        if target_hash:
+            annotations["kubesynapse.ai/previous-hash"] = target_hash
+
         config_map_manifest: dict[str, Any] = {
             "apiVersion": "v1",
             "kind": "ConfigMap",
@@ -552,16 +590,18 @@ def _ensure_runtime_namespace_immutable_config_maps(namespace: str, logger: logg
                 "name": config_map_name,
                 "namespace": namespace,
                 "labels": labels,
+                "annotations": annotations,
             },
-            "data": copy.deepcopy(source_config_map.get("data") or {}),
+            "data": copy.deepcopy(source_data),
         }
-        if source_config_map.get("binaryData"):
-            config_map_manifest["binaryData"] = copy.deepcopy(source_config_map["binaryData"])
+        if source_binary_data:
+            config_map_manifest["binaryData"] = copy.deepcopy(source_binary_data)
         if "immutable" in source_config_map:
             config_map_manifest["immutable"] = bool(source_config_map.get("immutable"))
 
         ensure_config_map(namespace, config_map_manifest)
-        logger.info("ConfigMap '%s' provisioned for namespace '%s'", config_map_name, namespace)
+        drift_msg = "updated" if target_hash else "provisioned"
+        logger.info("ConfigMap '%s' %s for namespace '%s' (hash=%s)", config_map_name, drift_msg, namespace, source_hash)
 
 
 def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: logging.Logger) -> None:
@@ -686,7 +726,6 @@ def ensure_runtime_access(namespace: str) -> None:
     core_api = kubernetes.client.CoreV1Api()
     rbac_api = kubernetes.client.RbacAuthorizationV1Api()
     binding_name = f"{RUNTIME_SERVICE_ACCOUNT}-binding"
-    cluster_binding_name = f"{RUNTIME_SERVICE_ACCOUNT}-{namespace}-cluster-binding"
 
     service_account = kubernetes.client.V1ServiceAccount(
         metadata=kubernetes.client.V1ObjectMeta(name=RUNTIME_SERVICE_ACCOUNT, namespace=namespace),

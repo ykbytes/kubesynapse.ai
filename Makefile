@@ -2,9 +2,9 @@
 	docker-build docker-push helm-lint helm-package deploy deploy-sample undeploy clean \
 	ui-install ui-dev ui-build ui-preview \
 	docker-build-operator docker-build-opencode-runtime docker-build-gateway \
-	docker-build-ui docker-build-mcp-sidecars \
+	docker-build-ui docker-build-mcp-sidecars docker-build-credential-proxy \
 	docker-push-operator docker-push-opencode-runtime docker-push-gateway \
-	docker-push-ui docker-push-mcp-sidecars \
+	docker-push-ui docker-push-mcp-sidecars docker-push-credential-proxy \
 	docker-build-mcp-code-exec docker-build-mcp-web-search docker-build-mcp-documents \
 	docker-build-mcp-browser docker-build-mcp-database docker-build-mcp-git \
 	docker-build-mcp-github-adapter docker-build-mcp-kubernetes docker-build-mcp-messaging \
@@ -46,7 +46,10 @@ ui-preview:
 # Container images
 # ===========================
 
-docker-build: docker-build-operator docker-build-opencode-runtime docker-build-gateway docker-build-ui docker-build-mcp-sidecars
+docker-build: docker-build-operator docker-build-opencode-runtime docker-build-gateway docker-build-ui docker-build-mcp-sidecars docker-build-credential-proxy
+
+docker-build-credential-proxy:
+	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/credential-proxy:$(VERSION) ./credential-proxy
 
 docker-build-operator:
 	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -t $(REGISTRY)/kubesynapse-operator:$(VERSION) ./operator
@@ -93,6 +96,11 @@ docker-build-mcp-rag:
 	$(CONTAINER_CLI) build $(CONTAINER_BUILD_FLAGS) -f ./mcp-sidecars/rag/Dockerfile -t $(REGISTRY)/mcp-rag:$(VERSION) ./mcp-sidecars
 
 docker-push: docker-push-operator docker-push-opencode-runtime docker-push-gateway docker-push-ui docker-push-mcp-sidecars
+
+docker-push: docker-push-operator docker-push-opencode-runtime docker-push-gateway docker-push-ui docker-push-mcp-sidecars docker-push-credential-proxy
+
+docker-push-credential-proxy:
+	$(CONTAINER_CLI) push $(REGISTRY)/credential-proxy:$(VERSION)
 
 docker-push-operator:
 	$(CONTAINER_CLI) push $(REGISTRY)/kubesynapse-operator:$(VERSION)

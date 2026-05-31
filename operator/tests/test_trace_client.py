@@ -80,8 +80,8 @@ class TestTraceClient:
             client.flush()
             mock_http_client.post.assert_called_once()
             args, kwargs = mock_http_client.post.call_args
-            assert args[0] == "http://gateway:8080/api/traces/batch"
-            sent = kwargs["json"]
+            assert args[0] == "http://gateway:8080/api/v1/traces/batch"
+            sent = kwargs["json"]["events"]
             assert len(sent) == 1
             assert sent[0]["event_type"] == "custom"
             assert sent[0]["execution_id"] == "exec-1"

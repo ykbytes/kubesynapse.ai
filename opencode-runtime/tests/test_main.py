@@ -5,7 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -130,6 +130,44 @@ class OpenCodeRuntimeTests(unittest.TestCase):
         self.assertNotIn("OPENCODE_AUTH_CONTENT", env)
         self.assertNotIn("OPENAI_BASE_URL", env)
         self.assertEqual(env["OPENAI_API_KEY"], "gho-test-api-key")
+
+    def test_list_artifacts_skips_cache_and_build_directories(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as workdir,
+            tempfile.TemporaryDirectory() as home_dir,
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(opencode_runtime_main, "OPENCODE_WORKDIR", workdir),
+            patch.object(opencode_runtime_main, "HOME_DIR", home_dir),
+            patch("tempfile.gettempdir", return_value=temp_dir),
+        ):
+            workdir_path = Path(workdir)
+            home_path = Path(home_dir)
+            temp_path = Path(temp_dir)
+
+            visible_paths = [
+                workdir_path / "src" / "main.py",
+                home_path / "notes.txt",
+                temp_path / "scratch.log",
+            ]
+            skipped_paths = [
+                workdir_path / "node_modules" / "leftpad.js",
+                workdir_path / "dist" / "bundle.js",
+                workdir_path / "pkg" / "__pycache__" / "compiled.pyc",
+                workdir_path / ".cache" / "index.json",
+                workdir_path / ".git" / "config",
+            ]
+
+            for path in [*visible_paths, *skipped_paths]:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("content", encoding="utf-8")
+
+            result = opencode_runtime_main.list_artifacts()
+            listed_paths = {entry["path"] for entry in result["files"]}
+
+            for path in visible_paths:
+                self.assertIn(str(PurePosixPath(path)), listed_paths)
+            for path in skipped_paths:
+                self.assertNotIn(str(PurePosixPath(path)), listed_paths)
 
     def test_materialize_skill_files_maps_platform_skills_to_opencode_layout(self) -> None:
         skill_text = (

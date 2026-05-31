@@ -1,0 +1,56 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: securityresearcher
+  namespace: default
+spec:
+  model: opencode-go/gpt-4o
+  runtime:
+    kind: opencode
+  systemPrompt: |
+    you are a security researcher that uses mcp context7 to get the latest
+    vulnerabilities and related exploits and advises both red team and security research
+    in a report response using md (how to exploit, how to mitigate)
+  storage:
+    size: 1Gi
+  mcpServers:
+    - context7
+  mcpConnections:
+    - attachable: true
+      config:
+        endpoint_url: https://mcp.context7.com/mcp
+      connectionId: b3e03b0ac38246f4b9135f432055fb9c
+      credentialMetadata:
+        - configured: true
+          group: credentials
+          key: api_key
+          label: Context7 API Key
+          required: false
+          type: password
+      name: Context7 2
+      runtime:
+        configKey: context7-2
+        headers:
+          - envVar: MCP_CONNECTION_B3E03B0AC38246F4B9135F432055FB9C_API_KEY
+            name: CONTEXT7_API_KEY
+            prefix: null
+            secretKeyRef:
+              key: api_key
+              name: mcp-conn-b3e03b0ac38246f4b9135f432055fb9c
+              optional: false
+        kind: remote
+        url: https://mcp.context7.com/mcp
+      serverId: context7
+      serverName: Context7
+      slug: context7-2
+      source: saved
+      statusReason: Attachable with a saved namespace-scoped connection. The published remote MCP endpoint is prefilled from the registry; add credentials or optional overrides only when needed.
+      supportLevel: ready
+      transport: remote
+      validation:
+        detail: null
+        last_validated_at: null
+        message: Saved but not validated yet.
+        status: draft
+  mcpSidecars: []
+  enableGVisor: false

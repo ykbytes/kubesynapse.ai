@@ -38,7 +38,7 @@ export function StepInspector({ step, open, onOpenChange }: StepInspectorProps) 
         <div className="mt-6 space-y-5">
           {/* Metadata */}
           <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-xl border border-border/50 bg-card/55 p-3">
+            <div className="rounded-lg border border-border/50 bg-card p-3">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Clock className="h-3.5 w-3.5" />
                 Duration
@@ -47,7 +47,7 @@ export function StepInspector({ step, open, onOpenChange }: StepInspectorProps) 
                 {step.latency_ms !== null && step.latency_ms !== undefined ? `${step.latency_ms} ms` : "—"}
               </p>
             </div>
-            <div className="rounded-xl border border-border/50 bg-card/55 p-3">
+            <div className="rounded-lg border border-border/50 bg-card p-3">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Wrench className="h-3.5 w-3.5" />
                 Calls
@@ -97,7 +97,7 @@ export function StepInspector({ step, open, onOpenChange }: StepInspectorProps) 
               </h4>
               <div className="space-y-2">
                 {step.llm_calls.map((llm) => (
-                  <div key={llm.id} className="rounded-xl border border-border/50 bg-card/55 p-3 space-y-1">
+                  <div key={llm.id} className="rounded-lg border border-border/50 bg-card p-3 space-y-1">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-medium text-foreground">{llm.model}</span>
                       <span className="text-[10px] text-muted-foreground">{llm.latency_ms} ms</span>
@@ -125,7 +125,7 @@ export function StepInspector({ step, open, onOpenChange }: StepInspectorProps) 
               </h4>
               <div className="space-y-2">
                 {step.tool_calls.map((tc) => (
-                  <div key={tc.id} className="rounded-xl border border-border/50 bg-card/55 p-3 space-y-1">
+                  <div key={tc.id} className="rounded-lg border border-border/50 bg-card p-3 space-y-1">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-medium text-foreground">{tc.tool_name}</span>
                       <span className="text-[10px] text-muted-foreground">{tc.latency_ms} ms</span>

@@ -57,7 +57,7 @@ isolated sandboxes with built-in governance, observability, and multi-tenancy.
 | Governance | CRD-based policies | Manual code | Manual code |
 | Multi-tenancy | Native (`AgentTenant`) | Not built-in | Not built-in |
 | A2A protocol | Native JSON-RPC/SSE | Not built-in | Not built-in |
-| MCP tools | 11 bundled sidecars | Requires setup | Requires setup |
+| MCP tools | 10 bundled sidecars | Requires setup | Requires setup |
 | Human-in-the-loop | `AgentApproval` CRD | External | External |
 
 ### How is KubeSynapse different from Dify or LangFlow?
@@ -194,12 +194,21 @@ Yes. MCP tools are standard containers that expose a local HTTP or stdio interfa
 
 ### How do I develop locally without cloud?
 
-Use Kind or Minikube:
+Use the repo-supported Kind helper for the fastest local path:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
+  -ClusterName kubesynapse-dev `
+  -Namespace kubesynapse `
+  -ReleaseName kubesynapse `
+  -AdminPassword "KubesynapseAdmin9!"
+```
+
+Then port-forward the UI and gateway:
 
 ```bash
-kind create cluster --name kubesynapse-dev
-helm install KubeSynapse oci://docker.io/kubesynapse/charts/kubesynapse \
-  --set platformSecrets.native.openaiApiKey="sk-..."
+kubectl port-forward svc/kubesynapse-api-gateway -n kubesynapse 8080:8080
+kubectl port-forward svc/kubesynapse-web-ui -n kubesynapse 3000:80
 ```
 
 For offline development, use Ollama as the LLM provider:

@@ -216,6 +216,12 @@ spec:
                   optional: true
             - name: DEFAULT_API_GATEWAY_SHARED_TOKEN
               value: {{ include "kubesynapse.secretValue" (dict "value" .Values.platformSecrets.native.apiGatewaySharedToken "default" "your-bearer-token-here" "secretData" dict "key" "API_GATEWAY_SHARED_TOKEN") | quote }}
+            - name: API_GATEWAY_SHARED_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: API_GATEWAY_SHARED_TOKEN
+                  optional: true
             - name: API_GATEWAY_INTERNAL_URL
               value: {{ printf "http://%s-api-gateway.%s.svc.cluster.local:8080" (include "kubesynapse.fullname" .) .Release.Namespace | quote }}
             - name: AGENT_HITL_MODE

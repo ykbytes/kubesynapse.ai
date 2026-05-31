@@ -1,0 +1,84 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: secure-incident-mesh
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: secure-incident-mesh
+spec:
+  description: >
+    Fresh-install-safe multi-agent incident workflow with least-privilege
+    policies and operator-generated network policies.
+  input: >
+    Checkout API latency spike in prod-aks-eastus. Produce an operator-ready
+    remediation command, but do not auto-apply it.
+  contextRef: secure-incident-context
+  messageBus: in-memory
+  steps:
+    - name: inspect-signals
+      type: agent
+      agentRef: secure-signal-watch
+      prompt: |
+        Use the workflow input and injected context to produce a concise evidence summary.
+
+        Return exactly four bullets named:
+        - symptom
+        - strongest evidence
+        - blast radius
+        - stabilization hint
+      execution:
+        timeoutSeconds: 120
+        maxAttempts: 1
+        maxTurns: 6
+
+    - name: plan-remediation
+      type: agent
+      agentRef: secure-remediation-planner
+      dependsOn:
+        - inspect-signals
+      prompt: |
+        Use the previous step output and injected workflow context to draft the smallest safe remediation plan.
+
+        Include:
+        1. root cause hypothesis
+        2. up to three actions
+        3. one exact kubectl command for operator review
+        4. rollback note
+        5. a statement that no command has been executed yet
+      execution:
+        timeoutSeconds: 120
+        maxAttempts: 1
+        maxTurns: 6
+
+    - name: operator-handoff
+      agentRef: secure-incident-commander
+      dependsOn:
+        - plan-remediation
+      prompt: |
+        Review the remediation plan from the previous step and prepare an operator handoff.
+
+        Return:
+        - recommended action
+        - main risk
+        - rollback note
+        - explicit statement that no command has been executed automatically
+      execution:
+        timeoutSeconds: 300
+        maxAttempts: 1
+        maxTurns: 4
+
+    - name: publish-update
+      type: agent
+      agentRef: secure-status-writer
+      dependsOn:
+        - operator-handoff
+      prompt: |
+        Use the remediation plan and operator handoff to write:
+        - internal summary
+        - customer-safe summary
+        - next operator action
+        - statement that the workflow produced an operator-ready command and did not auto-apply it
+      execution:
+        timeoutSeconds: 120
+        maxAttempts: 1
+        maxTurns: 6

@@ -68,7 +68,7 @@ Keep the tone sharp, technical, and grounded.
 
 ```bash
 kubectl apply -f demo/platform-release/bundle.yaml
-agentctl --gateway-url http://localhost:8080 workflows trigger ingress-upgrade-release-readiness
+agentctl --gateway http://localhost:8080 workflows trigger ingress-upgrade-release-readiness
 ```
 
 ### Voiceover
@@ -89,7 +89,7 @@ agentctl --gateway-url http://localhost:8080 workflows trigger ingress-upgrade-r
 
 ```bash
 kubectl get agentapprovals -n default
-agentctl --gateway-url http://localhost:8080 approvals approve <approval-name> --reason "Reviewed live on camera"
+agentctl --gateway http://localhost:8080 runs approve <approval-name> --reason "Reviewed live on camera"
 ```
 
 ### Proof Point Callout
@@ -131,7 +131,7 @@ kubectl apply -f demo/incident-response/bundle.yaml
 
 ```bash
 kubectl apply -f demo/cloud-architecture/bundle.yaml
-agentctl --gateway-url http://localhost:8080 workflows trigger multi-cluster-platform-decision
+agentctl --gateway http://localhost:8080 workflows trigger multi-cluster-platform-decision
 ```
 
 ### Voiceover
@@ -152,7 +152,7 @@ agentctl --gateway-url http://localhost:8080 workflows trigger multi-cluster-pla
 
 ```bash
 kubectl apply -f demo/creative-production/bundle.yaml
-agentctl --gateway-url http://localhost:8080 workflows trigger conference-launch-pack
+agentctl --gateway http://localhost:8080 workflows trigger conference-launch-pack
 ```
 
 ### Voiceover

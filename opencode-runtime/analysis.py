@@ -38,6 +38,8 @@ from skills import SKILL_RUNTIME_CONFIG
 
 from utils import truncate_text
 
+_CREDENTIAL_PROXY_ENABLED = os.getenv("CREDENTIAL_PROXY_ENABLED", "false").strip().lower() in ("true", "1", "yes")
+
 if TYPE_CHECKING:
     from models import InvokeRequest
 
@@ -221,7 +223,23 @@ def classify_error_type(payload: dict[str, Any]) -> str | None:
         "MessageAbortedError": "aborted",
         "MessageOutputLengthError": "output_length",
     }
-    return error_map.get(name)
+    classification = error_map.get(name)
+
+    # Fall back to message-based detection for OpenCode-native errors
+    # where the error name may not be set but the message is descriptive.
+    if classification is None:
+        message = str(error.get("message") or "").strip()
+        data = error.get("data")
+        detail = ""
+        if isinstance(data, dict):
+            detail = str(data.get("message") or "").strip()
+        combined = f"{message} {detail}".lower()
+        if "does not support image input" in combined or "model does not support image" in combined:
+            return "vision_required"
+        if "clipboard" in combined and "does not support" in combined:
+            return "vision_required"
+
+    return classification
 
 
 def extract_error_message(payload: dict[str, Any]) -> str:
@@ -1075,7 +1093,7 @@ def runtime_capabilities() -> dict[str, Any]:
         "a2a": {
             "outbound_supported": True,
             "transport": "a2a-jsonrpc",
-            "gateway_configured": bool(API_GATEWAY_INTERNAL_URL and API_GATEWAY_SHARED_TOKEN),
+            "gateway_configured": bool((API_GATEWAY_INTERNAL_URL and API_GATEWAY_SHARED_TOKEN) or _CREDENTIAL_PROXY_ENABLED),
             "allowed_target_count": len(A2A_ALLOWED_TARGETS),
             "allowed_targets": [
                 {"namespace": namespace, "name": name}

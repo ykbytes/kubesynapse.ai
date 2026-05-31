@@ -68,7 +68,7 @@ kubectl apply -f examples/sample-policy.yaml
 kubectl apply -f examples/sample-agent.yaml
 
 # 5. Open the UI and log in
-open http://localhost:3000
+Start-Process http://localhost:3000
 ```
 
 ### Default Credentials
@@ -194,7 +194,9 @@ Schema changes use Alembic migrations, not ad-hoc `CREATE TABLE` calls. Backups 
 
 ### Bundled MCP Sidecars
 
-`code-exec` · `web-search` · `browser-automation` · `database` · `git` · `github` · `kubernetes-ops` · `messaging` · `rag` · `documents`
+`code-exec` · `web-search` · `documents` · `browser` · `database` · `git` · `github-adapter` · `kubernetes` · `messaging` · `rag`
+
+A separate `collector` sidecar is available for intelligence workflows and is counted separately from the 10 bundled tool sidecars above.
 
 ### UI Surfaces
 
@@ -214,7 +216,7 @@ flowchart TB
     EXT["🔗 External Apps"]:::c
 
     GW("⚡ API Gateway
-    FastAPI · Auth · CRUD · SSE"):::g
+    FastAPI · Auth · CRUD · Invoke · SSE"):::g
 
     K8S{{"☸️ Kubernetes API
     12 CRDs"}}:::k
@@ -222,17 +224,18 @@ flowchart TB
     OP("🔧 Operator
     Reconcile · Provision"):::o
 
-    SEC["🛡️ Security Layers
-    Plugin Isolation · NetworkPolicy"]:::sec
+    SEC["🛡️ Security Baseline
+    Immutable config · NetworkPolicy"]:::sec
 
     OC("🤖 OpenCode Runtime
     StatefulSet · Sessions · Stream"):::r
     JOB("📦 Workflow Jobs
-    DAG step execution"):::w
+    Artifact-driven execution"):::w
 
-    MCP("🔌 MCP Sidecars
-    10 bundled"):::s
-    PVC[("💾 State PVC")]:::d
+    MCP("🔌 MCP Access
+    10 tools + collector"):::s
+    PVC[("💾 Runtime PVC")]:::d
+    ART[("📁 Workflow artifacts")]:::d
 
     LLM("🧪 LiteLLM
     Model proxy"):::shared
@@ -257,15 +260,18 @@ flowchart TB
     EXT -->|"Webhooks"| GW
     GW -->|"CRUD (CustomObjectsApi)"| K8S
     GW -->|"SQLAlchemy"| PG
-    GW -->|"Agent cache"| REDIS
+    GW -->|"Agent + session cache"| REDIS
+    GW -.->|"Provider/admin APIs"| LLM
+    GW -.->|"Configured async ext."| NATS
     K8S -->|"Watch CRDs (Kopf)"| OP
-    OP ==>|"Provisions StatefulSet"| OC
+    OP ==>|"Provisions StatefulSet + PVC"| OC
     OP -->|"Creates worker Job"| JOB
-    OP -.->|"Immutable config"| SEC
-    OC -->|"localhost sidecar"| MCP
-    OC -->|"Workspace · Checkpoints"| PVC
+    OP -.->|"Injects immutable config"| SEC
+    OC -->|"localhost or hub transport"| MCP
+    OC -->|"Workspace · checkpoints"| PVC
+    JOB -->|"Artifacts · logs"| ART
     OC -->|"HTTPS /v1/chat/completions"| LLM
-    OC -->|"Vector search"| QDRANT
+    OC -->|"Vector search when enabled"| QDRANT
     LLM -->|"Response cache"| REDIS
     OC -.->|"POST runtime-events"| TRACE
     JOB -.->|"POST runtime-events"| TRACE
@@ -286,7 +292,7 @@ flowchart TB
 ```
 > **Layers:** 🔵 Clients → 🟣 Gateway → 🔵 K8s API → 🟡 Operator → 🟢 Runtimes → ⚫ Shared Services → 🟣 Intelligence → 🟢 Security
 >
-> **Data flow:** The gateway reads/writes CRDs via the Kubernetes API and persists app state to Postgres + Redis. The operator watches CRDs and provisions isolated StatefulSets. Each runtime streams responses via SSE, calls models through LiteLLM, and emits trace events to the Observatory. Signal Watch runs SQL anomaly detection and invokes system agents for AI-powered analysis.
+> **Data flow:** The gateway reads/writes CRDs via the Kubernetes API, persists durable platform state to Postgres + Redis, and fronts provider/admin APIs. The operator watches CRDs and provisions isolated runtimes plus worker Jobs. The primary model-call path is runtime -> LiteLLM -> provider; workflow jobs keep detailed evidence in artifacts and logs; runtime and worker events feed the Observatory for Signal Watch and system-agent analysis.
 
 <br>
 
@@ -330,7 +336,7 @@ agentctl --<TAB>        -> --gateway, --profile, --namespace, --output, --token.
 
 ```bash
 # Login and configure (use the same password you set at deploy time)
-agentctl --gateway-url http://localhost:8080 auth login -u admin -p "<password>"
+agentctl --gateway http://localhost:8080 auth login -u admin -p "<password>"
 export AGENT_GATEWAY_TOKEN="<token-from-login-output>"
 export AGENT_GATEWAY_URL="http://localhost:8080"
 

@@ -1428,42 +1428,17 @@ function buildArtifactDownloadUrl(namespace: string, agentName: string, artifact
 
 const IMAGE_PREVIEW_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico"]);
 const MARKDOWN_PREVIEW_EXTENSIONS = new Set([".md", ".markdown", ".mdx"]);
-const TEXT_PREVIEW_EXTENSIONS = new Set([
-  ".txt",
-  ".log",
-  ".json",
-  ".yaml",
-  ".yml",
-  ".toml",
-  ".ini",
-  ".env",
-  ".xml",
-  ".html",
-  ".htm",
-  ".css",
-  ".scss",
-  ".js",
-  ".jsx",
-  ".ts",
-  ".tsx",
-  ".mjs",
-  ".cjs",
-  ".py",
-  ".rb",
-  ".go",
-  ".rs",
-  ".java",
-  ".kt",
-  ".swift",
-  ".php",
-  ".sql",
-  ".sh",
-  ".bash",
-  ".zsh",
-  ".ps1",
-  ".psm1",
-  ".dockerfile",
-  ".csv",
+const MERMAID_PREVIEW_EXTENSIONS = new Set([".mmd", ".mermaid"]);
+
+// Binary formats that cannot be meaningfully rendered as text
+const BINARY_EXTENSIONS = new Set([
+  ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar",
+  ".exe", ".dll", ".so", ".dylib", ".bin", ".obj", ".o",
+  ".wasm", ".class", ".pyc", ".pyo",
+  ".woff", ".woff2", ".ttf", ".otf", ".eot",
+  ".mp3", ".mp4", ".avi", ".mov", ".mkv", ".flac", ".wav", ".ogg", ".webm",
+  ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+  ".sqlite", ".db", ".lock",
 ]);
 
 function getArtifactExtension(artifactPath: string): string {
@@ -1474,7 +1449,7 @@ function getArtifactExtension(artifactPath: string): string {
   return extensionIndex >= 0 ? fileName.slice(extensionIndex) : "";
 }
 
-export type AgentArtifactPreviewKind = "text" | "markdown" | "image" | "pdf" | "unsupported";
+export type AgentArtifactPreviewKind = "text" | "markdown" | "mermaid" | "image" | "pdf" | "unsupported";
 
 export interface AgentArtifactPreview {
   path: string;
@@ -1497,24 +1472,24 @@ function classifyArtifactPreviewKind(artifactPath: string, contentType: string):
   if (normalizedType === "application/pdf" || extension === ".pdf") {
     return "pdf";
   }
+  if (normalizedType.includes("mermaid") || MERMAID_PREVIEW_EXTENSIONS.has(extension)) {
+    return "mermaid";
+  }
   if (normalizedType === "text/markdown" || MARKDOWN_PREVIEW_EXTENSIONS.has(extension)) {
     return "markdown";
   }
-  if (
-    normalizedType.startsWith("text/") ||
-    normalizedType.includes("json") ||
-    normalizedType.includes("xml") ||
-    normalizedType.includes("yaml") ||
-    normalizedType.includes("javascript") ||
-    normalizedType.includes("typescript") ||
-    normalizedType.includes("shell") ||
-    normalizedType.includes("x-sh") ||
-    normalizedType.includes("x-python") ||
-    TEXT_PREVIEW_EXTENSIONS.has(extension)
-  ) {
-    return "text";
+  // Known binary formats that cannot be rendered as text
+  if (BINARY_EXTENSIONS.has(extension)) {
+    return "unsupported";
   }
-  return "unsupported";
+  if (
+    normalizedType.startsWith("application/octet-stream") &&
+    !extension // no extension — truly unknown binary blob
+  ) {
+    return "unsupported";
+  }
+  // Default: treat everything else as text (covers .j2, .conf, .cfg, .tf, .hcl, .service, etc.)
+  return "text";
 }
 
 export async function downloadAgentArtifact(
@@ -2686,6 +2661,8 @@ export async function listExecutions(
   filters: {
     workflow?: string;
     agent?: string;
+    run_id?: string;
+    execution_kind?: "workflow" | "invoke" | "all";
     status?: string;
     from_date?: string;
     to_date?: string;
@@ -2701,6 +2678,8 @@ export async function listExecutions(
     const normalizedKey = {
       workflow: "workflow_name",
       agent: "agent_name",
+      run_id: "run_id",
+      execution_kind: "execution_kind",
       sort_by: "sort_by",
       from_date: "from_date",
       to_date: "to_date",

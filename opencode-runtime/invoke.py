@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import os
 import time
 import uuid
 from pathlib import Path
@@ -47,7 +48,6 @@ from config import (
     AUTONOMOUS_MAX_TURNS,
     COMPACTION_MIN_TURN_SPACING,
     DEFAULT_AGENT,
-    DEFAULT_MODEL,
     DEFAULT_MODEL_REF,
     DEFAULT_SYSTEM_PROMPT,
     LIVE_UPDATE_MAX_WALL_SECONDS,
@@ -108,6 +108,9 @@ from utils import dedupe_items, truncate_text
 
 logger = logging.getLogger("opencode-runtime")
 
+_CREDENTIAL_PROXY_ENABLED = os.getenv("CREDENTIAL_PROXY_ENABLED", "false").strip().lower() in ("true", "1", "yes")
+_GATEWAY_PROXY_URL = "http://127.0.0.1:8080"
+
 StreamCallback = Any  # Callable[[str, dict[str, Any]], None] | None
 LIVE_UPDATE_POLL_SECONDS = 0.08
 
@@ -144,6 +147,8 @@ def a2a_response_metadata(request: InvokeRequest) -> dict[str, Any] | None:
 
 def gateway_a2a_available() -> bool:
     """Return True when the runtime can reach the internal gateway for A2A calls."""
+    if _CREDENTIAL_PROXY_ENABLED:
+        return True
     return bool(API_GATEWAY_INTERNAL_URL and API_GATEWAY_SHARED_TOKEN)
 
 
@@ -158,7 +163,7 @@ def validate_outbound_a2a_request(request: InvokeRequest) -> None:
             status_code=503,
             detail=(
                 "Outbound A2A invocation is not configured for this OpenCode runtime. "
-                "API_GATEWAY_INTERNAL_URL and API_GATEWAY_SHARED_TOKEN must be set."
+                "Internal gateway connectivity must be configured."
             ),
         )
     if not A2A_ALLOWED_TARGETS:
@@ -404,16 +409,19 @@ def invoke_gateway_a2a_target(
         transport=httpx.HTTPTransport(retries=2),
         trust_env=False,
     ) as client:
+        gateway_url = _GATEWAY_PROXY_URL if _CREDENTIAL_PROXY_ENABLED else API_GATEWAY_INTERNAL_URL
+        headers = {
+            "A2A-Version": "1.0",
+            "Accept": "application/json",
+            "x-request-id": request_id,
+        }
+        if not _CREDENTIAL_PROXY_ENABLED:
+            headers["Authorization"] = f"Bearer {API_GATEWAY_SHARED_TOKEN}"
         response = client.post(
-            f"{API_GATEWAY_INTERNAL_URL}/a2a/{target_agent}",
+            f"{gateway_url}/a2a/{target_agent}",
             params={"namespace": target_namespace},
             json=jsonrpc_payload,
-            headers={
-                "Authorization": f"Bearer {API_GATEWAY_SHARED_TOKEN}",
-                "A2A-Version": "1.0",
-                "Accept": "application/json",
-                "x-request-id": request_id,
-            },
+            headers=headers,
         )
         response.raise_for_status()
         try:
@@ -1256,6 +1264,18 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
             if error_type == "auth":
                 all_warnings.append(f"Turn {turn + 1}: authentication error, cannot retry.")
                 break
+            if error_type == "vision_required":
+                # The model does not support image input — surface a clear message
+                # and stop retrying so the user gets actionable feedback.
+                detail = (
+                    "The current model does not support image input. "
+                    "To use clipboard images or image uploads, switch to a vision-capable model "
+                    "(e.g., gpt-4o, gpt-4-turbo, claude-3-sonnet) or paste the image as a file path instead."
+                )
+                if error_message:
+                    detail = f"{detail} Original error: {error_message}"
+                all_warnings.append(f"Turn {turn + 1}: vision required — {detail}")
+                break
             if retryable_error is False:
                 warning = f"Turn {turn + 1}: non-retryable {error_type or 'error'}"
                 if error_message:
@@ -1371,11 +1391,18 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
 
     response_text = extract_response_text(authoritative_payload).strip()
     if not response_text and response_status == "error":
-        response_text = _best_warning_response(all_warnings)
+        # Prefer the structured error detail from the payload's info.error over
+        # a generic warning when the response body is empty or truncated.
+        structured_error = str(last_payload.get("info", {}).get("error", {}).get("message") or "").strip()
+        if structured_error:
+            response_text = f"[Runtime Error] {structured_error}"
+        else:
+            response_text = _best_warning_response(all_warnings)
     if not response_text and collected_tool_calls:
         response_text = build_tool_only_response(collected_tool_calls)
     if not response_text:
         response_text = "(no output)"
+    
     # Defense-in-depth: redact any leaked secrets from the response text and warnings
     response_text = redact_secrets(response_text)
     all_warnings = [redact_secrets(w) for w in all_warnings]

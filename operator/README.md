@@ -5,43 +5,46 @@ Kubernetes workloads. Built with [Kopf](https://kopf.dev/) and Python 3.11+.
 
 ## Purpose
 
-The operator watches `AIAgent` and `AgentWorkflow` CRDs and materializes
-them into StatefulSets, Services, PVCs, Jobs, and ConfigMaps. It is the control plane
-that turns declarative agent specs into live runtime pods.
+The operator watches `AIAgent`, `AgentWorkflow`, approval, and observability-related CRDs and
+materializes them into StatefulSets, Services, PVCs, Jobs, ConfigMaps, and related policy objects.
+It is the control-plane engine that turns declarative agent specs into live workloads.
 
 ## Supported Runtimes
 
 The operator currently reconciles three in-tree runtime kinds:
 
-- `opencode` is the default runtime and the path used by the checked-in examples and most local workflows.
-- `pi` is the supported alternative runtime and is translated into the same StatefulSet, Service, and PVC control-plane surfaces.
-- `mistral-vibe` is the supported Mistral-backed runtime bridge and is translated into the same StatefulSet, Service, and PVC control-plane surfaces.
+- `opencode` is the default and production runtime path used by the checked-in examples and most current workflows.
+- `pi` is available as an alpha runtime kind and is translated into the same StatefulSet, Service, and PVC control-plane surfaces.
+- `mistral-vibe` is available as an alpha runtime kind and is translated into the same StatefulSet, Service, and PVC control-plane surfaces.
 
 ## Architecture
 
 ```mermaid
-graph LR
-    A[CRD Watch] --> B[Controllers]
-    B --> C[Manifest Builders]
-    C --> D[K8s Services]
-    D --> E[State Store]
-    E --> F[Worker Engine]
-    F --> G[Trace Client]
-    F --> H[Circuit Breaker]
+flowchart LR
+    CRD[12 CRDs] --> CTRL[Controllers]
+    CTRL --> BUILD[Manifest Builders]
+    BUILD --> K8S[Kubernetes API client]
+    CTRL --> STATE[State store]
+    CTRL --> WORKER[Workflow engine]
+    CTRL --> OBS[Observation and signal watch]
+    WORKER --> ART[Artifacts and logs]
+    WORKER --> TRACE[Trace client]
+    WORKER --> CB[Circuit breaker]
 ```
 
-- **Controllers** — Kopf handlers for `AIAgent` and `AgentWorkflow`.
+- **Controllers** — Kopf handlers for agent, workflow, approval, and observability reconciliation.
   Enqueue events, manage finalizers, and drive status updates.
 - **Manifest Builders** — Generate K8s objects (StatefulSet, Service, PVC, Job) from
   CRD spec snippets with sane defaults and label inheritance.
 - **K8s Services** — Thin wrappers around `kubernetes-client` for create, patch,
   delete, and watch operations with optimistic locking.
 - **State Store** — In-memory and persisted workflow execution state used by the
-  worker engine to resume interrupted runs.
+  worker engine to resume interrupted runs when state DB support is enabled.
 - **Worker Engine** — DAG executor that runs workflow steps, handles retries,
-  approvals, and artifact collection.
-- **Trace Client** — Batched trace emitter that ships step-level spans to the
+  approvals, status projection, and artifact collection.
+- **Trace Client** — Batched trace emitter that ships step-level execution events to the
   API-gateway trace store.
+- **Observation and Signal Watch** — Reconciles observability resources and runs deterministic anomaly detection when those CRDs are installed.
 - **Circuit Breaker** — Prevents cascading failures when downstream runtimes or
   sidecars become unhealthy.
 
@@ -114,5 +117,5 @@ The operator is published as a container image:
 docker pull docker.io/kubesynapse/kubesynapse-operator:v1.0.15
 ```
 
-In the Helm chart it runs as a single-replica Deployment with a service account
-bound to the `kubesynapse-operator` ClusterRole.
+In the Helm chart it runs as a Deployment with `operator.replicaCount` defaulting to `2`, plus
+the `kubesynapse-operator` service account and ClusterRole wiring.

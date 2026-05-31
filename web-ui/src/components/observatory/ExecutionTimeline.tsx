@@ -1,7 +1,15 @@
 import { useState, useMemo } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Filter } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { TraceEvent, TraceEventType } from "@/types";
+
+// ─── Color Maps ───────────────────────────────────────────────────────────────
 
 export const EVENT_COLORS: Record<TraceEventType, string> = {
   EXECUTION_STARTED: "bg-emerald-500",
@@ -61,11 +69,28 @@ export const EVENT_LABEL_COLORS: Record<TraceEventType, string> = {
   CUSTOM: "text-gray-500",
 };
 
+const SWIMLANE_COLORS: Record<string, string> = {
+  execution: "bg-emerald-500/20 border-emerald-500/30",
+  step: "bg-blue-500/20 border-blue-500/30",
+  llm: "bg-violet-500/20 border-violet-500/30",
+  tool: "bg-cyan-500/20 border-cyan-500/30",
+  error: "bg-red-500/20 border-red-500/30",
+  other: "bg-muted/30 border-border/40",
+};
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type SwimCategory = "execution" | "step" | "llm" | "tool" | "error" | "other";
+
 interface ExecutionTimelineProps {
   events: TraceEvent[];
   activeEventId?: string | null;
   onEventClick?: (event: TraceEvent) => void;
+  /** When true, use compact vertical list instead of swimlane (for small event sets) */
+  compact?: boolean;
 }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatTime(ts: string): string {
   try {
@@ -75,125 +100,331 @@ function formatTime(ts: string): string {
   }
 }
 
-function groupEventsByStep(events: TraceEvent[]): { stepId: string | null; events: TraceEvent[] }[] {
-  const groups: { stepId: string | null; events: TraceEvent[] }[] = [];
-  let current: TraceEvent[] = [];
-  let currentStep: string | null = null;
+function formatRelativeMs(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  return `${Math.floor(s / 60)}m${Math.round(s % 60)}s`;
+}
+
+function categorizeEvent(type: TraceEventType): SwimCategory {
+  if (type.startsWith("EXECUTION_")) return "execution";
+  if (type.startsWith("STEP_")) return "step";
+  if (type.startsWith("LLM_")) return "llm";
+  if (type.startsWith("TOOL_")) return "tool";
+  if (type === "ERROR" || type === "WARNING") return "error";
+  return "other";
+}
+
+// ─── Swimlane Timeline ────────────────────────────────────────────────────────
+
+interface SwimlaneData {
+  category: SwimCategory;
+  label: string;
+  events: TraceEvent[];
+  startMs: number;
+  endMs: number;
+}
+
+function buildSwimlanes(events: TraceEvent[], _totalStartMs: number, _totalEndMs: number): SwimlaneData[] {
+  // Group by step_id, then within each step by category
+  const stepGroups = new Map<string, TraceEvent[]>();
+  const noStepEvents: TraceEvent[] = [];
+
   for (const ev of events) {
-    if (ev.step_id !== currentStep) {
-      if (current.length > 0) groups.push({ stepId: currentStep, events: current });
-      current = [ev];
-      currentStep = ev.step_id ?? null;
+    if (ev.step_id) {
+      const group = stepGroups.get(ev.step_id);
+      if (group) group.push(ev);
+      else stepGroups.set(ev.step_id, [ev]);
     } else {
-      current.push(ev);
+      noStepEvents.push(ev);
     }
   }
-  if (current.length > 0) groups.push({ stepId: currentStep, events: current });
-  return groups;
+
+  const lanes: SwimlaneData[] = [];
+
+  // Execution-level events lane
+  const execEvents = noStepEvents.filter((e) => categorizeEvent(e.event_type) === "execution");
+  if (execEvents.length > 0) {
+    lanes.push({
+      category: "execution",
+      label: "Execution",
+      events: execEvents,
+      startMs: Math.min(...execEvents.map((e) => new Date(e.timestamp).getTime())),
+      endMs: Math.max(...execEvents.map((e) => new Date(e.timestamp).getTime())),
+    });
+  }
+
+  // Per-step lanes
+  for (const [stepId, stepEvents] of stepGroups) {
+    const sorted = stepEvents.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    const startMs = new Date(sorted[0].timestamp).getTime();
+    const endMs = new Date(sorted[sorted.length - 1].timestamp).getTime();
+    const hasErrors = sorted.some((e) => e.event_type.includes("FAILED") || e.event_type === "ERROR");
+
+    lanes.push({
+      category: hasErrors ? "error" : "step",
+      label: stepId.length > 20 ? `${stepId.slice(0, 18)}...` : stepId,
+      events: sorted,
+      startMs,
+      endMs,
+    });
+  }
+
+  // Other events not tied to steps
+  const otherEvents = noStepEvents.filter((e) => categorizeEvent(e.event_type) !== "execution");
+  if (otherEvents.length > 0) {
+    lanes.push({
+      category: "other",
+      label: "Other",
+      events: otherEvents,
+      startMs: Math.min(...otherEvents.map((e) => new Date(e.timestamp).getTime())),
+      endMs: Math.max(...otherEvents.map((e) => new Date(e.timestamp).getTime())),
+    });
+  }
+
+  return lanes;
 }
 
-function EventRow({
-  event,
-  isLast,
-  isActive,
-  onClick,
-}: {
-  event: TraceEvent;
-  isLast: boolean;
-  isActive: boolean;
-  onClick?: () => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const colorClass = EVENT_COLORS[event.event_type] ?? "bg-gray-500";
-  const labelColorClass = EVENT_LABEL_COLORS[event.event_type] ?? "text-gray-500";
-  const hasPayload = Object.keys(event.payload).length > 0;
+// ─── Main Component ───────────────────────────────────────────────────────────
 
-  return (
-    <div className="relative flex gap-3">
-      {/* Connector line */}
-      {!isLast && <div className="absolute left-[7px] top-5 bottom-0 w-px bg-border/40" />}
+export function ExecutionTimeline({ events, activeEventId, onEventClick, compact }: ExecutionTimelineProps) {
+  const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
+  const [filterTypes, setFilterTypes] = useState<Set<SwimCategory>>(new Set(["execution", "step", "llm", "tool", "error", "other"]));
 
-      {/* Dot */}
-      <div className="relative z-10 mt-0.5 flex shrink-0 items-center justify-center">
-        <span
-          className={cn(
-            "h-3.5 w-3.5 rounded-full border-2 border-background shadow-sm",
-            colorClass,
-            isActive && "ring-2 ring-primary ring-offset-1 ring-offset-background",
-          )}
-          aria-hidden="true"
-        />
-      </div>
-
-      {/* Content */}
-      <div className="min-w-0 flex-1 pb-3">
-        <button
-          type="button"
-          onClick={() => {
-            if (hasPayload) setExpanded((e) => !e);
-            onClick?.();
-          }}
-          className="flex w-full items-center gap-2 text-left"
-          aria-label={`${event.event_type} at ${formatTime(event.timestamp)}`}
-        >
-          <span className="text-[11px] tabular-nums text-muted-foreground">{formatTime(event.timestamp)}</span>
-          <span className={cn("text-xs font-semibold uppercase tracking-wide", labelColorClass)}>{event.event_type}</span>
-          {hasPayload && (
-            <span className="ml-auto shrink-0 text-muted-foreground">
-              {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-            </span>
-          )}
-        </button>
-
-        {expanded && hasPayload && (
-          <div className="mt-1.5 rounded-lg border border-border/40 bg-muted/20">
-            <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words p-2.5 text-[11px] leading-relaxed text-muted-foreground">
-              {JSON.stringify(event.payload, null, 2)}
-            </pre>
-          </div>
-        )}
-      </div>
-    </div>
+  const sorted = useMemo(
+    () => [...events].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()),
+    [events],
   );
-}
 
-export function ExecutionTimeline({ events, activeEventId, onEventClick }: ExecutionTimelineProps) {
-  const sorted = useMemo(() => {
-    return [...events].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-  }, [events]);
+  const timeRange = useMemo(() => {
+    if (sorted.length === 0) return { startMs: 0, endMs: 0, totalMs: 0 };
+    const startMs = new Date(sorted[0].timestamp).getTime();
+    const endMs = new Date(sorted[sorted.length - 1].timestamp).getTime();
+    return { startMs, endMs, totalMs: Math.max(endMs - startMs, 1) };
+  }, [sorted]);
 
-  const groups = useMemo(() => groupEventsByStep(sorted), [sorted]);
+  const swimlanes = useMemo(
+    () => buildSwimlanes(sorted, timeRange.startMs, timeRange.endMs),
+    [sorted, timeRange.startMs, timeRange.endMs],
+  );
+
+  const filteredLanes = useMemo(
+    () => swimlanes.filter((lane) => filterTypes.has(lane.category)),
+    [swimlanes, filterTypes],
+  );
+
+  const eventTypeCounts = useMemo(() => {
+    const counts: Record<SwimCategory, number> = { execution: 0, step: 0, llm: 0, tool: 0, error: 0, other: 0 };
+    for (const ev of sorted) {
+      counts[categorizeEvent(ev.event_type)]++;
+    }
+    return counts;
+  }, [sorted]);
 
   if (events.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center rounded-[1.75rem] border border-dashed border-border/70 bg-card/30 py-12">
-        <p className="text-sm text-muted-foreground">No events recorded for this execution.</p>
+      <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border/50 py-8">
+        <p className="text-xs text-muted-foreground">No events recorded for this execution.</p>
       </div>
     );
   }
 
-  return (
-    <div className="space-y-4">
-      {groups.map((group, gIdx) => (
-        <div key={group.stepId ?? `group-${gIdx}`}>
-          {group.stepId && (
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
-              Step: {group.stepId}
+  // Compact mode: simple vertical list (used in Steps tab for per-step events)
+  if (compact || events.length <= 8) {
+    return (
+      <div className="space-y-0.5">
+        {sorted.map((ev, idx) => {
+          const colorClass = EVENT_COLORS[ev.event_type] ?? "bg-gray-500";
+          const labelColor = EVENT_LABEL_COLORS[ev.event_type] ?? "text-gray-500";
+          const isActive = activeEventId === ev.id;
+          const isExpanded = expandedEventId === ev.id;
+          const hasPayload = Object.keys(ev.payload).length > 0;
+
+          return (
+            <div key={ev.id} className="relative flex gap-2.5">
+              {idx < sorted.length - 1 && (
+                <div className="absolute left-[5px] top-4 bottom-0 w-px bg-border/30" />
+              )}
+              <span className={cn("relative z-10 mt-1 h-2.5 w-2.5 shrink-0 rounded-full", colorClass, isActive && "ring-2 ring-primary ring-offset-1 ring-offset-background")} />
+              <div className="min-w-0 flex-1 pb-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (hasPayload) setExpandedEventId(isExpanded ? null : ev.id);
+                    onEventClick?.(ev);
+                  }}
+                  className="flex w-full items-center gap-2 text-left"
+                >
+                  <span className="text-[10px] tabular-nums text-muted-foreground">{formatTime(ev.timestamp)}</span>
+                  <span className={cn("text-[10px] font-semibold uppercase", labelColor)}>{ev.event_type.replace(/_/g, " ")}</span>
+                  {hasPayload && (
+                    <span className="ml-auto text-muted-foreground/60">
+                      {isExpanded ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronRight className="h-2.5 w-2.5" />}
+                    </span>
+                  )}
+                </button>
+                {isExpanded && hasPayload && (
+                  <pre className="mt-1 max-h-32 overflow-auto rounded-md border border-border/30 bg-muted/20 p-2 text-[10px] text-muted-foreground">
+                    {JSON.stringify(ev.payload, null, 2)}
+                  </pre>
+                )}
+              </div>
             </div>
-          )}
-          <div className="rounded-xl border border-border/50 bg-card/55 p-3">
-            {group.events.map((ev, idx) => (
-              <EventRow
-                key={ev.id}
-                event={ev}
-                isLast={idx === group.events.length - 1 && gIdx === groups.length - 1}
-                isActive={activeEventId === ev.id}
-                onClick={() => onEventClick?.(ev)}
-              />
-            ))}
-          </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // Full swimlane mode
+  return (
+    <TooltipProvider delayDuration={100}>
+      <div className="space-y-3">
+        {/* Filter bar */}
+        <div className="flex items-center gap-1.5">
+          <Filter className="h-3 w-3 text-muted-foreground" />
+          {(["execution", "step", "llm", "tool", "error", "other"] as SwimCategory[]).map((cat) => {
+            const active = filterTypes.has(cat);
+            const count = eventTypeCounts[cat];
+            if (count === 0) return null;
+            return (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => {
+                  setFilterTypes((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(cat)) next.delete(cat);
+                    else next.add(cat);
+                    return next;
+                  });
+                }}
+                className={cn(
+                  "rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors",
+                  active
+                    ? SWIMLANE_COLORS[cat]
+                    : "border-transparent bg-muted/20 text-muted-foreground/50",
+                )}
+              >
+                {cat} ({count})
+              </button>
+            );
+          })}
+          <span className="ml-auto text-[10px] text-muted-foreground">
+            {timeRange.totalMs > 0 ? formatRelativeMs(timeRange.totalMs) : ""} total
+          </span>
         </div>
-      ))}
-    </div>
+
+        {/* Swimlane chart */}
+        <div className="space-y-1">
+          {filteredLanes.map((lane, laneIdx) => (
+            <div key={`${lane.category}-${laneIdx}`} className="flex items-center gap-2">
+              {/* Lane label */}
+              <span className="w-20 shrink-0 truncate text-[10px] font-medium text-muted-foreground text-right">
+                {lane.label}
+              </span>
+
+              {/* Lane bar */}
+              <div className="relative flex-1 h-6 rounded-md bg-muted/10 border border-border/20">
+                {/* Duration bar */}
+                {timeRange.totalMs > 0 && (
+                  <div
+                    className={cn("absolute top-0.5 bottom-0.5 rounded-sm border", SWIMLANE_COLORS[lane.category])}
+                    style={{
+                      left: `${((lane.startMs - timeRange.startMs) / timeRange.totalMs) * 100}%`,
+                      width: `${Math.max(((lane.endMs - lane.startMs) / timeRange.totalMs) * 100, 1)}%`,
+                    }}
+                  />
+                )}
+
+                {/* Event markers */}
+                {lane.events.map((ev) => {
+                  const posPercent = timeRange.totalMs > 0
+                    ? ((new Date(ev.timestamp).getTime() - timeRange.startMs) / timeRange.totalMs) * 100
+                    : 50;
+                  const isActive = activeEventId === ev.id;
+                  const dotColor = EVENT_COLORS[ev.event_type] ?? "bg-gray-500";
+
+                  return (
+                    <Tooltip key={ev.id}>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => onEventClick?.(ev)}
+                          className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2"
+                          style={{ left: `${posPercent}%` }}
+                        >
+                          <span className={cn(
+                            "block h-2 w-2 rounded-full transition-transform",
+                            dotColor,
+                            isActive && "scale-150 ring-2 ring-primary ring-offset-1 ring-offset-background",
+                          )} />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-[240px] space-y-0.5 text-[11px]">
+                        <div className="font-semibold">{ev.event_type.replace(/_/g, " ")}</div>
+                        <div className="text-muted-foreground">{formatTime(ev.timestamp)}</div>
+                        {ev.step_id && <div className="font-mono text-[10px] text-muted-foreground/70">step: {ev.step_id}</div>}
+                        {Object.keys(ev.payload).length > 0 && (
+                          <div className="text-[10px] text-muted-foreground/60">Click to inspect payload</div>
+                        )}
+                      </TooltipContent>
+                    </Tooltip>
+                  );
+                })}
+              </div>
+
+              {/* Lane event count */}
+              <span className="w-6 shrink-0 text-right text-[9px] tabular-nums text-muted-foreground/60">
+                {lane.events.length}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {/* Time axis */}
+        {timeRange.totalMs > 0 && (
+          <div className="flex items-center gap-2 pl-[5.5rem] pr-8">
+            <div className="relative flex-1 h-4">
+              <div className="absolute inset-x-0 top-1/2 h-px bg-border/30" />
+              <span className="absolute left-0 top-0 text-[9px] text-muted-foreground/50">0</span>
+              <span className="absolute left-1/4 top-0 -translate-x-1/2 text-[9px] text-muted-foreground/50">
+                {formatRelativeMs(timeRange.totalMs * 0.25)}
+              </span>
+              <span className="absolute left-1/2 top-0 -translate-x-1/2 text-[9px] text-muted-foreground/50">
+                {formatRelativeMs(timeRange.totalMs * 0.5)}
+              </span>
+              <span className="absolute left-3/4 top-0 -translate-x-1/2 text-[9px] text-muted-foreground/50">
+                {formatRelativeMs(timeRange.totalMs * 0.75)}
+              </span>
+              <span className="absolute right-0 top-0 text-[9px] text-muted-foreground/50">
+                {formatRelativeMs(timeRange.totalMs)}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Selected event detail */}
+        {activeEventId && (() => {
+          const activeEvent = sorted.find((e) => e.id === activeEventId);
+          if (!activeEvent || Object.keys(activeEvent.payload).length === 0) return null;
+          return (
+            <div className="rounded-md border border-border/40 bg-muted/10 p-2.5">
+              <div className="mb-1.5 flex items-center gap-2">
+                <span className={cn("h-2 w-2 rounded-full", EVENT_COLORS[activeEvent.event_type] ?? "bg-gray-500")} />
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-foreground">
+                  {activeEvent.event_type.replace(/_/g, " ")}
+                </span>
+                <span className="text-[10px] text-muted-foreground">{formatTime(activeEvent.timestamp)}</span>
+              </div>
+              <pre className="max-h-40 overflow-auto rounded-md bg-slate-950 p-2 text-[10px] leading-relaxed text-slate-100">
+                {JSON.stringify(activeEvent.payload, null, 2)}
+              </pre>
+            </div>
+          );
+        })()}
+      </div>
+    </TooltipProvider>
   );
 }

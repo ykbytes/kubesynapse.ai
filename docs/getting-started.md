@@ -133,7 +133,7 @@ python -m pip install -e ./cli
 Log in and export the returned token:
 
 ```bash
-agentctl --gateway-url http://localhost:8080 auth login -u admin -p "<your-password>"
+agentctl --gateway http://localhost:8080 auth login -u admin -p "<your-password>"
 export AGENT_GATEWAY_TOKEN="<token-from-login-output>"
 ```
 
@@ -146,7 +146,7 @@ $env:AGENT_GATEWAY_TOKEN="<token-from-login-output>"
 Invoke the sample agent:
 
 ```bash
-agentctl --gateway-url http://localhost:8080 invoke research-assistant "Summarize what KubeSynapse does and why it is Kubernetes-native."
+agentctl --gateway http://localhost:8080 invoke research-assistant "Summarize what KubeSynapse does and why it is Kubernetes-native."
 ```
 
 ### Option C: Raw API

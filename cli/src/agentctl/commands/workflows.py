@@ -38,6 +38,20 @@ workflows_app = typer.Typer(
 )
 
 
+def _workflow_field(data: dict[str, Any], snake_key: str, camel_key: str) -> Any:
+    return data.get(snake_key, data.get(camel_key))
+
+
+def _workflow_step_count(item: dict[str, Any]) -> int:
+    step_count = item.get("step_count")
+    if isinstance(step_count, int):
+        return step_count
+    steps = item.get("steps")
+    if isinstance(steps, list):
+        return len(steps)
+    return 0
+
+
 def _ns_params() -> dict[str, Any]:
     return {"namespace": get_settings().namespace}
 
@@ -58,8 +72,16 @@ def workflows_list() -> None:
         fatal(str(exc))
 
     items = data if isinstance(data, list) else []
+    normalized_items = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        normalized = dict(item)
+        normalized["current_step"] = _workflow_field(item, "current_step", "currentStep")
+        normalized["step_count"] = _workflow_step_count(item)
+        normalized_items.append(normalized)
     print_table(
-        items,
+        normalized_items,
         columns=[
             ("NAME", "name"),
             ("PHASE", "phase"),
@@ -210,7 +232,8 @@ def workflows_trigger(
     success(f"Workflow [bold]{workflow_name}[/bold] triggered in {settings.namespace}")
     if isinstance(data, dict):
         console.print(
-            f"  [dim]Phase:[/dim] {data.get('phase', 'pending')}  [dim]Step:[/dim] {data.get('current_step', '-')}"
+            "  [dim]Phase:[/dim] "
+            f"{data.get('phase', 'pending')}  [dim]Step:[/dim] {_workflow_field(data, 'current_step', 'currentStep') or '-'}"
         )
 
 
@@ -256,23 +279,31 @@ def workflows_status(workflow_name: str = typer.Argument(..., help="Workflow nam
     table.add_column("")
     table.add_row("Name", str(data.get("name", workflow_name)))
     table.add_row("Phase", str(data.get("phase", "pending")))
-    table.add_row("Current Step", str(data.get("current_step", "") or "-"))
-    table.add_row("Run ID", str(data.get("run_id", "") or "-"))
-    pending = data.get("pending_approval")
+    table.add_row("Current Step", str(_workflow_field(data, "current_step", "currentStep") or "-"))
+    table.add_row("Run ID", str(_workflow_field(data, "run_id", "runId") or "-"))
+    pending = _workflow_field(data, "pending_approval", "pendingApproval")
     if isinstance(pending, dict) and pending.get("name"):
         table.add_row("Pending Approval", str(pending["name"]))
     console.print(table)
 
     # Step states
-    step_states = data.get("step_states")
+    step_states = _workflow_field(data, "step_states", "stepStates")
     if isinstance(step_states, dict) and step_states:
         st = Table(title="Step States", border_style="bright_black", box=preferred_box())
         st.add_column("STEP", style="bold")
         st.add_column("PHASE")
         st.add_column("AGENT", style="cyan")
         for step_name, state_data in step_states.items():
-            phase = str(state_data.get("phase", "pending")) if isinstance(state_data, dict) else str(state_data)
-            agent = str(state_data.get("agent_ref", "-")) if isinstance(state_data, dict) else "-"
+            phase = (
+                str(state_data.get("phase", state_data.get("status", "pending")))
+                if isinstance(state_data, dict)
+                else str(state_data)
+            )
+            agent = (
+                str(state_data.get("agent_ref", state_data.get("agentRef", "-")))
+                if isinstance(state_data, dict)
+                else "-"
+            )
             st.add_row(str(step_name), Text(phase, style=status_style(phase)), agent)
         console.print(st)
 

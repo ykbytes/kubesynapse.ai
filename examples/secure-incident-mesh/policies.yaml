@@ -1,0 +1,57 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: secure-incident-commander-policy
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: secure-incident-mesh
+spec:
+  inputGuardrails:
+    blockPromptInjection: true
+    maxInputTokens: 12000
+  outputGuardrails:
+    maskPII: true
+    maxOutputTokens: 4000
+  allowedModels:
+    - litellm/gpt-5-mini
+  allowedMcpServers: []
+  mcpRequireHitl: true
+  toolPolicy:
+    maxDelegationDepth: 1
+  memoryPolicy:
+    maxInjectedMemories: 0
+    autoPromote: false
+  a2a:
+    allowedTargets:
+      - name: secure-signal-watch
+        namespace: default
+      - name: secure-remediation-planner
+        namespace: default
+      - name: secure-status-writer
+        namespace: default
+    maxTimeoutSeconds: 60
+    requireHitl: false
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: secure-incident-worker-policy
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: secure-incident-mesh
+spec:
+  inputGuardrails:
+    blockPromptInjection: true
+    maxInputTokens: 12000
+  outputGuardrails:
+    maskPII: true
+    maxOutputTokens: 4000
+  allowedModels:
+    - litellm/gpt-5-mini
+  allowedMcpServers: []
+  mcpRequireHitl: true
+  toolPolicy:
+    maxDelegationDepth: 0
+  memoryPolicy:
+    maxInjectedMemories: 0
+    autoPromote: false

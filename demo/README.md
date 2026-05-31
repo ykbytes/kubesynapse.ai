@@ -98,14 +98,14 @@ kubectl port-forward -n kubesynapse svc/kubesynapse-web-ui 3000:80
 3. Log in and export a token for `agentctl` and `curl`.
 
 ```bash
-agentctl --gateway-url http://localhost:8080 auth login -u admin -p "<your-password>"
+agentctl --gateway http://localhost:8080 auth login -u admin -p "<your-password>"
 export AGENT_GATEWAY_TOKEN="<token-from-login-output>"
 ```
 
 PowerShell:
 
 ```powershell
-agentctl --gateway-url http://localhost:8080 auth login -u admin -p "<your-password>"
+agentctl --gateway http://localhost:8080 auth login -u admin -p "<your-password>"
 $env:AGENT_GATEWAY_TOKEN = "<token-from-login-output>"
 ```
 
@@ -127,9 +127,9 @@ kubectl apply -f demo/creative-production/bundle.yaml
 Trigger the manual workflows:
 
 ```bash
-agentctl --gateway-url http://localhost:8080 workflows trigger ingress-upgrade-release-readiness
-agentctl --gateway-url http://localhost:8080 workflows trigger multi-cluster-platform-decision
-agentctl --gateway-url http://localhost:8080 workflows trigger conference-launch-pack
+agentctl --gateway http://localhost:8080 workflows trigger ingress-upgrade-release-readiness
+agentctl --gateway http://localhost:8080 workflows trigger multi-cluster-platform-decision
+agentctl --gateway http://localhost:8080 workflows trigger conference-launch-pack
 ```
 
 Trigger the event-driven workflow via signed webhook:

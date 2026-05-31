@@ -424,8 +424,8 @@ pre .fn { color:var(--c-amber); }
 
     <div class="stat-grid mt-50">
       <div class="stat-box"><div class="stat-val">12</div><div class="stat-lbl">CRDs</div></div>
-      <div class="stat-box"><div class="stat-val">3</div><div class="stat-lbl">Runtimes</div></div>
-      <div class="stat-box"><div class="stat-val">11</div><div class="stat-lbl">MCP Sidecars</div></div>
+      <div class="stat-box"><div class="stat-val">3</div><div class="stat-lbl">Runtime Kinds</div></div>
+      <div class="stat-box"><div class="stat-val">10</div><div class="stat-lbl">Tool Sidecars</div></div>
       <div class="stat-box"><div class="stat-val">100%</div><div class="stat-lbl">Self-Hosted</div></div>
     </div>
   </div>
@@ -551,15 +551,15 @@ found 3 critical vulnerabilities.
     <div class="crd-item" style="border-top-color:var(--c-emerald);"><div class="crd-name">AIAgent</div><div class="crd-desc">Agent definition & spec</div></div>
     <div class="crd-item" style="border-top-color:var(--c-emerald);"><div class="crd-name">AgentPolicy</div><div class="crd-desc">Guardrails & limits</div></div>
     <div class="crd-item" style="border-top-color:var(--c-emerald);"><div class="crd-name">AgentWorkflow</div><div class="crd-desc">Multi-step DAG</div></div>
-    <div class="crd-item" style="border-top-color:var(--c-emerald);"><div class="crd-name">AgentTeam</div><div class="crd-desc">Multi-agent groups</div></div>
+    <div class="crd-item" style="border-top-color:var(--c-emerald);"><div class="crd-name">AgentApproval</div><div class="crd-desc">Human approval state</div></div>
     <div class="crd-item" style="border-top-color:var(--c-violet);"><div class="crd-name">McpConnection</div><div class="crd-desc">Tool integrations</div></div>
     <div class="crd-item" style="border-top-color:var(--c-violet);"><div class="crd-name">WebhookReceiver</div><div class="crd-desc">Inbound event intake</div></div>
     <div class="crd-item" style="border-top-color:var(--c-violet);"><div class="crd-name">WorkflowTrigger</div><div class="crd-desc">Event-to-workflow map</div></div>
-    <div class="crd-item" style="border-top-color:var(--c-violet);"><div class="crd-name">AgentSchedule</div><div class="crd-desc">Cron-based execution</div></div>
-    <div class="crd-item" style="border-top-color:var(--c-sky);"><div class="crd-name">AgentMetrics</div><div class="crd-desc">Usage tracking</div></div>
-    <div class="crd-item" style="border-top-color:var(--c-sky);"><div class="crd-name">ModelConfig</div><div class="crd-desc">Provider setup</div></div>
+    <div class="crd-item" style="border-top-color:var(--c-violet);"><div class="crd-name">AgentTenant</div><div class="crd-desc">Tenant isolation</div></div>
+    <div class="crd-item" style="border-top-color:var(--c-sky);"><div class="crd-name">ConnectorPlugin</div><div class="crd-desc">Observability connector</div></div>
+    <div class="crd-item" style="border-top-color:var(--c-sky);"><div class="crd-name">ObservationTarget</div><div class="crd-desc">Observed resource</div></div>
     <div class="crd-item" style="border-top-color:var(--c-sky);"><div class="crd-name">ObservationReport</div><div class="crd-desc">System analysis</div></div>
-    <div class="crd-item" style="border-top-color:var(--c-sky);"><div class="crd-name">AgentAlert</div><div class="crd-desc">Anomaly signals</div></div>
+    <div class="crd-item" style="border-top-color:var(--c-sky);"><div class="crd-name">ObservationPolicy</div><div class="crd-desc">Evaluation rules</div></div>
   </div>
 
   <div style="display:flex;gap:14px;margin-top:24px;justify-content:center;">
@@ -608,11 +608,11 @@ found 3 critical vulnerabilities.
         <li>Optional gVisor sandbox</li>
         <li>Per-agent NetworkPolicy</li>
       </ul>
-      <h3 style="margin-top:28px;margin-bottom:12px;">Three Runtime Types</h3>
+      <h3 style="margin-top:28px;margin-bottom:12px;">Runtime Kinds</h3>
       <div style="display:flex;gap:10px;">
-        <span class="badge be">opencode</span>
-        <span class="badge bv">pi</span>
-        <span class="badge bf">mistral-vibe</span>
+        <span class="badge be">opencode (prod)</span>
+        <span class="badge bv">pi (alpha)</span>
+        <span class="badge bf">mistral-vibe (alpha)</span>
       </div>
     </div>
   </div>
@@ -825,9 +825,8 @@ found 3 critical vulnerabilities.
         <span class="badge br" style="font-size:12px;">messaging</span>
         <span class="badge be" style="font-size:12px;">RAG</span>
         <span class="badge bb" style="font-size:12px;">documents</span>
-        <span class="badge bv" style="font-size:12px;">collector</span>
       </div>
-      <p style="font-size:12px;margin-top:14px;font-style:italic;">11 bundled sidecars, extensible with custom images</p>
+      <p style="font-size:12px;margin-top:14px;font-style:italic;">10 bundled tool sidecars, plus a separate collector sidecar and shared MCP hub integrations</p>
     </div>
     <div class="card">
       <h3 style="font-size:20px;color:var(--c-violet);margin-bottom:10px;">Shared MCP Hub</h3>

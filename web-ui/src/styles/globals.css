@@ -1001,6 +1001,43 @@ body::after {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/* Restore readable docs contrast in light theme even when older section content
+   still carries hard-coded dark-theme utility classes. */
+[data-theme="light"] .docs-content p,
+[data-theme="light"] .docs-content li,
+[data-theme="light"] .docs-content ul,
+[data-theme="light"] .docs-content ol,
+[data-theme="light"] .docs-content h2,
+[data-theme="light"] .docs-content h3,
+[data-theme="light"] .docs-content h4,
+[data-theme="light"] .docs-content td,
+[data-theme="light"] .docs-content th,
+[data-theme="light"] .docs-content label {
+  color: oklch(var(--color-foreground));
+}
+
+[data-theme="light"] .docs-content .text-muted-foreground,
+[data-theme="light"] .docs-content [class*="text-muted-foreground"] {
+  color: oklch(0.34 0.012 264);
+}
+
+[data-theme="light"] .docs-content a {
+  color: oklch(0.46 0.14 244);
+}
+
+[data-theme="light"] .docs-content strong,
+[data-theme="light"] .docs-content b {
+  color: oklch(var(--color-foreground));
+}
+
+[data-theme="light"] .docs-content code {
+  color: oklch(0.24 0.016 264);
+}
+
+[data-theme="light"] .docs-content .mermaid svg {
+  color: oklch(0.94 0.008 252);
+}
 .docs-content p,
 .docs-content li,
 .docs-content h2,
@@ -1044,12 +1081,31 @@ body::after {
   tab-size: 2;
 }
 
+[data-theme="light"] .markdown-body {
+  color: oklch(var(--color-foreground));
+}
+
+[data-theme="light"] .markdown-body .mk-code-block,
+[data-theme="light"] .markdown-body .mk-code-block code,
+[data-theme="light"] .markdown-body .mk-inline-code {
+  color: oklch(0.22 0.018 264);
+}
+
+[data-theme="light"] .markdown-body .mk-inline-code {
+  background: oklch(0.95 0.004 264);
+  border-color: oklch(0.86 0.01 264);
+}
+
 /* Table styling */
 .mk-table {
   border-collapse: collapse;
 }
 .mk-table tr:nth-child(even) {
   background: oklch(0.18 0.008 274 / 0.5);
+}
+
+[data-theme="light"] .mk-table tr:nth-child(even) {
+  background: oklch(0.972 0.004 264);
 }
 
 /* Task list checkboxes (from remark-gfm) */

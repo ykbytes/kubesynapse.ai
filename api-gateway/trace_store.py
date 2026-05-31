@@ -937,7 +937,9 @@ def list_executions(
     namespace: str | None = None,
     workflow_name: str | None = None,
     agent_name: str | None = None,
+    run_id: str | None = None,
     status: str | None = None,
+    execution_kind: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -950,8 +952,15 @@ def list_executions(
             query = query.filter_by(workflow_name=workflow_name)
         if agent_name:
             query = query.filter_by(agent_name=agent_name)
+        if run_id:
+            query = query.filter_by(run_id=run_id)
         if status:
             query = query.filter_by(status=status)
+        normalized_kind = (execution_kind or "").strip().lower()
+        if normalized_kind == "workflow":
+            query = query.filter(WorkflowExecution.triggered_by != "direct-invoke")
+        elif normalized_kind == "invoke":
+            query = query.filter(WorkflowExecution.triggered_by == "direct-invoke")
         query = query.order_by(WorkflowExecution.started_at.desc())
         executions = query.limit(limit).offset(offset).all()
         return [_serialize_execution(session, execution) for execution in executions]

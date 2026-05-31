@@ -2,6 +2,7 @@ import importlib.util
 import os
 import sys
 import tempfile
+import types
 import unittest
 import uuid
 from pathlib import Path
@@ -193,6 +194,61 @@ class StateStoreTests(unittest.TestCase):
         )
 
         self.assertIsNone(conflict)
+
+    def test_check_workflow_run_conflict_scopes_by_resource_uid_without_json_query(self) -> None:
+        self.state_store.safe_record_workflow_state(
+            namespace="team-a",
+            resource_name="workflow-one",
+            generation=5,
+            run_id="workflow-one-5-old",
+            phase="queued",
+            spec={"steps": [{"name": "draft"}]},
+            status={"summary": {"phase": "queued", "resourceUid": "uid-old"}},
+        )
+
+        self.state_store.safe_record_workflow_state(
+            namespace="team-a",
+            resource_name="workflow-one",
+            generation=5,
+            run_id="workflow-one-5-current",
+            phase="queued",
+            spec={"steps": [{"name": "draft"}]},
+            status={"summary": {"phase": "queued", "resourceUid": "uid-current"}},
+        )
+
+        conflict = self.state_store.check_workflow_run_conflict(
+            "team-a",
+            "workflow-one",
+            5,
+            "workflow-one-5-next",
+            resource_uid="uid-current",
+        )
+
+        self.assertEqual(conflict, "workflow-one-5-current")
+
+    def test_init_database_stamps_existing_tables_into_operator_version_table(self) -> None:
+        inspector = unittest.mock.Mock()
+        inspector.has_table.side_effect = lambda table_name: table_name == "workflow_runs"
+        alembic_command = types.SimpleNamespace(
+            upgrade=unittest.mock.Mock(),
+            stamp=unittest.mock.Mock(),
+        )
+        alembic_config = unittest.mock.Mock()
+        alembic_module = types.SimpleNamespace(
+            command=alembic_command,
+            config=types.SimpleNamespace(Config=alembic_config),
+        )
+
+        with (
+            patch.object(self.state_store, "inspect", return_value=inspector),
+            patch.object(self.state_store.Base.metadata, "create_all") as create_all,
+            patch.dict(sys.modules, {"alembic": alembic_module, "alembic.command": alembic_command, "alembic.config": alembic_module.config}),
+        ):
+            self.state_store.init_database()
+
+        create_all.assert_called_once_with(bind=self.state_store.ENGINE)
+        alembic_command.stamp.assert_called_once()
+        alembic_command.upgrade.assert_not_called()
 
 
 class DatabaseDriverValidationTests(unittest.TestCase):

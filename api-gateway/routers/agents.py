@@ -1184,7 +1184,7 @@ async def download_agent_artifact(
     user=Depends(verify_token),
 ):
     ensure_namespace_access(user, namespace)
-    await asyncio.to_thread(read_agent, agent_name, namespace)
+    await asyncio.to_thread(read_agent_cached, agent_name, namespace)
 
     async with httpx.AsyncClient(timeout=AGENT_RUNTIME_TIMEOUT_SECONDS, trust_env=False) as client:
         try:
@@ -1225,7 +1225,7 @@ async def download_agent_artifacts_zip(
 ):
     """Download a ZIP archive of all workspace files from an agent runtime."""
     ensure_namespace_access(user, namespace)
-    await asyncio.to_thread(read_agent, agent_name, namespace)
+    await asyncio.to_thread(read_agent_cached, agent_name, namespace)
 
     params: dict[str, str] = {}
     if root:
@@ -1269,7 +1269,7 @@ async def list_agent_artifacts(
     user=Depends(verify_token),
 ):
     ensure_namespace_access(user, namespace)
-    await asyncio.to_thread(read_agent, agent_name, namespace)
+    await asyncio.to_thread(read_agent_cached, agent_name, namespace)
 
     params: dict[str, str] = {}
     if root:
