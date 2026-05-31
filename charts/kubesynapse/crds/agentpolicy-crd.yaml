@@ -16,6 +16,15 @@ spec:
             spec:
               type: object
               properties:
+                # --- Policy Seal ---
+                sealed:
+                  type: boolean
+                  default: false
+                  description: |
+                    When true, this policy is sealed and cannot be modified through
+                    the API or kubectl. Enforcement is handled by OPA Gatekeeper
+                    ConstraintTemplate KubeSynapseProtectSealedPolicy. Only platform
+                    admins with direct etcd access or Helm upgrades can unseal.
                 # --- Input Guardrails ---
                 inputGuardrails:
                   type: object
@@ -110,6 +119,19 @@ spec:
                   type: object
                   description: "Lightweight tool governance controls for runtime tools, MCP calls, and delegation depth"
                   properties:
+                    adminToolCeiling:
+                      type: object
+                      description: |
+                        Platform-admin tool permission ceiling. Defines the maximum permission
+                        level any agent under this policy can have for each tool. Applied by
+                        the operator as a hard cap — even if the agent's opencode.json says
+                        "allow", the ceiling reduces it to the specified level.
+                        Keys are OpenCode permission IDs (bash, edit, write, read, glob, grep,
+                        webfetch, websearch, task, todowrite, skill, question, webbrowse,
+                        external_directory). Values are "allow", "ask", or "deny".
+                      additionalProperties:
+                        type: string
+                        enum: ["allow", "ask", "deny"]
                     maxDelegationDepth:
                       type: integer
                       minimum: 0

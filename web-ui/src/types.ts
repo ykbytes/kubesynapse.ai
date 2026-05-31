@@ -604,6 +604,7 @@ export interface PolicyToolPolicy {
   allowedToolPrefixes: string[];
   blockedToolNames: string[];
   requireApprovalFor: string[];
+  adminToolCeiling?: Record<string, "allow" | "ask" | "deny">;
 }
 
 export interface PolicyMemoryPolicy {
@@ -616,6 +617,7 @@ export interface PolicyMemoryPolicy {
 export interface PolicyInfo {
   name: string;
   namespace: string;
+  sealed?: boolean;
   input_guardrails: PolicyInputGuardrails;
   output_guardrails: PolicyOutputGuardrails;
   allowed_models: string[];

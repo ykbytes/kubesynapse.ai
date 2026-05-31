@@ -3,8 +3,84 @@
 Mounted read-only at /etc/kubesynapse/opencode.json to prevent
 config-driven RCE via plugins, MCP server commands, or provider
 baseURL redirect.
+
+Security level presets:
+  permissive: bash=allow (backward compatible, suitable for trusted envs)
+  standard:   bash=ask   (recommended for shared clusters)
+  strict:     bash=deny  (maximum lockdown, code review only)
+
+The permissionFloor is merged last and cannot be overridden by any policy.
 */}}
 {{- if .Values.opencodeRuntime.immutableConfig | default true }}
+
+{{/* Resolve security preset into base permissions */}}
+{{- $securityLevel := .Values.opencodeRuntime.securityLevel | default "permissive" }}
+{{- $basePerms := dict }}
+
+{{- if eq $securityLevel "strict" }}
+{{-   $basePerms = dict
+        "bash" "deny"
+        "edit" "ask"
+        "write" "ask"
+        "read" (dict "*" "allow" "*clipboard*" "deny")
+        "glob" "allow"
+        "grep" "allow"
+        "webfetch" "ask"
+        "websearch" "ask"
+        "task" "allow"
+        "todowrite" "allow"
+        "skill" "ask"
+        "question" "allow"
+        "webbrowse" "deny"
+        "external_directory" "deny"
+}}
+{{- else if eq $securityLevel "standard" }}
+{{-   $basePerms = dict
+        "bash" "ask"
+        "edit" "allow"
+        "write" "allow"
+        "read" (dict "*" "allow" "*clipboard*" "deny")
+        "glob" "allow"
+        "grep" "allow"
+        "webfetch" "allow"
+        "websearch" "allow"
+        "task" "allow"
+        "todowrite" "allow"
+        "skill" "allow"
+        "question" "allow"
+        "webbrowse" "ask"
+        "external_directory" "deny"
+}}
+{{- else }}
+{{/* permissive (default) */}}
+{{-   $basePerms = dict
+        "bash" "allow"
+        "edit" "allow"
+        "write" "allow"
+        "read" (dict "*" "allow" "*clipboard*" "deny")
+        "glob" "allow"
+        "grep" "allow"
+        "webfetch" "allow"
+        "websearch" "allow"
+        "task" "allow"
+        "todowrite" "allow"
+        "skill" "allow"
+        "question" "allow"
+        "webbrowse" "allow"
+        "external_directory" "deny"
+}}
+{{- end }}
+
+{{/* Apply permissionOverrides on top of preset */}}
+{{- range $key, $val := .Values.opencodeRuntime.permissionOverrides | default dict }}
+{{-   $_ := set $basePerms $key $val }}
+{{- end }}
+
+{{/* Apply permissionFloor last — these cannot be weakened */}}
+{{- range $key, $val := .Values.opencodeRuntime.permissionFloor | default dict }}
+{{-   $_ := set $basePerms $key $val }}
+{{- end }}
+
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -14,23 +90,14 @@ metadata:
     app.kubernetes.io/component: opencode-runtime-config
   annotations:
     helm.sh/resource-policy: keep
+    kubesynapse.ai/security-level: {{ $securityLevel | quote }}
+    kubesynapse.ai/config-version: "2"
 immutable: true
 data:
   opencode.json: |
     {
       "plugin": [],
-      "permission": {
-        "bash": "allow",
-        "external_directory": "deny",
-        "edit": "allow",
-        "write": "allow",
-        "webfetch": "allow",
-        "websearch": "allow",
-        "read": {
-          "*": "allow",
-          "*clipboard*": "deny"
-        }
-      },
+      "permission": {{ $basePerms | toJson | nindent 8 }},
       "mcp": {},
       "skills": { "urls": [] },
       "provider": {}

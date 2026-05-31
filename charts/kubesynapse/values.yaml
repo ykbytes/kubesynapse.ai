@@ -122,6 +122,29 @@ opencodeRuntime:
   #         edit: false
   #       ---
   #       Focus on regressions, operational risk, and missing tests.
+  # ─── Security Presets ─────────────────────────────────────────────────────
+  # Controls the immutable opencode.json that is mounted into every OpenCode
+  # runtime pod. The securityLevel presets map to permission configurations:
+  #   permissive (default): bash=allow, edit=allow, write=allow, webfetch=allow
+  #   standard:             bash=ask,   edit=allow, write=allow, webfetch=allow
+  #   strict:               bash=deny,  edit=ask,   write=ask,   webfetch=ask
+  securityLevel: "permissive"
+  # Per-permission overrides (applied on top of the preset).
+  # Keys: bash, edit, write, read, glob, grep, webfetch, websearch,
+  #        task, todowrite, skill, question, webbrowse, external_directory
+  # Values: "allow" | "ask" | "deny" | object with pattern rules
+  permissionOverrides: {}
+  #   bash: "ask"
+  #   external_directory: "deny"
+  #   read:
+  #     "*": "allow"
+  #     "*clipboard*": "deny"
+  # Admin permission floor — merged AFTER all policy overrides.
+  # Any permission set here cannot be escalated by any AgentPolicy.
+  # Example: set bash=deny here to globally prevent shell access.
+  permissionFloor: {}
+  #   bash: "deny"
+  #   external_directory: "deny"
 
 # ---------------------------------------------------------------------------
 # Credential Proxy Sidecar
@@ -717,6 +740,43 @@ agentRuntime:
   # Kubernetes MCP sidecar).  Disabled by default — enable only
   # when agents genuinely need cross-namespace cluster visibility.
   clusterReadAccess: false
+
+# ---------------------------------------------------------------------------
+# OPA Gatekeeper — admission-level policy enforcement
+# ---------------------------------------------------------------------------
+# Installs Gatekeeper as a sub-chart dependency. When enabled, the chart
+# also deploys KubeSynapse-specific ConstraintTemplates that enforce:
+#   1. Every AIAgent must have a valid policyRef
+#   2. Sealed policies cannot be modified
+#   3. Tool pattern rules conform to expected format
+#   4. Policies referenced by live agents cannot be deleted
+gatekeeper:
+  enabled: false
+  # Install KubeSynapse-specific constraint templates
+  constraintTemplates:
+    enabled: true
+  # Enforcement action for KubeSynapse constraints: deny | dryrun | warn
+  enforcementAction: "deny"
+  # Gatekeeper sub-chart overrides (see gatekeeper chart values for full list)
+  replicas: 1
+  auditInterval: 60
+  constraintViolationsLimit: 20
+  audit:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 1000m
+        memory: 512Mi
+  controllerManager:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 1000m
+        memory: 512Mi
 
 # ---------------------------------------------------------------------------
 # Default Memory Policy

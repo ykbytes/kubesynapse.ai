@@ -59,6 +59,7 @@ const DEFAULT_MEMORY: PolicyMemoryPolicy = {
 function EMPTY_FORM() {
   return {
     name: "",
+    sealed: false,
     inputGuardrails: { ...DEFAULT_INPUT },
     outputGuardrails: { ...DEFAULT_OUTPUT },
     allowedModels: [] as string[],
@@ -66,6 +67,7 @@ function EMPTY_FORM() {
     mcpRequireHitl: true,
     toolPolicy: { ...DEFAULT_TOOL } as PolicyToolPolicy,
     memoryPolicy: { ...DEFAULT_MEMORY } as PolicyMemoryPolicy,
+    adminToolCeiling: {} as Record<string, "allow" | "ask" | "deny">,
   };
 }
 
@@ -77,19 +79,22 @@ type PolicyTab = "overview" | "guardrails" | "access" | "tools" | "memory";
 function formsAreEqual(a: FormState, b: FormState): boolean {
   return (
     a.name === b.name &&
+    a.sealed === b.sealed &&
     JSON.stringify(a.inputGuardrails) === JSON.stringify(b.inputGuardrails) &&
     JSON.stringify(a.outputGuardrails) === JSON.stringify(b.outputGuardrails) &&
     JSON.stringify(a.allowedModels) === JSON.stringify(b.allowedModels) &&
     JSON.stringify(a.allowedMcpServers) === JSON.stringify(b.allowedMcpServers) &&
     a.mcpRequireHitl === b.mcpRequireHitl &&
     JSON.stringify(a.toolPolicy) === JSON.stringify(b.toolPolicy) &&
-    JSON.stringify(a.memoryPolicy) === JSON.stringify(b.memoryPolicy)
+    JSON.stringify(a.memoryPolicy) === JSON.stringify(b.memoryPolicy) &&
+    JSON.stringify(a.adminToolCeiling) === JSON.stringify(b.adminToolCeiling)
   );
 }
 
 function policyToForm(policy: PolicyInfo): FormState {
   return {
     name: policy.name,
+    sealed: policy.sealed ?? false,
     inputGuardrails: { ...policy.input_guardrails },
     outputGuardrails: { ...policy.output_guardrails },
     allowedModels: [...policy.allowed_models],
@@ -107,6 +112,7 @@ function policyToForm(policy: PolicyInfo): FormState {
       allowedMemoryTypes: [...policy.memory_policy.allowedMemoryTypes],
       autoPromote: policy.memory_policy.autoPromote,
     },
+    adminToolCeiling: { ...(policy.tool_policy.adminToolCeiling || {}) },
   };
 }
 
@@ -486,6 +492,69 @@ function PermissionRow({
   );
 }
 
+// ── Admin Tool Ceiling Row ────────────────────────────────────────────────
+
+type CeilingAction = "allow" | "ask" | "deny" | "none";
+
+const CEILING_COLORS: Record<CeilingAction, string> = {
+  none: "bg-muted text-muted-foreground",
+  allow: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  ask: "bg-amber-500/15 text-amber-400 border-amber-500/30",
+  deny: "bg-red-500/15 text-red-400 border-red-500/30",
+};
+
+const CEILING_LABELS: Record<CeilingAction, string> = {
+  none: "No Cap",
+  allow: "Cap: Allow",
+  ask: "Cap: Ask",
+  deny: "Cap: Deny",
+};
+
+function CeilingActionSelector({ value, onChange }: { value: CeilingAction; onChange: (v: CeilingAction) => void }) {
+  const actions: CeilingAction[] = ["none", "allow", "ask", "deny"];
+  return (
+    <div className="flex gap-0.5 rounded-md border border-border/50 p-0.5 bg-muted/30">
+      {actions.map((a) => (
+        <button
+          key={a}
+          type="button"
+          onClick={() => onChange(a)}
+          className={cn(
+            "px-2 py-0.5 text-[10px] font-medium rounded transition-all",
+            value === a ? cn(CEILING_COLORS[a], "border shadow-sm") : "text-muted-foreground hover:text-foreground"
+          )}
+        >
+          {CEILING_LABELS[a]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CeilingRow({
+  tool,
+  ceiling,
+  onChange,
+}: {
+  tool: KnownTool;
+  ceiling: CeilingAction;
+  onChange: (v: CeilingAction) => void;
+}) {
+  const ToolIcon = tool.icon;
+  return (
+    <div className="flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-muted/30 transition-colors">
+      <ToolIcon className={cn("h-3.5 w-3.5 shrink-0", tool.color)} />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-foreground">{tool.label}</span>
+          <code className="text-[10px] text-muted-foreground font-mono">{tool.id}</code>
+        </div>
+      </div>
+      <CeilingActionSelector value={ceiling} onChange={onChange} />
+    </div>
+  );
+}
+
 function ToggleSwitch({ label, description, checked, onChange }: { label: string; description?: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <div className="flex items-center justify-between gap-4 py-2">
@@ -818,12 +887,16 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
         }
         const payload: CreatePolicyPayload = {
           name: trimmedName,
+          sealed: form.sealed,
           input_guardrails: form.inputGuardrails,
           output_guardrails: form.outputGuardrails,
           allowed_models: form.allowedModels,
           allowed_mcp_servers: form.allowedMcpServers,
           mcp_require_hitl: form.mcpRequireHitl,
-          tool_policy: form.toolPolicy,
+          tool_policy: {
+            ...form.toolPolicy,
+            adminToolCeiling: Object.keys(form.adminToolCeiling).length > 0 ? form.adminToolCeiling : undefined,
+          },
           memory_policy: form.memoryPolicy,
         };
         await createPolicy(token, namespace, payload);
@@ -833,12 +906,16 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
         lastLoadedPolicyName.current = null;
       } else {
         const payload: UpdatePolicyPayload = {
+          sealed: form.sealed,
           input_guardrails: form.inputGuardrails,
           output_guardrails: form.outputGuardrails,
           allowed_models: form.allowedModels,
           allowed_mcp_servers: form.allowedMcpServers,
           mcp_require_hitl: form.mcpRequireHitl,
-          tool_policy: form.toolPolicy,
+          tool_policy: {
+            ...form.toolPolicy,
+            adminToolCeiling: Object.keys(form.adminToolCeiling).length > 0 ? form.adminToolCeiling : undefined,
+          },
           memory_policy: form.memoryPolicy,
         };
         await updatePolicy(token, namespace, form.name, payload);
@@ -1036,7 +1113,7 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
               {!isCreateMode && (
                 <TabsContent value="overview" className="mt-0 space-y-5">
                   {/* KPI Scorecard */}
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
                     <KpiChip
                       icon={ShieldCheck}
                       label="Guardrails"
@@ -1060,6 +1137,12 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
                       label="HITL"
                       value={form.mcpRequireHitl ? "Required" : "Off"}
                       tone={form.mcpRequireHitl ? "warning" : "neutral"}
+                    />
+                    <KpiChip
+                      icon={ShieldAlert}
+                      label="Sealed"
+                      value={form.sealed ? "Locked" : "Open"}
+                      tone={form.sealed ? "danger" : "neutral"}
                     />
                   </div>
 
@@ -1180,6 +1263,49 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
                       </p>
                     </div>
                   )}
+
+                  {/* Policy Seal */}
+                  <div className={cn(
+                    "rounded-lg border p-4",
+                    form.sealed
+                      ? "border-red-500/30 bg-red-500/5"
+                      : "border-border/50 bg-card"
+                  )}>
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-2">
+                        <ShieldAlert className={cn("h-4 w-4", form.sealed ? "text-red-500" : "text-muted-foreground")} />
+                        <div>
+                          <h4 className="text-xs font-semibold text-foreground">Policy Seal</h4>
+                          <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">
+                            {form.sealed
+                              ? "This policy is sealed. It cannot be modified via the API or kubectl. Only Helm upgrades or direct etcd access can unseal it."
+                              : "Seal this policy to prevent any modifications. Enforced by OPA Gatekeeper admission webhook."}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => updateForm({ sealed: !form.sealed })}
+                        className={cn(
+                          "relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                          form.sealed ? "bg-red-500" : "bg-input"
+                        )}
+                      >
+                        <span className={cn(
+                          "pointer-events-none block h-4 w-4 rounded-full bg-background shadow-sm ring-0 transition-transform duration-200",
+                          form.sealed ? "translate-x-5" : "translate-x-0.5"
+                        )} />
+                      </button>
+                    </div>
+                    {form.sealed && (
+                      <div className="mt-3 flex items-center gap-2 px-2 py-1.5 rounded-md bg-red-500/10 border border-red-500/20">
+                        <AlertTriangle className="h-3 w-3 text-red-400 shrink-0" />
+                        <span className="text-[10px] text-red-400 font-medium">
+                          Warning: Once saved as sealed, this policy cannot be modified without OPA Gatekeeper being disabled or using a Helm upgrade.
+                        </span>
+                      </div>
+                    )}
+                  </div>
                 </TabsContent>
               )}
 
@@ -1350,6 +1476,47 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
                   <pre className="px-3 py-2 text-[11px] font-mono text-muted-foreground overflow-x-auto max-h-[200px] overflow-y-auto">
                     {generatePermissionPreview(form.toolPolicy)}
                   </pre>
+                </div>
+
+                {/* ── Admin Tool Ceiling ──────────────────────────────────── */}
+                <div className="rounded-lg border border-orange-500/30 bg-orange-500/5">
+                  <div className="flex items-center gap-2 px-3 py-2.5 border-b border-orange-500/20">
+                    <ShieldAlert className="h-4 w-4 text-orange-500" />
+                    <div className="flex-1">
+                      <span className="text-xs font-semibold text-foreground">Admin Tool Ceiling</span>
+                      <span className="text-[10px] text-muted-foreground ml-2">Platform Admin Only</span>
+                    </div>
+                    <Badge variant="outline" className="text-[9px] py-0 px-1.5 h-4 border-orange-500/30 text-orange-400">
+                      {Object.keys(form.adminToolCeiling).length} cap{Object.keys(form.adminToolCeiling).length !== 1 ? "s" : ""}
+                    </Badge>
+                  </div>
+                  <div className="px-3 py-2">
+                    <p className="text-[10px] text-muted-foreground mb-3 leading-relaxed">
+                      Set maximum permission ceilings per tool. Even if an agent&apos;s config says &quot;allow&quot;, the ceiling
+                      caps the effective permission. Enforced by the operator at pod creation time.
+                    </p>
+                    <div className="divide-y divide-border/30">
+                      {KNOWN_TOOLS.filter((t) => t.id !== "doom_loop").map((tool) => {
+                        const ceilingVal = form.adminToolCeiling[tool.id] as CeilingAction | undefined;
+                        return (
+                          <CeilingRow
+                            key={tool.id}
+                            tool={tool}
+                            ceiling={ceilingVal || "none"}
+                            onChange={(v) => {
+                              const next = { ...form.adminToolCeiling };
+                              if (v === "none") {
+                                delete next[tool.id];
+                              } else {
+                                next[tool.id] = v as "allow" | "ask" | "deny";
+                              }
+                              updateForm({ adminToolCeiling: next });
+                            }}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
               </TabsContent>
 

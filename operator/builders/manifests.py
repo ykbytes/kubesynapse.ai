@@ -288,6 +288,70 @@ def _resolve_policy_model_output_limit(policy_spec: dict[str, Any] | None) -> in
 
 
 # ---------------------------------------------------------------------------
+# Admin Tool Ceiling & Policy Attestation
+# ---------------------------------------------------------------------------
+
+# Permission strength ordering for ceiling enforcement
+_PERMISSION_STRENGTH: dict[str, int] = {"deny": 0, "ask": 1, "allow": 2}
+_VALID_TOOL_IDS: frozenset[str] = frozenset({
+    "bash", "edit", "write", "read", "glob", "grep", "webfetch", "websearch",
+    "task", "todowrite", "skill", "question", "webbrowse", "external_directory",
+})
+
+
+def _resolve_admin_tool_ceiling(policy_spec: dict[str, Any] | None) -> dict[str, str]:
+    """Extract and validate the adminToolCeiling from a policy spec.
+
+    Returns a dict mapping tool IDs to their ceiling permission level.
+    Only returns entries that are valid (known tool IDs, valid actions).
+    """
+    if not policy_spec:
+        return {}
+    tool_policy = policy_spec.get("toolPolicy")
+    if not isinstance(tool_policy, dict):
+        return {}
+    ceiling = tool_policy.get("adminToolCeiling")
+    if not isinstance(ceiling, dict):
+        return {}
+
+    validated: dict[str, str] = {}
+    for tool_id, action in ceiling.items():
+        tool_id_str = str(tool_id).strip().lower()
+        action_str = str(action).strip().lower()
+        if tool_id_str not in _VALID_TOOL_IDS:
+            logger.warning(
+                "Ignoring unknown tool ID '%s' in adminToolCeiling", tool_id_str
+            )
+            continue
+        if action_str not in _PERMISSION_STRENGTH:
+            logger.warning(
+                "Ignoring invalid action '%s' for tool '%s' in adminToolCeiling",
+                action_str, tool_id_str,
+            )
+            continue
+        validated[tool_id_str] = action_str
+
+    return validated
+
+
+def _compute_policy_hash(
+    policy_name: str | None, policy_spec: dict[str, Any] | None
+) -> str:
+    """Compute a deterministic hash of the policy spec for runtime attestation.
+
+    The hash is included in the runtime pod's env so that the gateway can
+    verify the agent is running with the expected policy configuration.
+    """
+    import hashlib
+
+    if not policy_name or not policy_spec:
+        return ""
+    # Create a canonical JSON representation for hashing
+    canonical = json.dumps(policy_spec, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(f"{policy_name}:{canonical}".encode()).hexdigest()[:16]
+
+
+# ---------------------------------------------------------------------------
 # Runtime config file mergers
 # ---------------------------------------------------------------------------
 
@@ -2432,6 +2496,27 @@ def create_agent_statefulset_manifest(
             }
         )
     env.extend(runtime_extra_env)
+
+    # §security-P1: Inject policy-defined admin tool ceiling.
+    # The ceiling caps the maximum permission level an agent can exercise
+    # for each tool, regardless of what the immutable config allows.
+    # Applied as a JSON env var that the runtime reads at startup.
+    admin_tool_ceiling = _resolve_admin_tool_ceiling(policy_spec)
+    if admin_tool_ceiling:
+        env.append(
+            {
+                "name": "OPENCODE_ADMIN_PERMISSION_CEILING_JSON",
+                "value": json.dumps(admin_tool_ceiling, ensure_ascii=False, sort_keys=True),
+            }
+        )
+
+    # §security-P1: Inject sealed policy hash for runtime attestation.
+    # The runtime can include this in healthz responses for gateway verification.
+    policy_hash = _compute_policy_hash(policy_name, policy_spec)
+    if policy_hash:
+        env.append({"name": "KUBESYNAPSE_POLICY_HASH", "value": policy_hash})
+        env.append({"name": "KUBESYNAPSE_POLICY_NAME", "value": policy_name or ""})
+
     # §security-P1: Inject admin-controlled env vars last so they always win
     # over user-provided overrides for security-critical runtime behaviour.
     env.extend(opencode_runtime_admin_env_items())
@@ -2632,6 +2717,15 @@ def create_agent_statefulset_manifest(
     storage_spec = spec.get("storage", {})
     pod_template_revision = _build_pod_template_revision(spec, runtime_kind, policy_name, policy_spec, mcp_sidecars)
 
+    # Build pod template annotations including policy attestation
+    pod_annotations: dict[str, str] = {POD_TEMPLATE_REVISION_ANNOTATION: pod_template_revision}
+    if policy_hash:
+        pod_annotations["kubesynapse.ai/policy-hash"] = policy_hash
+    if policy_name:
+        pod_annotations["kubesynapse.ai/policy-name"] = policy_name
+    if policy_spec and policy_spec.get("sealed"):
+        pod_annotations["kubesynapse.ai/policy-sealed"] = "true"
+
     return {
         "apiVersion": "apps/v1",
         "kind": "StatefulSet",
@@ -2657,7 +2751,7 @@ def create_agent_statefulset_manifest(
                         "runtime-kind": runtime_kind,
                         **agent_owner_labels(name),
                     },
-                    "annotations": {POD_TEMPLATE_REVISION_ANNOTATION: pod_template_revision},
+                    "annotations": pod_annotations,
                 },
                 "spec": pod_spec,
             },

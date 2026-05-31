@@ -103,7 +103,12 @@ connection actually uses hub transport or explicitly references `MCP_BEARER_TOKE
 | `apiGateway.auth.accessTokenTtlSeconds` | Access token lifetime in seconds | `3600` (1 hour) |
 | `apiGateway.auditRetentionDays` | Days to keep audit logs before auto-purge | `90` |
 | `opencodeRuntime.immutableConfig` | Mount hardened immutable config (disable for dev) | `true` |
+| `opencodeRuntime.securityLevel` | Permission preset: permissive, standard, strict | `permissive` |
+| `opencodeRuntime.permissionOverrides` | Per-tool permission overrides on top of preset | `{}` |
+| `opencodeRuntime.permissionFloor` | Hard floor that no policy can weaken | `{}` |
 | `opencodeRuntime.admin` | Admin-controlled env vars (security overrides) | `{OPENCODE_DISABLE_DEFAULT_PLUGINS: "true"}` |
+| `gatekeeper.enabled` | Install OPA Gatekeeper as sub-chart | `false` |
+| `gatekeeper.enforcementAction` | Enforcement mode: deny, warn, dryrun | `deny` |
 | `backup.enabled` | Enable PostgreSQL backup CronJob | `false` |
 | `gc.enabled` | Enable daily garbage collection CronJob | `true` |
 | `gc.schedule` | GC CronJob schedule (cron format) | `0 3 * * *` |
@@ -134,6 +139,96 @@ opencodeRuntime:
     # OPENCODE_ADMIN_MODEL_OVERRIDE_JSON: '["gpt-4o","gpt-4o-mini"]'
     # OPENCODE_ADMIN_PROVIDER_OVERRIDE_JSON: '{"litellm":{"options":{"baseURL":"http://litellm:4000/v1"}}}'
 ```
+
+### Security Level Presets
+
+The immutable ConfigMap supports three security presets that control the
+baseline permission configuration for all OpenCode runtime pods:
+
+| Level | `bash` | `edit` | `write` | `webfetch` | Use Case |
+|-------|--------|--------|---------|------------|----------|
+| `permissive` (default) | allow | allow | allow | allow | Trusted environments, backward compatible |
+| `standard` | ask | allow | allow | allow | Shared clusters, recommended for teams |
+| `strict` | deny | ask | ask | ask | Maximum lockdown, code review only |
+
+```yaml
+opencodeRuntime:
+  securityLevel: "standard"
+  # Override specific permissions on top of the preset:
+  permissionOverrides:
+    external_directory: "deny"
+  # Hard floor that no policy can weaken:
+  permissionFloor:
+    bash: "deny"
+```
+
+### OPA Gatekeeper Integration
+
+The chart can optionally install OPA Gatekeeper as a sub-chart dependency to
+provide admission-level policy enforcement. When enabled, four
+ConstraintTemplates are deployed:
+
+| Constraint | Purpose |
+|-----------|---------|
+| `KubeSynapseRequirePolicyRef` | Every AIAgent must reference a valid AgentPolicy |
+| `KubeSynapseProtectSealedPolicy` | Sealed policies cannot be modified or deleted |
+| `KubeSynapseValidateToolPatterns` | Validates `adminToolCeiling` values and tool patterns |
+| `KubeSynapsePreventPolicyOrphan` | Policies referenced by live agents cannot be deleted |
+
+Enable Gatekeeper:
+
+```yaml
+gatekeeper:
+  enabled: true
+  enforcementAction: "deny"  # or "warn" or "dryrun"
+```
+
+### Admin Tool Ceiling
+
+Each AgentPolicy can define an `adminToolCeiling` under `spec.toolPolicy`
+that caps the maximum permission level for specific tools. Even if the
+immutable config says "allow", the ceiling reduces it:
+
+```yaml
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: restricted-policy
+spec:
+  toolPolicy:
+    adminToolCeiling:
+      bash: "deny"
+      external_directory: "deny"
+      webfetch: "ask"
+```
+
+The operator injects the ceiling as `OPENCODE_ADMIN_PERMISSION_CEILING_JSON`
+into the agent pod. The runtime reads this at startup to cap permissions.
+
+### Policy Seal
+
+Setting `spec.sealed: true` on an AgentPolicy makes it immutable. When
+Gatekeeper is enabled, the `KubeSynapseProtectSealedPolicy` constraint
+blocks all UPDATE and DELETE operations on sealed policies at admission time.
+
+```yaml
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: production-lockdown
+spec:
+  sealed: true
+  toolPolicy:
+    adminToolCeiling:
+      bash: "deny"
+```
+
+### Runtime Attestation
+
+The operator computes a SHA-256 hash of each resolved policy spec and
+annotates the agent pod with `kubesynapse.ai/policy-hash`. The gateway
+can verify this hash in healthz responses to ensure agents are running
+with their expected policy configuration.
 
 ## Garbage Collection
 

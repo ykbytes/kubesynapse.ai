@@ -2044,6 +2044,7 @@ export async function listPolicies(token: string, namespace: string): Promise<Po
 
 export interface CreatePolicyPayload {
   name: string;
+  sealed?: boolean;
   input_guardrails: PolicyInputGuardrails;
   output_guardrails: PolicyOutputGuardrails;
   allowed_models: string[];

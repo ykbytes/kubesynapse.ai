@@ -1,0 +1,311 @@
+{{/*
+OPA Gatekeeper ConstraintTemplates for KubeSynapse policy enforcement.
+These provide admission-time validation that closes the ~5s reconcile window
+where invalid agents could exist before the operator rejects them.
+*/}}
+{{- if and (.Values.gatekeeper.enabled) (.Values.gatekeeper.constraintTemplates.enabled) }}
+---
+# ConstraintTemplate 1: Every AIAgent must have a valid policyRef
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: kubesynapserequirepolicyref
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gatekeeper-constraints
+  annotations:
+    description: "Ensures every AIAgent resource references a valid AgentPolicy"
+spec:
+  crd:
+    spec:
+      names:
+        kind: KubeSynapseRequirePolicyRef
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            exemptNamespaces:
+              type: array
+              items:
+                type: string
+              description: "Namespaces exempt from this constraint (e.g., system namespaces)"
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package kubesynapse.requirepolicyref
+
+        violation[{"msg": msg}] {
+          input.review.object.kind == "AIAgent"
+          not input.review.object.spec.policyRef
+          ns := input.review.object.metadata.namespace
+          not ns_exempt(ns)
+          msg := sprintf("AIAgent '%s/%s' must have spec.policyRef set to reference an AgentPolicy", [ns, input.review.object.metadata.name])
+        }
+
+        violation[{"msg": msg}] {
+          input.review.object.kind == "AIAgent"
+          ref := input.review.object.spec.policyRef
+          ref == ""
+          ns := input.review.object.metadata.namespace
+          not ns_exempt(ns)
+          msg := sprintf("AIAgent '%s/%s' has an empty spec.policyRef — it must reference a valid AgentPolicy", [ns, input.review.object.metadata.name])
+        }
+
+        ns_exempt(ns) {
+          exempt := input.parameters.exemptNamespaces[_]
+          ns == exempt
+        }
+---
+# Constraint instance for RequirePolicyRef
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: KubeSynapseRequirePolicyRef
+metadata:
+  name: require-policy-ref
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gatekeeper-constraints
+spec:
+  enforcementAction: {{ .Values.gatekeeper.enforcementAction | default "deny" }}
+  match:
+    kinds:
+      - apiGroups: ["kubesynapse.ai"]
+        kinds: ["AIAgent"]
+  parameters:
+    exemptNamespaces:
+      - "kubesynapse-system"
+---
+# ConstraintTemplate 2: Sealed policies cannot be modified
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: kubesynapseprotectsealedpolicy
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gatekeeper-constraints
+  annotations:
+    description: "Prevents modification of sealed AgentPolicy resources"
+spec:
+  crd:
+    spec:
+      names:
+        kind: KubeSynapseProtectSealedPolicy
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            allowUnsealByAnnotation:
+              type: boolean
+              description: "Whether policies annotated with kubesynapse.ai/allow-unseal=true can be unsealed"
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package kubesynapse.protectsealedpolicy
+
+        violation[{"msg": msg}] {
+          input.review.operation == "UPDATE"
+          input.review.object.kind == "AgentPolicy"
+          old := input.review.oldObject
+          old.spec.sealed == true
+          msg := sprintf("AgentPolicy '%s/%s' is sealed and cannot be modified. Remove the seal via Helm upgrade or direct etcd access.", [input.review.object.metadata.namespace, input.review.object.metadata.name])
+        }
+
+        violation[{"msg": msg}] {
+          input.review.operation == "DELETE"
+          input.review.oldObject.kind == "AgentPolicy"
+          input.review.oldObject.spec.sealed == true
+          msg := sprintf("AgentPolicy '%s/%s' is sealed and cannot be deleted.", [input.review.oldObject.metadata.namespace, input.review.oldObject.metadata.name])
+        }
+---
+# Constraint instance for ProtectSealedPolicy
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: KubeSynapseProtectSealedPolicy
+metadata:
+  name: protect-sealed-policies
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gatekeeper-constraints
+spec:
+  enforcementAction: {{ .Values.gatekeeper.enforcementAction | default "deny" }}
+  match:
+    kinds:
+      - apiGroups: ["kubesynapse.ai"]
+        kinds: ["AgentPolicy"]
+  parameters:
+    allowUnsealByAnnotation: false
+---
+# ConstraintTemplate 3: Validate tool pattern rules format
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: kubesynapsevalidatetoolpatterns
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gatekeeper-constraints
+  annotations:
+    description: "Validates that toolPolicy pattern entries conform to expected format"
+spec:
+  crd:
+    spec:
+      names:
+        kind: KubeSynapseValidateToolPatterns
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            allowedPermissionValues:
+              type: array
+              items:
+                type: string
+              description: "Allowed permission action values"
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package kubesynapse.validatetoolpatterns
+
+        # Validate adminToolCeiling values
+        violation[{"msg": msg}] {
+          input.review.object.kind == "AgentPolicy"
+          ceiling := input.review.object.spec.toolPolicy.adminToolCeiling
+          key := ceiling[k]
+          not valid_permission(key)
+          msg := sprintf("AgentPolicy '%s/%s': adminToolCeiling[%s] has invalid value '%s'. Must be one of: allow, ask, deny", [input.review.object.metadata.namespace, input.review.object.metadata.name, k, key])
+        }
+
+        # Validate allowedToolPrefixes format (no empty strings)
+        violation[{"msg": msg}] {
+          input.review.object.kind == "AgentPolicy"
+          prefixes := input.review.object.spec.toolPolicy.allowedToolPrefixes
+          prefix := prefixes[i]
+          prefix == ""
+          msg := sprintf("AgentPolicy '%s/%s': allowedToolPrefixes[%d] is empty string", [input.review.object.metadata.namespace, input.review.object.metadata.name, i])
+        }
+
+        valid_permission(v) { v == "allow" }
+        valid_permission(v) { v == "ask" }
+        valid_permission(v) { v == "deny" }
+---
+# Constraint instance for ValidateToolPatterns
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: KubeSynapseValidateToolPatterns
+metadata:
+  name: validate-tool-patterns
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gatekeeper-constraints
+spec:
+  enforcementAction: {{ .Values.gatekeeper.enforcementAction | default "deny" }}
+  match:
+    kinds:
+      - apiGroups: ["kubesynapse.ai"]
+        kinds: ["AgentPolicy"]
+  parameters:
+    allowedPermissionValues:
+      - "allow"
+      - "ask"
+      - "deny"
+---
+# ConstraintTemplate 4: Prevent deletion of policies referenced by live agents
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: kubesynapsepreventpolicyorphan
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gatekeeper-constraints
+  annotations:
+    description: "Prevents deletion of AgentPolicy resources that are referenced by running AIAgents"
+spec:
+  crd:
+    spec:
+      names:
+        kind: KubeSynapsePreventPolicyOrphan
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            message:
+              type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package kubesynapse.preventpolicyorphan
+
+        # This constraint uses Gatekeeper's data replication feature.
+        # AIAgent resources must be synced to the OPA cache via a Config resource:
+        #   apiVersion: config.gatekeeper.sh/v1alpha1
+        #   kind: Config
+        #   spec:
+        #     sync:
+        #       syncOnly:
+        #         - group: "kubesynapse.ai"
+        #           version: "v1alpha1"
+        #           kind: "AIAgent"
+        violation[{"msg": msg}] {
+          input.review.operation == "DELETE"
+          input.review.oldObject.kind == "AgentPolicy"
+          policy_name := input.review.oldObject.metadata.name
+          policy_ns := input.review.oldObject.metadata.namespace
+
+          # Check if any AIAgent references this policy
+          some agent_ns, agent_name
+          agent := data.inventory.namespace[agent_ns][_]["kubesynapse.ai/v1alpha1"]["AIAgent"][agent_name]
+          agent.spec.policyRef == policy_name
+          agent_ns == policy_ns
+
+          msg := sprintf("Cannot delete AgentPolicy '%s/%s' — it is referenced by AIAgent '%s/%s'. Remove or update the agent's policyRef first.", [policy_ns, policy_name, agent_ns, agent_name])
+        }
+
+        # Also handle namespace-qualified policyRef (e.g., "default/my-policy")
+        violation[{"msg": msg}] {
+          input.review.operation == "DELETE"
+          input.review.oldObject.kind == "AgentPolicy"
+          policy_name := input.review.oldObject.metadata.name
+          policy_ns := input.review.oldObject.metadata.namespace
+
+          some agent_ns, agent_name
+          agent := data.inventory.namespace[agent_ns][_]["kubesynapse.ai/v1alpha1"]["AIAgent"][agent_name]
+          ref := agent.spec.policyRef
+          contains(ref, "/")
+          parts := split(ref, "/")
+          parts[0] == policy_ns
+          parts[1] == policy_name
+
+          msg := sprintf("Cannot delete AgentPolicy '%s/%s' — it is referenced by AIAgent '%s/%s' (qualified ref). Remove or update the agent's policyRef first.", [policy_ns, policy_name, agent_ns, agent_name])
+        }
+---
+# Constraint instance for PreventPolicyOrphan
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: KubeSynapsePreventPolicyOrphan
+metadata:
+  name: prevent-policy-orphan
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gatekeeper-constraints
+spec:
+  enforcementAction: {{ .Values.gatekeeper.enforcementAction | default "deny" }}
+  match:
+    kinds:
+      - apiGroups: ["kubesynapse.ai"]
+        kinds: ["AgentPolicy"]
+  parameters:
+    message: "Cannot delete a policy that is still referenced by running agents"
+---
+# Gatekeeper Config — sync AIAgent resources into OPA cache for referential constraints
+apiVersion: config.gatekeeper.sh/v1alpha1
+kind: Config
+metadata:
+  name: config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubesynapse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gatekeeper-constraints
+spec:
+  sync:
+    syncOnly:
+      - group: "kubesynapse.ai"
+        version: "v1alpha1"
+        kind: "AIAgent"
+      - group: "kubesynapse.ai"
+        version: "v1alpha1"
+        kind: "AgentPolicy"
+{{- end }}
