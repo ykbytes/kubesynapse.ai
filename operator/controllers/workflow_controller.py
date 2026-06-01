@@ -458,6 +458,33 @@ def enqueue_workflow_job(
     steps = spec.get("steps") or []
     generation = int((meta or {}).get("generation", 1))
     workflow_status = current_status or {}
+
+    # §reliability-P3: Final idempotency guard — read live status just before
+    # creating the Job to prevent the Kopf double-fire race (spec change + status
+    # patch each trigger a reconcile within milliseconds of each other).
+    live_status = _read_live_workflow_status(namespace, name)
+    if live_status is not None:
+        live_phase = str(live_status.get("phase") or "")
+        live_observed = int(live_status.get("observedGeneration", 0) or 0)
+        live_run_id = str(live_status.get("runId") or "").strip()
+        if live_phase in {"queued", "running", "waiting-approval"} and live_run_id:
+            # Another handler already enqueued this generation — skip.
+            log_operator_event(
+                logger,
+                logging.INFO,
+                "Skipping duplicate enqueue — live status already queued/running.",
+                resource_kind="AgentWorkflow",
+                name=name,
+                namespace=namespace,
+                meta=meta,
+                generation=generation,
+                action="enqueue-workflow-job",
+                livePhase=live_phase,
+                liveRunId=live_run_id,
+                liveObservedGeneration=live_observed,
+            )
+            return live_run_id
+
     preserve_generation_state = workflow_status_matches_generation(workflow_status, generation)
 
     # Cancel any stale worker job from a previous run before creating a new one.

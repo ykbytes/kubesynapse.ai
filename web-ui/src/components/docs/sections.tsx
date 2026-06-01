@@ -1837,10 +1837,11 @@ function TracesSection() {
       <div id="traces-observatory-ui">
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Execution Observatory UI</h3>
         <DocsTable headers={["Surface", "Behavior"]} rows={[
-          ["Overview", "Run metrics, waterfall timing, cost, token totals, and signal warnings, plus run-level insight charts: Recent Run Trend (duration sparkline across the workflow's last runs, color-toned by phase), Step Contribution (share bars showing which steps dominate total runtime), Step Variability (min/median/max range per step with a current-run marker), Tool Mix (time-weighted MCP tool usage with failure counts), Model Efficiency (token-vs-latency scatter, bubble by cost), and Quality Flags (warning/error events, tool failures, longest quiet gap, missing token data; runs can complete green but still be flagged shaky)"],
+          ["Overview", "Run metrics, waterfall timing, cost, token totals, and signal warnings, plus run-level insight charts: Recent Run Trend (duration sparkline across the workflow's last runs, color-toned by phase), Step Contribution (share bars showing which steps dominate total runtime), Step Variability (min/median/max range per step with a current-run marker), Tool Mix (time-weighted MCP tool usage with failure counts, weighted by per-tool duration_ms from OpenCode's state.time), Model Efficiency (token-vs-latency scatter, bubble by cost), and Quality Flags (warning/error events, tool failures, longest quiet gap, missing token data; runs can complete green but still be flagged shaky)"],
+          ["Token Breakdown", "Stacked token bar per LLM call showing prompt, completion, cache_read, cache_write, and reasoning tokens, plus a cache hit ratio indicator"],
           ["Steps", "Per-step inspector with LLM calls, tool rows, latency, and status"],
           ["Logs", "Live or archived worker logs with filters, JSON formatting, wrapping, and fullscreen mode"],
-          ["Models & Tools", "Expandable tool calls with icon mapping, ArgsCard field extraction, Prism JSON highlighting, and diff-aware rendering for patch output"],
+          ["Models & Tools", "Expandable tool calls with icon mapping, ArgsCard field extraction, Prism JSON highlighting, per-tool duration, and diff-aware rendering for patch output"],
           ["Compare", "Side-by-side execution comparison across status, duration, and tool or LLM counts"],
         ]} />
       </div>

@@ -2742,6 +2742,23 @@ def record_workflow_run(
                 )
                 .one_or_none()
             )
+            # If no match by run_id, try to adopt the most recent pending row
+            # with run_id=NULL for this workflow (created by the trigger endpoint
+            # before the operator assigned a run_id).
+            if not existing:
+                existing = (
+                    session.query(WorkflowRunHistory)
+                    .filter(
+                        WorkflowRunHistory.workflow_name == workflow_name,
+                        WorkflowRunHistory.namespace == namespace,
+                        WorkflowRunHistory.run_id.is_(None),
+                        WorkflowRunHistory.phase == "pending",
+                    )
+                    .order_by(WorkflowRunHistory.id.desc())
+                    .first()
+                )
+                if existing:
+                    existing.run_id = run_id
         if existing:
             existing.phase = phase
             if total_steps is not None:

@@ -144,6 +144,18 @@ A full web console with chat workbench, workflow composer, and execution observa
 - Execution Observatory: overview, steps, logs, models and tools, compare, HTML/JSON export
 - System agents auto-analyze failures, anomalies, and cost spikes
 
+#### Observability features
+
+The Execution Observatory captures the full lifecycle of every agent invocation and workflow run. Recent improvements:
+
+- **Token breakdown** — every LLM call now reports prompt, completion, **cache_read**, **cache_write**, and **reasoning** token counts end-to-end (runtime → operator → gateway → UI). The Observatory renders a stacked token bar plus a **cache hit ratio** indicator so you can see at a glance when prompt caching is paying off.
+- **Per-tool duration** — every tool call record carries a `duration_ms` field extracted natively from OpenCode's `state.time.start`/`state.time.end` timestamps. The **Tool Mix** chart weights tools by real wall-clock time, not just call counts.
+- **Quality flags** — Observatory Overview surfaces warnings for missing token data, error events, tool failures, and longest quiet gaps so a green run can still be flagged "shaky" when something is off.
+- **Run-level insight charts** (pure CSS, no charting library): *Recent Run Trend* sparkline, *Step Contribution* share bars, *Step Variability* min/median/max range, *Tool Mix*, *Model Efficiency* (token-vs-latency scatter), and the *Quality Flags* strip — all derived from the same `ExecutionTrace` payload.
+- **Idempotent run history** — the operator's enqueue path now does a live-status guard before creating a worker Job, preventing duplicate run records when a trigger fans out into a spec change + status patch.
+
+Full data model, troubleshooting recipes, and the trace payload schema live in [`docs/observability-explained.md`](docs/observability-explained.md).
+
 ### Secure and govern
 
 Security is built in, not bolted on. Every layer — network, container, token, and policy — is enforced by default.
@@ -217,21 +229,25 @@ flowchart TB
     EXT["🔗 External Apps"]:::c
 
     GW("⚡ API Gateway
-    FastAPI · Auth · CRUD · Invoke · SSE"):::g
+    FastAPI · Auth · CRUD · Invoke · SSE
+    Trace ingestion · Observatory APIs"):::g
 
     K8S{{"☸️ Kubernetes API
     12 CRDs"}}:::k
 
     OP("🔧 Operator
-    Reconcile · Provision"):::o
+    Reconcile · Provision
+    Worker Job orchestration"):::o
 
     SEC["🛡️ Security Baseline
     Immutable config · NetworkPolicy"]:::sec
 
     OC("🤖 OpenCode Runtime
-    StatefulSet · Sessions · Stream"):::r
+    StatefulSet · Sessions · Stream
+    POST runtime-events → gateway"):::r
     JOB("📦 Workflow Jobs
-    Artifact-driven execution"):::w
+    Artifact-driven execution
+    POST /api/traces/batch → gateway"):::w
 
     MCP("🔌 MCP Access
     10 tools + collector"):::s
@@ -241,7 +257,9 @@ flowchart TB
     LLM("🧪 LiteLLM
     Model proxy"):::shared
     PG[("🗄️ Postgres
-    Auth · Memory · Traces")]:::shared
+    Auth · Memory · Traces
+    workflow_runs · execution_traces
+    runtime_run_events · memory")]:::shared
     REDIS[("⚡ Redis
     Cache · Sessions")]:::shared
     QDRANT[("🔍 Qdrant
@@ -249,10 +267,8 @@ flowchart TB
     NATS("📡 NATS
     Async messaging"):::shared
 
-    TRACE("📊 Observatory
-    Trace store · Timeline"):::intel
     SIGNAL("🚨 Signal Watch
-    Anomaly detection"):::intel
+    SQL anomaly detection"):::intel
     SYS("🧪 System Agents
     Auto-analysis"):::intel
 
@@ -270,13 +286,13 @@ flowchart TB
     OP -.->|"Injects immutable config"| SEC
     OC -->|"localhost or hub transport"| MCP
     OC -->|"Workspace · checkpoints"| PVC
-    JOB -->|"Artifacts · logs"| ART
     OC -->|"HTTPS /v1/chat/completions"| LLM
     OC -->|"Vector search when enabled"| QDRANT
+    JOB -->|"Artifacts · logs"| ART
     LLM -->|"Response cache"| REDIS
-    OC -.->|"POST runtime-events"| TRACE
-    JOB -.->|"POST runtime-events"| TRACE
-    TRACE -->|"SQL anomaly queries"| SIGNAL
+    OC -->|"POST /api/v1/traces/runtime-events"| GW
+    JOB -->|"POST /api/traces/batch"| GW
+    GW -.->|"SQL anomaly queries"| SIGNAL
     SIGNAL -.->|"Invokes for analysis"| SYS
 
     classDef c fill:#1a2332,stroke:#326CE5,stroke-width:2px,color:#7baaf7
@@ -293,7 +309,7 @@ flowchart TB
 ```
 > **Layers:** 🔵 Clients → 🟣 Gateway → 🔵 K8s API → 🟡 Operator → 🟢 Runtimes → ⚫ Shared Services → 🟣 Intelligence → 🟢 Security
 >
-> **Data flow:** The gateway reads/writes CRDs via the Kubernetes API, persists durable platform state to Postgres + Redis, and fronts provider/admin APIs. The operator watches CRDs and provisions isolated runtimes plus worker Jobs. The primary model-call path is runtime -> LiteLLM -> provider; workflow jobs keep detailed evidence in artifacts and logs; runtime and worker events feed the Observatory for Signal Watch and system-agent analysis.
+> **Data flow:** The gateway reads/writes CRDs via the Kubernetes API, persists durable platform state to Postgres + Redis, and fronts provider/admin APIs. It is also the **trace ingestion point** — both OpenCode runtimes and worker Jobs POST events to the gateway (`/api/v1/traces/runtime-events` and `/api/traces/batch`), which persists them into `execution_traces`, `runtime_run_events`, and `workflow_runs`. The operator watches CRDs and provisions isolated runtimes plus worker Jobs. The primary model-call path is runtime → LiteLLM → provider; workflow jobs keep detailed evidence in artifacts and logs; Signal Watch runs SQL anomaly queries against the same Postgres tables and can invoke system agents for AI-powered explanations.
 
 <br>
 

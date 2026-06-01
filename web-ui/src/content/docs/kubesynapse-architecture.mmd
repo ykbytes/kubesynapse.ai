@@ -14,7 +14,8 @@ flowchart TB
     %% CONTROL PLANE
     %% ═══════════════════════════════════════════════════
     GW("⚡ API Gateway
-    FastAPI · Auth · CRUD · Invoke · SSE"):::gateway
+    FastAPI · Auth · CRUD · Invoke · SSE
+    Trace ingestion · Observatory APIs"):::gateway
 
     K8S{{"☸️ Kubernetes API
     12 CRDs"}}:::k8s
@@ -35,11 +36,13 @@ flowchart TB
     %% ═══════════════════════════════════════════════════
     OC("🤖 OpenCode Runtime
     Per-agent StatefulSet
-    Sessions · stream · local memory"):::runtime
+    Sessions · stream · local memory
+    POST runtime-events → gateway"):::runtime
 
     JOB("📦 Workflow Jobs
     Artifact-driven execution
-    Summary status projection"):::worker
+    Summary status projection
+    POST /api/traces/batch → gateway"):::worker
 
     MCP("🔌 MCP Access
     10 tool sidecars + collector
@@ -59,7 +62,10 @@ flowchart TB
     Provider abstraction"):::shared
 
     PG[("🗄️ PostgreSQL
-    Auth · durable memory · traces")]:::shared
+    Auth · durable memory
+    workflow_runs · execution_traces
+    runtime_run_events · llm_call_records
+    tool_call_records")]:::shared
 
     REDIS[("⚡ Redis
     Gateway cache · LiteLLM cache")]:::shared
@@ -73,9 +79,6 @@ flowchart TB
     %% ═══════════════════════════════════════════════════
     %% INTELLIGENCE
     %% ═══════════════════════════════════════════════════
-    TRACE("📊 Execution Observatory
-    Timeline APIs · trace store"):::intel
-
     SIGNAL("🚨 Signal Watch
     SQL anomaly detection"):::intel
 
@@ -111,10 +114,10 @@ flowchart TB
     JOB -->|"Artifacts + logs"| ART
     LLM -->|"Response cache"| REDIS
 
-    OC -.->|"POST runtime-events"| TRACE
-    JOB -.->|"POST runtime-events"| TRACE
+    OC -->|"POST /api/v1/traces/runtime-events"| GW
+    JOB -->|"POST /api/traces/batch"| GW
 
-    TRACE -->|"SQL anomaly queries"| SIGNAL
+    GW -.->|"SQL anomaly queries"| SIGNAL
     SIGNAL -.->|"Invoke for analysis"| SYS
 
     %% ═══════════════════════════════════════════════════
