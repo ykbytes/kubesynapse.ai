@@ -1170,12 +1170,17 @@ export interface LLMCallRecord {
   provider?: string | null;
   prompt_tokens: number;
   completion_tokens: number;
+  cache_read_tokens?: number | null;
+  cache_write_tokens?: number | null;
+  reasoning_tokens?: number | null;
   total_tokens: number;
+  cost_usd?: number | null;
   estimated_cost_usd?: number | null;
   latency_ms: number;
   prompt_preview?: string | null;
   response_preview?: string | null;
   created_at: string;
+  token_source?: string | null;
 }
 
 export interface ToolCallRecord {
@@ -1183,11 +1188,15 @@ export interface ToolCallRecord {
   step_id?: string | null;
   execution_id: string;
   tool_name: string;
+  tool_args?: Record<string, unknown> | null;
+  tool_result?: unknown | null;
   args_preview?: string | null;
   result_preview?: string | null;
   error_message?: string | null;
+  duration_ms?: number | null;
   latency_ms: number;
   status: string;
+  started_at?: string | null;
   created_at: string;
 }
 
@@ -1204,6 +1213,9 @@ export interface StepTrace {
   latency_ms?: number | null;
   error?: string | null;
   tokens_used?: number | null;
+  cache_read_tokens?: number | null;
+  cache_write_tokens?: number | null;
+  reasoning_tokens?: number | null;
   cost_usd?: number | null;
   llm_call_count?: number | null;
   tool_call_count?: number | null;
@@ -1237,6 +1249,9 @@ export interface ExecutionTrace {
   total_tokens: number;
   prompt_tokens?: number | null;
   completion_tokens?: number | null;
+  cache_read_tokens?: number | null;
+  cache_write_tokens?: number | null;
+  reasoning_tokens?: number | null;
   total_cost_usd?: number | null;
   steps: StepTrace[];
   llm_calls: LLMCallRecord[];
@@ -1258,6 +1273,9 @@ export interface ExecutionListItem {
   llm_call_count: number;
   tool_call_count: number;
   total_tokens: number;
+  cache_read_tokens?: number | null;
+  cache_write_tokens?: number | null;
+  reasoning_tokens?: number | null;
   total_cost_usd?: number | null;
   triggered_by?: string | null;
 }

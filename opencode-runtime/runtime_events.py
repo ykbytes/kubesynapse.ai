@@ -147,6 +147,9 @@ def _sync_emit(event: dict[str, Any]) -> None:
         "completion_tokens": event.get("completion_tokens"),
         "total_tokens": event.get("total_tokens"),
         "cost_usd": event.get("cost_usd"),
+        "cache_read_tokens": event.get("cache_read_tokens"),
+        "cache_write_tokens": event.get("cache_write_tokens"),
+        "reasoning_tokens": event.get("reasoning_tokens"),
     }
 
     try:
@@ -434,6 +437,9 @@ def emit_llm_call(
     model: str | None = None,
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    reasoning_tokens: int = 0,
     total_tokens: int = 0,
     cost_usd: float = 0.0,
     duration_ms: int | None = None,
@@ -449,6 +455,9 @@ def emit_llm_call(
         "payload": {"model": model},
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
+        "cache_read_tokens": cache_read_tokens,
+        "cache_write_tokens": cache_write_tokens,
+        "reasoning_tokens": reasoning_tokens,
         "total_tokens": total_tokens,
         "cost_usd": cost_usd,
         "duration_ms": duration_ms,

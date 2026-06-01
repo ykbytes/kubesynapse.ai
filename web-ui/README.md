@@ -59,6 +59,12 @@ Available from the `Intelligence` workspace under the `Observatory` tab.
 - **LLMCallViewer** — Inspect raw prompt/response pairs sent to the model.
 - **ExecutionTimeline** — Gantt-style view of parallel and sequential steps.
 - **ExecutionDiffView** — Compare two runs side-by-side to spot regressions.
+- **Models & Tools workspace** — Expandable tool rows with syntax-highlighted JSON,
+  diff-aware patch rendering, icon mapping, and resilient handling for truncated JSON.
+
+Tool results shown in the Observatory come from the gateway's execution trace payloads
+(`tool_args`, `tool_result`, `duration_ms`, `started_at`), which are built from the
+runtime's final response payload and operator trace forwarding.
 
 ## WorkflowComposer
 
@@ -99,6 +105,7 @@ Useful for debugging model reasoning loops and tool-use decisions.
 - Command palette, mobile navigation shell, onboarding tour, notifications, and redesigned provider-centric settings management
 - Live Activity Stream with real-time step-level status transitions, pulse indicator, and Ctrl+L toggle
 - ExecutionObservatory for post-execution trace analysis (TracePlayer, StepInspector, LLMCallViewer, Timeline, DiffView)
+- Policy editor support for sealed policies and per-tool admin permission ceilings
 - WorkflowComposer DAG builder with conditional/loop editing, live execution state, inline approvals, and run history
 - FileExplorer and Artifact Browser with tree view, file preview, and ZIP download of the entire workspace
 - Agent Live Reasoning Log (planned) — terminal-style SSE stream of Pi agent events

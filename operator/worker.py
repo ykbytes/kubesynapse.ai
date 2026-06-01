@@ -968,6 +968,75 @@ def summarize_step_tool_calls(tool_calls: Any, *, limit: int = 8) -> list[dict[s
     return summaries
 
 
+def summarize_execution_metrics(step_results: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Compute execution aggregates from accumulated per-step results."""
+
+    total_llm_calls = 0
+    total_tool_calls = 0
+    prompt_tokens = 0
+    completion_tokens = 0
+    total_tokens = 0
+    cost_usd_total = 0.0
+    has_cost = False
+
+    for item in step_results.values():
+        step_result = item.get("stepResult") or {}
+        if not isinstance(step_result, dict):
+            continue
+
+        tool_calls = step_result.get("tool_calls") or []
+        total_tool_calls += sum(1 for tc in tool_calls if isinstance(tc, dict))
+
+        metadata = step_result.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        response_text = str(step_result.get("response") or "")
+        if response_text:
+            total_llm_calls += 1
+
+        # Token data is nested under metadata.tokens (runtime response format)
+        tokens_info = metadata.get("tokens") if isinstance(metadata.get("tokens"), dict) else {}
+        step_prompt_tokens = int(
+            tokens_info.get("input")
+            or tokens_info.get("prompt_tokens")
+            or metadata.get("prompt_tokens")
+            or metadata.get("promptTokens")
+            or 0
+        )
+        step_completion_tokens = int(
+            tokens_info.get("output")
+            or tokens_info.get("completion_tokens")
+            or metadata.get("completion_tokens")
+            or metadata.get("completionTokens")
+            or 0
+        )
+        step_total_tokens = int(
+            tokens_info.get("total")
+            or metadata.get("total_tokens")
+            or (step_prompt_tokens + step_completion_tokens)
+            or metadata.get("context_budget", {}).get("total_tokens")
+            or 0
+        )
+        step_cost = float(metadata.get("cost") or metadata.get("cost_usd") or metadata.get("costUsd") or 0.0)
+
+        prompt_tokens += step_prompt_tokens
+        completion_tokens += step_completion_tokens
+        total_tokens += step_total_tokens
+        if step_cost:
+            has_cost = True
+            cost_usd_total += step_cost
+
+    return {
+        "total_llm_calls": total_llm_calls,
+        "total_tool_calls": total_tool_calls,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "cost_usd": cost_usd_total if has_cost else None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Plan seeding — extract task items from prompt structure so progress is
 # visible even when the model doesn't call todowrite.
@@ -1141,6 +1210,36 @@ def _emit_traces_from_result(result: dict[str, Any]) -> None:
         metadata = result.get("metadata") or {}
         if not isinstance(metadata, dict):
             metadata = {}
+        # Token data is nested under metadata.tokens (runtime response format)
+        tokens_info = metadata.get("tokens") if isinstance(metadata.get("tokens"), dict) else {}
+        time_info = metadata.get("time") if isinstance(metadata.get("time"), dict) else {}
+        # Compute latency from time.created / time.completed (ms timestamps)
+        created_ms = int(time_info.get("created") or 0)
+        completed_ms = int(time_info.get("completed") or 0)
+        computed_latency_ms = (completed_ms - created_ms) if (created_ms and completed_ms) else None
+        # Extract token counts — support both nested (tokens.input) and flat (prompt_tokens) layouts
+        prompt_tokens = int(
+            tokens_info.get("input")
+            or tokens_info.get("prompt_tokens")
+            or metadata.get("prompt_tokens")
+            or metadata.get("promptTokens")
+            or 0
+        )
+        completion_tokens = int(
+            tokens_info.get("output")
+            or tokens_info.get("completion_tokens")
+            or metadata.get("completion_tokens")
+            or metadata.get("completionTokens")
+            or 0
+        )
+        cost_val = metadata.get("cost") or metadata.get("cost_usd") or metadata.get("costUsd") or 0.0
+        cost_usd = float(cost_val) if cost_val else None
+        latency_ms = float(
+            metadata.get("latency_ms")
+            or metadata.get("latency")
+            or computed_latency_ms
+            or 0.0
+        ) or None
         model = str(result.get("model") or metadata.get("model") or "")
         response_text = str(result.get("response") or "")
         if response_text:
@@ -1150,10 +1249,13 @@ def _emit_traces_from_result(result: dict[str, Any]) -> None:
                 model=model or "unknown",
                 prompt=str(result.get("prompt", "")),
                 response=response_text,
-                prompt_tokens=int(metadata.get("prompt_tokens") or metadata.get("promptTokens") or 0),
-                completion_tokens=int(metadata.get("completion_tokens") or metadata.get("completionTokens") or 0),
-                cost_usd=float(metadata.get("cost_usd") or metadata.get("costUsd") or 0.0) or None,
-                latency_ms=float(metadata.get("latency_ms") or metadata.get("latency") or 0.0) or None,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cache_read_tokens=int(tokens_info.get("cache_read") or tokens_info.get("cache_read_tokens") or 0),
+                cache_write_tokens=int(tokens_info.get("cache_write") or tokens_info.get("cache_write_tokens") or 0),
+                reasoning_tokens=int(tokens_info.get("reasoning") or tokens_info.get("reasoning_tokens") or 0),
+                cost_usd=cost_usd,
+                latency_ms=latency_ms,
                 provider=str(metadata.get("provider") or result.get("provider") or "") or None,
             )
     except Exception:
@@ -1310,8 +1412,14 @@ def execute_workflow_step(
             if runtime_events is not None:
                 exec_id = getattr(_trace_context, "execution_id", "")
                 metadata = result.get("metadata") or {}
-                total_tokens = int(metadata.get("total_tokens") or metadata.get("context_budget", {}).get("total_tokens") or 0)
-                cost_usd = float(metadata.get("cost_usd") or metadata.get("costUsd") or 0.0) or None
+                tokens_info_rt = metadata.get("tokens") if isinstance(metadata.get("tokens"), dict) else {}
+                total_tokens = int(
+                    tokens_info_rt.get("total")
+                    or metadata.get("total_tokens")
+                    or metadata.get("context_budget", {}).get("total_tokens")
+                    or 0
+                )
+                cost_usd = float(metadata.get("cost") or metadata.get("cost_usd") or metadata.get("costUsd") or 0.0) or None
                 runtime_events.emit_agent_call(
                     execution_id=exec_id,
                     caller_agent=TARGET_NAME,
@@ -3423,6 +3531,7 @@ def run_workflow_worker() -> None:
         write_artifact(payload)
         if execution_id:
             try:
+                execution_metrics = summarize_execution_metrics(step_results)
                 trace_client.end_execution(
                     execution_id=execution_id,
                     status="completed",
@@ -3431,6 +3540,7 @@ def run_workflow_worker() -> None:
                         "total_steps": len(steps),
                         "completed_steps": len(completed),
                         "failed_steps": len(fatal_failures) if fatal_failures else 0,
+                        **execution_metrics,
                     },
                 )
             except Exception:

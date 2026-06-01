@@ -137,6 +137,10 @@ The `OPENCODE_MEMORY_*` variables documented below apply only to the runtime-loc
 | `OPENCODE_MEMORY_RELEVANCE_DECAY_HOURS` | `168` | Memory relevance decay (hours) |
 | `OPENCODE_MEMORY_MIN_RELEVANCE_SCORE` | `0.3` | Minimum relevance score |
 
+OpenCode also emits execution trace data consumed by the Execution Observatory. The
+runtime currently caps extracted tool output forwarded in `tool_calls` at 40,000
+characters so large results remain inspectable without creating unbounded trace rows.
+
 ---
 
 ## Helm Values
@@ -181,6 +185,36 @@ memoryPolicy:
 These values control gateway-side recall injection for agents that reference the policy.
 They are separate from the runtime-local `OPENCODE_MEMORY_*` settings, which still govern
 the JSONL and optional semantic-memory layer inside the OpenCode runtime.
+
+### Security & Policy Values
+
+The Helm chart also exposes the main OpenCode hardening and policy-admission settings:
+
+```yaml
+opencodeRuntime:
+  immutableConfig: true
+  securityLevel: permissive
+  permissionOverrides: {}
+  permissionFloor: {}
+  admin:
+    OPENCODE_DISABLE_DEFAULT_PLUGINS: "true"
+
+gatekeeper:
+  enabled: false
+  enforcementAction: deny
+```
+
+- `opencodeRuntime.securityLevel` controls the baseline permission preset. `permissive`
+  remains the default for backward compatibility.
+- `opencodeRuntime.permissionOverrides` layers explicit per-tool overrides on top of the preset.
+- `opencodeRuntime.permissionFloor` defines a hard floor that policy resolution cannot weaken.
+- `gatekeeper.enabled` installs OPA Gatekeeper as a sub-chart dependency.
+- `gatekeeper.enforcementAction` switches the admission constraints between `deny`, `warn`, and `dryrun`.
+
+At the CRD level, `AgentPolicy.spec.sealed` makes a policy immutable and
+`AgentPolicy.spec.toolPolicy.adminToolCeiling` caps the maximum permission for named tools.
+The operator resolves that ceiling into `OPENCODE_ADMIN_PERMISSION_CEILING_JSON` for each
+runtime pod.
 
 ---
 

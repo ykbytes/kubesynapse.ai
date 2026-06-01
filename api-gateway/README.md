@@ -33,6 +33,20 @@ Only `opencode`, `pi`, and `mistral-vibe` belong to the supported request surfac
 | `trace_store.py` | Trace persistence layer with batching and retention policies |
 | `traces_router.py` | REST endpoints for trace querying, export, and live activity streams |
 
+## Trace Model
+
+The gateway is the durable store for both execution traces and runtime-event timelines.
+
+- Worker Jobs send batched execution events to `POST /api/v1/traces/batch`.
+- The gateway stores execution detail in PostgreSQL, including step records, LLM calls,
+  and tool calls.
+- Tool call records preserve `tool_args`, `tool_result`, `duration_ms`, and
+  `started_at` so the Web UI can render the full Execution Observatory experience.
+- The gateway enriches returned execution payloads with per-step counts and computed
+  latencies before sending them to the UI.
+- Older compatibility routes remain, but the primary UI and SDK contract is the
+  `/api/v1/traces/executions/*` surface.
+
 ## Durable Memory & Recall
 
 The gateway owns the durable, user-visible memory layer used for cross-session recall.
@@ -102,7 +116,7 @@ Admin user CRUD now provisions dedicated tenant namespaces for non-admin users.
 | Providers | `/api/v1/providers*`, `/api/v1/llm/providers/{provider}/suggestions` |
 | Admin | `/api/v1/admin/users`, `/api/v1/admin/audit`, `/api/v1/usage/*` |
 | Artifacts | `GET /api/v1/artifacts/{agent}/list`, `GET /api/v1/artifacts/{agent}/download`, `GET /api/v1/artifacts/{agent}/zip` |
-| Traces | `GET /api/v1/traces`, `GET /api/v1/traces/{run_id}`, `GET /api/v1/traces/live` |
+| Traces | `POST /api/v1/traces/batch`, `GET /api/v1/traces/executions`, `GET /api/v1/traces/executions/{id}`, `GET /api/v1/traces/executions/{id}/events`, `GET /api/v1/traces/steps/{id}`, `POST /api/v1/traces/executions/{id}/export/json`, `GET /api/v1/traces/executions/{id}/export/html`, `GET /api/v1/traces/{id}/timeline`, `GET /api/v1/traces/runtime-events` |
 | Activity | `GET /api/v1/activity/stream` — Live SSE feed of step-level status transitions |
 
 ## Authentication

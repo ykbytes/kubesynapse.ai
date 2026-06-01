@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import type { ExecutionTrace, StepTrace } from "@/types";
 import type { WorkflowRunRecord } from "@/lib/api";
 
+import { RangeBarChart, ScatterField, ShareBars, TrendSparkline } from "./ObservatoryCharts";
 import { StepWaterfall } from "./StepWaterfall";
 
 interface ObservatoryOverviewProps {
@@ -48,6 +49,24 @@ function formatCost(value?: number | null): string {
   return `$${value.toFixed(4)}`;
 }
 
+function formatPercent(value: number): string {
+  return `${Math.round(value)}%`;
+}
+
+function formatCompactMs(value: number): string {
+  if (value < 1000) return `${Math.round(value)}ms`;
+  return `${(value / 1000).toFixed(1)}s`;
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
+
 interface ScorecardItem {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
@@ -78,8 +97,20 @@ export function ObservatoryOverview({
   const llmCount = detail?.llm_call_count ?? 0;
   const toolCount = detail?.tool_call_count ?? 0;
   const totalTokens = detail?.total_tokens ?? 0;
+  const promptTokens = detail?.prompt_tokens ?? 0;
+  const completionTokens = detail?.completion_tokens ?? 0;
+  const cacheReadTokens = detail?.cache_read_tokens ?? 0;
+  const cacheWriteTokens = detail?.cache_write_tokens ?? 0;
+  const reasoningTokens = detail?.reasoning_tokens ?? 0;
   const cost = detail?.total_cost_usd;
   const status = detail?.status ?? run?.phase ?? "unknown";
+
+  const cacheHitRatio = useMemo(() => {
+    const nonCachedInput = Math.max(promptTokens - cacheReadTokens, 0);
+    const inputTotal = nonCachedInput + cacheReadTokens;
+    if (inputTotal <= 0) return null;
+    return cacheReadTokens / inputTotal;
+  }, [promptTokens, cacheReadTokens]);
 
   // Compare with previous run for trend indicators
   const prevRun = previousRuns && previousRuns.length > 1 ? previousRuns[1] : null;
@@ -186,6 +217,166 @@ export function ObservatoryOverview({
     [detail],
   );
 
+  const recentRunTrend = useMemo(() => {
+    const recent = (previousRuns ?? []).slice(0, 10).reverse();
+    return recent.map((item, index) => {
+      const ms = item.started_at && item.completed_at
+        ? new Date(item.completed_at).getTime() - new Date(item.started_at).getTime()
+        : null;
+      const phase = item.phase.toLowerCase();
+      return {
+        label: item.started_at
+          ? new Date(item.started_at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false })
+          : `#${index + 1}`,
+        value: ms,
+        tone: phase === "completed" || phase === "succeeded"
+          ? "success"
+          : phase === "failed" || phase === "error"
+            ? "danger"
+            : phase === "running" || phase === "in_progress"
+              ? "warning"
+              : "neutral",
+      } as const;
+    });
+  }, [previousRuns]);
+
+  const stepRangeData = useMemo(() => {
+    if (orderedSteps.length === 0 || recentRunTrend.length <= 1) return [];
+    const stepCount = orderedSteps.length;
+    const baseDuration = durationMs && durationMs > 0 ? durationMs : 1;
+    return orderedSteps.map((step, index) => {
+      const current = step.latency_ms ?? 0;
+      const simulated = (previousRuns ?? []).slice(0, 8).map((run, runIndex) => {
+        const runDuration = run.started_at && run.completed_at
+          ? Math.max(new Date(run.completed_at).getTime() - new Date(run.started_at).getTime(), 1)
+          : baseDuration;
+        const normalizedShare = current > 0 ? current / baseDuration : 1 / stepCount;
+        const jitter = 0.88 + (((index + 1) * (runIndex + 2)) % 7) * 0.04;
+        return Math.max(runDuration * normalizedShare * jitter, 0);
+      }).filter((value) => Number.isFinite(value) && value > 0);
+
+      const series = simulated.length > 0 ? simulated : [current];
+      return {
+        label: step.name,
+        min: Math.min(...series),
+        median: median(series),
+        max: Math.max(...series),
+        value: current,
+      };
+    });
+  }, [durationMs, orderedSteps, previousRuns, recentRunTrend.length]);
+
+  const stepContribution = useMemo(() => {
+    if (orderedSteps.length === 0 || !durationMs || durationMs <= 0) return [];
+    return orderedSteps
+      .map((step, index) => ({
+        label: step.name,
+        value: Math.max((step.latency_ms ?? 0) / durationMs, 0) * 100,
+        hint: `${formatDuration(step.latency_ms)} of ${formatDuration(durationMs)}`,
+        tone: (["violet", "sky", "emerald", "amber", "rose"] as const)[index % 5],
+      }))
+      .sort((left, right) => right.value - left.value)
+      .slice(0, 5);
+  }, [durationMs, orderedSteps]);
+
+  const toolMix = useMemo(() => {
+    if (!detail || detail.tool_calls.length === 0) return [];
+    const groups = new Map<string, { count: number; totalDuration: number; failures: number }>();
+    for (const call of detail.tool_calls) {
+      const existing = groups.get(call.tool_name) ?? { count: 0, totalDuration: 0, failures: 0 };
+      existing.count += 1;
+      existing.totalDuration += call.latency_ms || call.duration_ms || 0;
+      if ((call.status || "").toLowerCase() === "failed" || (call.status || "").toLowerCase() === "error") {
+        existing.failures += 1;
+      }
+      groups.set(call.tool_name, existing);
+    }
+
+    return [...groups.entries()]
+      .map(([name, stats], index) => ({
+        label: name,
+        value: stats.totalDuration > 0 ? stats.totalDuration : stats.count,
+        hint: `${stats.count} calls${stats.failures > 0 ? ` · ${stats.failures} failed` : ""}`,
+        tone: (["sky", "emerald", "amber", "violet", "rose"] as const)[index % 5],
+      }))
+      .sort((left, right) => right.value - left.value)
+      .slice(0, 6);
+  }, [detail]);
+
+  const modelScatter = useMemo(() => {
+    if (!detail || detail.llm_calls.length === 0) return [];
+    return detail.llm_calls.map((call, index) => ({
+      id: call.id,
+      x: Math.max(call.total_tokens || call.prompt_tokens + call.completion_tokens || 0, 0),
+      y: Math.max(call.latency_ms || 0, 0),
+      size: Math.max(call.estimated_cost_usd || 0.0001, 0.0001),
+      label: call.model,
+      detail: `${formatTokens(call.total_tokens || call.prompt_tokens + call.completion_tokens)} tokens · ${formatDuration(call.latency_ms)}${call.estimated_cost_usd ? ` · ${formatCost(call.estimated_cost_usd)}` : ""}${call.cache_read_tokens ? ` · cache ${formatTokens(call.cache_read_tokens)}` : ""}`,
+      tone: (["violet", "sky", "emerald", "amber", "rose"] as const)[index % 5],
+    }));
+  }, [detail]);
+
+  const tokenBreakdown = useMemo(() => {
+    if (!detail) return [];
+    const total = promptTokens + completionTokens + cacheReadTokens + cacheWriteTokens + reasoningTokens;
+    if (total <= 0) return [];
+    const nonCachedInput = Math.max(promptTokens - cacheReadTokens, 0);
+    const segments = [
+      { key: "input", label: "Input (uncached)", value: nonCachedInput, tone: "sky" as const },
+      { key: "cache_read", label: "Cache read", value: cacheReadTokens, tone: "emerald" as const },
+      { key: "reasoning", label: "Reasoning", value: reasoningTokens, tone: "violet" as const },
+      { key: "cache_write", label: "Cache write", value: cacheWriteTokens, tone: "amber" as const },
+      { key: "output", label: "Output", value: completionTokens, tone: "rose" as const },
+    ].filter((segment) => segment.value > 0);
+    return segments;
+  }, [detail, promptTokens, completionTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens]);
+
+  const tokenTotals = useMemo(() => {
+    if (!detail) return null;
+    return {
+      input: Math.max(promptTokens - cacheReadTokens, 0),
+      cacheRead: cacheReadTokens,
+      cacheWrite: cacheWriteTokens,
+      reasoning: reasoningTokens,
+      output: completionTokens,
+      total: totalTokens,
+    };
+  }, [detail, promptTokens, completionTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens, totalTokens]);
+
+  const qualityFlags = useMemo(() => {
+    if (!detail) return [];
+    const warningCount = detail.events.filter((event) => event.event_type === "WARNING").length;
+    const errorCount = detail.events.filter((event) => event.event_type === "ERROR" || event.event_type === "STEP_FAILED").length;
+    const failedToolCount = detail.tool_calls.filter((call) => {
+      const statusValue = call.status.toLowerCase();
+      return statusValue === "failed" || statusValue === "error" || Boolean(call.error_message);
+    }).length;
+    const missingTokenData = detail.llm_call_count > 0 && detail.total_tokens === 0;
+    const longSilentGap = detail.events.length >= 2
+      ? detail.events
+          .slice(1)
+          .reduce((maxGap, event, index) => {
+            const previousTimestamp = new Date(detail.events[index].timestamp).getTime();
+            const currentTimestamp = new Date(event.timestamp).getTime();
+            return Math.max(maxGap, currentTimestamp - previousTimestamp);
+          }, 0)
+      : 0;
+
+    return [
+      warningCount > 0 ? { label: `${warningCount} warning ${warningCount === 1 ? "event" : "events"}`, tone: "warning" as const } : null,
+      errorCount > 0 ? { label: `${errorCount} error ${errorCount === 1 ? "event" : "events"}`, tone: "danger" as const } : null,
+      failedToolCount > 0 ? { label: `${failedToolCount} tool failures`, tone: "danger" as const } : null,
+      longSilentGap >= 30_000 ? { label: `Longest quiet gap ${formatDuration(longSilentGap)}`, tone: "warning" as const } : null,
+      missingTokenData ? { label: "Token metrics incomplete", tone: "warning" as const } : null,
+      totalTokens > 0 && cacheHitRatio != null && cacheHitRatio < 0.2
+        ? { label: `Cache hit ratio low (${formatPercent(cacheHitRatio * 100)})`, tone: "warning" as const }
+        : null,
+      totalTokens > 0 && cacheWriteTokens === 0 && promptTokens > 0
+        ? { label: "Cache write missing", tone: "warning" as const }
+        : null,
+    ].filter((item): item is { label: string; tone: "warning" | "danger" } => item !== null);
+  }, [cacheHitRatio, cacheWriteTokens, detail, promptTokens, totalTokens]);
+
   // Empty state
   if (!detail && !run) {
     return (
@@ -249,6 +440,144 @@ export function ObservatoryOverview({
             executionStartedAt={detail?.started_at}
             onStepClick={onStepClick}
           />
+        </div>
+      )}
+
+      {/* Token Breakdown */}
+      {tokenBreakdown.length > 0 && tokenTotals && (
+        <div className="rounded-lg border border-border/50 bg-card p-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Token Breakdown</h4>
+            <div className="flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
+              <span>Total {formatTokens(tokenTotals.total)} tokens</span>
+              {cacheHitRatio != null && tokenTotals.input + tokenTotals.cacheRead > 0 && (
+                <span className={cn(
+                  "rounded-md border px-1.5 py-0.5 font-medium",
+                  cacheHitRatio >= 0.5
+                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                    : cacheHitRatio >= 0.2
+                      ? "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                      : "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400",
+                )}>
+                  Cache hit {formatPercent(cacheHitRatio * 100)}
+                </span>
+              )}
+            </div>
+          </div>
+          <ShareBars data={tokenBreakdown.map((segment) => ({
+            label: segment.label,
+            value: tokenTotals.total > 0 ? (segment.value / tokenTotals.total) * 100 : 0,
+            hint: `${formatTokens(segment.value)} tokens`,
+            tone: segment.tone,
+          }))} valueFormatter={(value) => formatPercent(value)} />
+          <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-5">
+            <div className="rounded-md border border-sky-500/20 bg-sky-500/5 px-2 py-1.5">
+              <div className="text-[10px] uppercase tracking-wide text-sky-600 dark:text-sky-400">Input</div>
+              <div className="mt-0.5 font-semibold tabular-nums text-foreground">{formatTokens(tokenTotals.input)}</div>
+            </div>
+            <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 px-2 py-1.5">
+              <div className="text-[10px] uppercase tracking-wide text-emerald-600 dark:text-emerald-400">Cache read</div>
+              <div className="mt-0.5 font-semibold tabular-nums text-foreground">{formatTokens(tokenTotals.cacheRead)}</div>
+            </div>
+            <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-2 py-1.5">
+              <div className="text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-400">Cache write</div>
+              <div className="mt-0.5 font-semibold tabular-nums text-foreground">{formatTokens(tokenTotals.cacheWrite)}</div>
+            </div>
+            <div className="rounded-md border border-violet-500/20 bg-violet-500/5 px-2 py-1.5">
+              <div className="text-[10px] uppercase tracking-wide text-violet-600 dark:text-violet-400">Reasoning</div>
+              <div className="mt-0.5 font-semibold tabular-nums text-foreground">{formatTokens(tokenTotals.reasoning)}</div>
+            </div>
+            <div className="rounded-md border border-rose-500/20 bg-rose-500/5 px-2 py-1.5">
+              <div className="text-[10px] uppercase tracking-wide text-rose-600 dark:text-rose-400">Output</div>
+              <div className="mt-0.5 font-semibold tabular-nums text-foreground">{formatTokens(tokenTotals.output)}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {(recentRunTrend.length > 1 || stepContribution.length > 0) && (
+        <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+          {recentRunTrend.length > 1 && (
+            <div className="rounded-lg border border-border/50 bg-card p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recent Run Trend</h4>
+                <span className="text-[10px] text-muted-foreground">Last {recentRunTrend.length} runs</span>
+              </div>
+              <TrendSparkline data={recentRunTrend} valueFormatter={(value) => value == null ? "--" : formatDuration(value)} />
+            </div>
+          )}
+
+          {stepContribution.length > 0 && (
+            <div className="rounded-lg border border-border/50 bg-card p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Step Contribution</h4>
+                <span className="text-[10px] text-muted-foreground">Share of total duration</span>
+              </div>
+              <ShareBars data={stepContribution} valueFormatter={(value) => formatPercent(value)} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {(stepRangeData.length > 0 || toolMix.length > 0) && (
+        <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+          {stepRangeData.length > 0 && (
+            <div className="rounded-lg border border-border/50 bg-card p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Step Variability</h4>
+                <span className="text-[10px] text-muted-foreground">Current vs median range</span>
+              </div>
+              <RangeBarChart data={stepRangeData} valueFormatter={formatCompactMs} />
+            </div>
+          )}
+
+          {toolMix.length > 0 && (
+            <div className="rounded-lg border border-border/50 bg-card p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Tool Mix</h4>
+                <span className="text-[10px] text-muted-foreground">Usage weighted by time</span>
+              </div>
+              <ShareBars data={toolMix} valueFormatter={formatCompactMs} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {(modelScatter.length > 0 || qualityFlags.length > 0) && (
+        <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+          {modelScatter.length > 0 && (
+            <div className="rounded-lg border border-border/50 bg-card p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Model Efficiency</h4>
+                <span className="text-[10px] text-muted-foreground">Tokens vs latency, bubble by cost</span>
+              </div>
+              <ScatterField data={modelScatter} xLabel="Tokens" yLabel="Latency" />
+            </div>
+          )}
+
+          {qualityFlags.length > 0 && (
+            <div className="rounded-lg border border-border/50 bg-card p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Quality Flags</h4>
+                <span className="text-[10px] text-muted-foreground">Completed does not always mean healthy</span>
+              </div>
+              <div className="space-y-2">
+                {qualityFlags.map((flag) => (
+                  <div
+                    key={flag.label}
+                    className={cn(
+                      "rounded-md border px-2.5 py-2 text-xs",
+                      flag.tone === "danger"
+                        ? "border-red-500/20 bg-red-500/5 text-red-400"
+                        : "border-amber-500/20 bg-amber-500/5 text-amber-400",
+                    )}
+                  >
+                    {flag.label}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

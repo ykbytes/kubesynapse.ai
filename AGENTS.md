@@ -17,6 +17,8 @@ This file gives AI coding agents the minimum repo-specific context needed to wor
 - Workflow detail lives mainly in worker artifacts and logs; CRD status is summary-level.
 - MCP exists in two forms: per-agent sidecars and the shared MCP hub.
 - Run intelligence is built into the platform: runtime events flow into the gateway trace store, then into signal watch and system-agent driven analysis.
+- The durable Observatory tool payloads shown in the UI come from runtime-extracted final `tool_calls`, not from transient runtime status events.
+- OpenCode currently caps extracted tool outputs at 40,000 characters before they enter the trace pipeline.
 
 ## Repo Map
 
@@ -43,6 +45,7 @@ This file gives AI coding agents the minimum repo-specific context needed to wor
 - Prefer chart templates and values over prose docs if they disagree, then update the stale doc in the same change when appropriate.
 - When changing chart values or deployment wiring, keep related docs aligned: [charts/kubesynapse/README.md](charts/kubesynapse/README.md), [docs/configuration-reference.md](docs/configuration-reference.md), and the matching files under [deploy/](deploy/).
 - When changing architecture-sensitive behavior, check whether [docs/architecture-overview.md](docs/architecture-overview.md), [docs/architecture.md](docs/architecture.md), [docs/observability-explained.md](docs/observability-explained.md), or [docs/runtime-api-spec.md](docs/runtime-api-spec.md) need updates.
+- When changing AgentPolicy enforcement or Gatekeeper templates, also update the in-app docs at [web-ui/src/components/docs/sections.tsx](web-ui/src/components/docs/sections.tsx).
 - For web UI work, preserve the same-host `/api` proxy behavior used by both the Vite dev server and the Helm Nginx config.
 - For auth or secret work, inspect both application code and chart wiring, especially [charts/kubesynapse/templates/api-gateway.yaml](charts/kubesynapse/templates/api-gateway.yaml) and [charts/kubesynapse/templates/external-secrets.yaml](charts/kubesynapse/templates/external-secrets.yaml).
 - System agents are installed as post-install and post-upgrade Helm hooks. Do not rename or remove them casually.

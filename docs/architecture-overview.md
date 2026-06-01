@@ -137,7 +137,7 @@ flowchart TB
 - **Security** (green) — The hardened baseline includes immutable runtime config, credential isolation, network policy, and audit propagation into runtime pods
 - **Execution Plane** (green/pink/teal) — OpenCode runs as the production runtime in isolated StatefulSets; workflow Jobs persist detailed evidence as artifacts and logs; MCP access can come from 10 bundled tool sidecars, the separate collector sidecar, or shared hub services
 - **Shared Services** (gray) — The primary model-call path is runtime -> LiteLLM -> provider; PostgreSQL stores auth, durable memory, and traces; Redis backs gateway and LiteLLM caching; Qdrant supports optional semantic retrieval; NATS remains a configured async extension point
-- **Run Intelligence** (purple) — Runtime and worker events flow into the Execution Observatory, Signal Watch runs SQL anomaly detection, and system agents are invoked for AI-powered explanations
+- **Run Intelligence** (purple) — Worker execution traces and runtime semantic events flow into the gateway, the Execution Observatory renders enriched step and tool detail, Signal Watch runs SQL anomaly detection, and system agents are invoked for AI-powered explanations
 
 ## 3. Control Plane
 
@@ -223,19 +223,20 @@ The Run Intelligence Layer extends the Execution Observatory with semantic event
 | Component | Location | Purpose |
 |---|---|---|
 | `runtime_events.py` | Each runtime + worker | Emits structured events to the API gateway |
-| `trace_store.py` | API gateway | Stores events in `runtime_run_events` table |
+| `trace_store.py` | API gateway | Stores execution traces and semantic runtime events in PostgreSQL |
 | `signal_watch.py` | Operator controller | Periodic SQL-based anomaly detection |
 | `traces_router.py` | API gateway | Timeline, query, and summary APIs |
 | `system-agents.yaml` | Helm chart | Predefined AIAgent CRs for analysis |
 
 ### Event Flow
 
-1. **Emission**: The OpenCode runtime and the operator worker emit events via their `runtime_events` module (alpha runtimes also emit events when used)
-2. **Ingestion**: Events are batched and POSTed to `POST /api/v1/traces/runtime-events`
-3. **Storage**: The API gateway upserts events into the `runtime_run_events` table (idempotent on `event_id`)
-4. **Detection**: The signal watch controller runs SQL checks every 60 seconds
-5. **Reporting**: Anomalies create `ObservationReport` CRs with severity classification
-6. **Analysis**: System agents can be invoked for AI-powered explanations
+1. **Execution tracing**: The operator worker batches step, LLM, and tool execution events to `POST /api/v1/traces/batch`
+2. **Semantic events**: The OpenCode runtime and the operator worker emit runtime events via their `runtime_events` module (alpha runtimes also emit events when used)
+3. **Ingestion**: Execution traces and semantic events are POSTed to the gateway on their respective trace endpoints
+4. **Storage**: The API gateway stores execution detail in `execution_traces` and semantic events in `runtime_run_events`
+5. **Detection**: The signal watch controller runs SQL checks every 60 seconds
+6. **Reporting**: Anomalies create `ObservationReport` CRs with severity classification
+7. **Analysis**: System agents can be invoked for AI-powered explanations
 
 ### System Agents
 

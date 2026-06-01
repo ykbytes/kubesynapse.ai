@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, Fragment } from "react";
 import {
   Activity,
   AlertTriangle,
   BookOpen,
   Braces,
   BrainCircuit,
+  ChevronRight,
   Code2,
   FileCode,
   FileText,
@@ -42,7 +43,10 @@ import {
   type WorkflowRunTraceResponse,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type { ExecutionListItem, ExecutionTrace, LLMCallRecord, StepTrace } from "@/types";
+import type { ExecutionListItem, ExecutionTrace, LLMCallRecord, StepTrace, ToolCallRecord } from "@/types";
+
+import { Highlight, type Language } from "prism-react-renderer";
+import { KubeSynapseTheme } from "@/components/docs/shared";
 
 import { CopyButton } from "../shared/CopyButton";
 import { ExecutionBanner } from "../observatory/ExecutionBanner";
@@ -163,6 +167,395 @@ function getToolIconColor(toolName: string): string {
   return "text-muted-foreground";
 }
 
+/** Extract a short, meaningful summary line from the tool call's args_preview. */
+function tcLatency(tc: ToolCallRecord): number {
+  return tc.latency_ms || tc.duration_ms || 0;
+}
+
+function tcTimestamp(tc: ToolCallRecord): string {
+  return tc.created_at || tc.started_at || "";
+}
+
+function getToolCallSummary(tc: ToolCallRecord): string {
+  const name = tc.tool_name.toLowerCase();
+
+  // Prefer tool_args (JSON object from API), fall back to args_preview (string)
+  let parsed: Record<string, unknown> | null = null;
+  if (tc.tool_args && typeof tc.tool_args === "object" && !Array.isArray(tc.tool_args)) {
+    parsed = tc.tool_args as Record<string, unknown>;
+  } else if (tc.args_preview) {
+    try {
+      const p = JSON.parse(tc.args_preview);
+      if (typeof p === "object" && p !== null && !Array.isArray(p)) {
+        parsed = p as Record<string, unknown>;
+      }
+    } catch {
+      // not JSON
+    }
+  }
+
+  if (parsed) {
+    if (name.includes("skill") && parsed.name) return String(parsed.name);
+    if ((name.includes("webfetch") || name.includes("fetch")) && parsed.url) return String(parsed.url);
+    if (parsed.filePath) return String(parsed.filePath);
+    if (parsed.path) return String(parsed.path);
+    if (parsed.pattern) return String(parsed.pattern);
+    if (parsed.command) return String(parsed.command).length > 120 ? String(parsed.command).slice(0, 120) + "..." : String(parsed.command);
+    if (parsed.file) return String(parsed.file);
+    if (parsed.description) return String(parsed.description);
+    if (parsed.prompt) return String(parsed.prompt).length > 100 ? String(parsed.prompt).slice(0, 100) + "..." : String(parsed.prompt);
+    if (parsed.query) return String(parsed.query);
+    const firstStr = Object.values(parsed).find((v) => typeof v === "string" && (v as string).length > 0) as string | undefined;
+    if (firstStr) return firstStr.length > 120 ? firstStr.slice(0, 120) + "..." : firstStr;
+  }
+
+  // Fallback to raw string
+  const raw = tc.args_preview || (tc.tool_args ? JSON.stringify(tc.tool_args) : "");
+  if (raw.length > 120) return raw.slice(0, 120) + "...";
+  return raw;
+}
+
+/** Get a label for the detail field based on tool type. */
+function getToolDetailLabel(toolName: string): string {
+  const name = toolName.toLowerCase();
+  if (name.includes("skill")) return "Skill";
+  if (name.includes("webfetch") || name.includes("fetch")) return "URL";
+  if (name.includes("search") || name.includes("docs")) return "Query";
+  if (name.includes("bash") || name.includes("shell") || name.includes("exec") || name.includes("command")) return "Command";
+  if (name.includes("read") || name.includes("glob") || name.includes("grep")) return "Path";
+  if (name.includes("apply_patch") || name.includes("edit") || name.includes("write")) return "File";
+  if (name.includes("task")) return "Task";
+  return "Input";
+}
+
+/**
+ * Fix raw control characters inside JSON string values that make JSON.parse fail.
+ * Replaces unescaped newlines, carriage returns, tabs etc inside string literals.
+ */
+function fixJsonControlChars(jsonStr: string): string {
+  // Replace control characters that appear inside string values with their JSON escapes.
+  // We walk the string tracking whether we're inside a JSON string literal.
+  let result = "";
+  let inString = false;
+  let i = 0;
+  while (i < jsonStr.length) {
+    const ch = jsonStr[i];
+    if (inString) {
+      if (ch === "\\") {
+        // escape sequence — copy it and the next char
+        result += ch;
+        i++;
+        if (i < jsonStr.length) {
+          result += jsonStr[i];
+        }
+      } else if (ch === '"') {
+        // end of string
+        result += ch;
+        inString = false;
+      } else if (ch === "\n") {
+        result += "\\n";
+      } else if (ch === "\r") {
+        result += "\\r";
+      } else if (ch === "\t") {
+        result += "\\t";
+      } else if (ch.charCodeAt(0) < 0x20) {
+        // other control char
+        result += "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0");
+      } else {
+        result += ch;
+      }
+    } else {
+      if (ch === '"') {
+        inString = true;
+      }
+      result += ch;
+    }
+    i++;
+  }
+  return result;
+}
+
+/** Detect if a string looks like a unified diff (patch). */
+function isDiffContent(text: string): boolean {
+  if (!text) return false;
+  const lines = text.split(/\r?\n/).slice(0, 20);
+  let diffMarkers = 0;
+  for (const line of lines) {
+    if (line.startsWith("+") || line.startsWith("-") || line.startsWith("@@") || line.startsWith("***")) {
+      diffMarkers++;
+    }
+  }
+  return diffMarkers >= 3;
+}
+
+/** GitHub-style diff/patch syntax highlighting. */
+function DiffHighlight({ code }: { code: string }) {
+  const lines = code.split(/\r?\n/);
+  return (
+    <pre className="overflow-x-auto text-[10px] leading-relaxed bg-[oklch(0.11_0.005_264)] rounded-md border border-border/40 px-0 py-2 max-h-60 overflow-y-auto font-mono">
+      {lines.map((line, i) => {
+        let bg = "";
+        let textColor = "text-foreground/80";
+        if (line.startsWith("+++") || line.startsWith("---")) {
+          bg = "bg-blue-500/10";
+          textColor = "text-blue-400";
+        } else if (line.startsWith("+")) {
+          bg = "bg-green-500/10";
+          textColor = "text-green-400";
+        } else if (line.startsWith("-")) {
+          bg = "bg-red-500/10";
+          textColor = "text-red-400";
+        } else if (line.startsWith("@@")) {
+          bg = "bg-purple-500/10";
+          textColor = "text-purple-400";
+        } else if (line.startsWith("***")) {
+          bg = "bg-amber-500/10";
+          textColor = "text-amber-400";
+        }
+        return (
+          <div key={i} className={cn("table-row", bg)}>
+            <span className="table-cell select-none pr-3 pl-2 text-right text-[9px] text-muted-foreground/40 w-8">{i + 1}</span>
+            <span className={cn("table-cell pr-3 whitespace-pre-wrap break-all", textColor)}>{line}</span>
+          </div>
+        );
+      })}
+    </pre>
+  );
+}
+
+/** Syntax-highlighted JSON block. */
+function JsonHighlight({ code }: { code: string }) {
+  return (
+    <Highlight theme={KubeSynapseTheme} code={code} language={"json" as Language}>
+      {({ tokens, getLineProps, getTokenProps }) => (
+        <pre className="overflow-x-auto text-[10px] leading-relaxed bg-[oklch(0.11_0.005_264)] rounded-md border border-border/40 px-3 py-2 max-h-60 overflow-y-auto font-mono">
+          {tokens.map((line, i) => {
+            const lineProps = getLineProps({ line, key: i });
+            // strip the className key to avoid React warnings about non-standard props on pre
+            const { className: _lc, ...rest } = lineProps;
+            return (
+              <div key={i} {...rest} className="table-row">
+                <span className="table-cell select-none pr-3 text-right text-[9px] text-muted-foreground/40 w-8">{i + 1}</span>
+                <span className="table-cell">
+                  {line.map((token, key) => (
+                    <span key={key} {...getTokenProps({ token, key })} />
+                  ))}
+                </span>
+              </div>
+            );
+          })}
+        </pre>
+      )}
+    </Highlight>
+  );
+}
+
+/**
+ * Attempt to close truncated JSON by appending missing closing brackets/braces.
+ * Counts the balance of {, }, [, ] (respecting string boundaries) and
+ * appends the needed closers. Returns the closed (and parseable) string.
+ */
+function tryCloseAndParseJson(partial: string): string | null {
+  let openBraces = 0;
+  let openBrackets = 0;
+  let inString = false;
+  let escaped = false;
+  for (const ch of partial) {
+    if (escaped) { escaped = false; continue; }
+    if (ch === "\\") { escaped = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === "{") openBraces++;
+    if (ch === "}") openBraces--;
+    if (ch === "[") openBrackets++;
+    if (ch === "]") openBrackets--;
+  }
+  let closing = "";
+  if (inString) closing += '"';
+  for (let i = 0; i < Math.max(0, openBraces); i++) closing += "}";
+  for (let i = 0; i < Math.max(0, openBrackets); i++) closing += "]";
+  if (!closing) return null; // balanced — nothing to close
+  try {
+    JSON.parse(partial + closing);
+    return partial + closing;
+  } catch {
+    return null;
+  }
+}
+
+/** Visual key-value card for parsed JSON arguments. */
+function ArgsCard({ tc }: { tc: ToolCallRecord }) {
+  // Prefer tool_args (JSON object from API), fall back to args_preview (string)
+  let parsed: Record<string, unknown> | null = null;
+
+  if (tc.tool_args && typeof tc.tool_args === "object" && !Array.isArray(tc.tool_args)) {
+    parsed = tc.tool_args as Record<string, unknown>;
+  } else if (tc.args_preview) {
+    try {
+      const p = JSON.parse(tc.args_preview);
+      if (typeof p === "object" && p !== null && !Array.isArray(p)) {
+        parsed = p as Record<string, unknown>;
+      }
+    } catch {
+      // not JSON — fall through to raw display
+    }
+  }
+
+  // Raw string fallback
+  const rawArgs = tc.args_preview || (tc.tool_args ? JSON.stringify(tc.tool_args, null, 2) : null);
+
+  if (parsed) {
+    const entries = Object.entries(parsed);
+    if (entries.length === 0) return null;
+
+    const name = tc.tool_name.toLowerCase();
+
+    return (
+      <div className="rounded-md border border-border/40 bg-card/50 overflow-hidden">
+        <div className="divide-y divide-border/20">
+          {entries.map(([key, value]) => {
+            const strVal = value == null ? "null" : typeof value === "string" ? value : JSON.stringify(value, null, 2);
+            const isLong = strVal.length > 80;
+            const isJsonValue = value != null && typeof value === "object";
+            // Detect diff/patch content in relevant fields
+            const isDiffField = typeof value === "string" && (
+              key === "patchText" || key === "patch" || key === "diff" ||
+              ((key === "oldString" || key === "newString" || key === "content") && name.includes("edit"))
+            );
+            const showAsDiff = isDiffField || (isLong && typeof value === "string" && isDiffContent(strVal));
+
+            const isPrimary =
+              (name.includes("skill") && key === "name") ||
+              ((name.includes("webfetch") || name.includes("fetch")) && key === "url") ||
+              ((name.includes("bash") || name.includes("shell") || name.includes("exec") || name.includes("command")) && key === "command") ||
+              ((name.includes("read") || name.includes("glob") || name.includes("grep") || name.includes("apply_patch") || name.includes("edit") || name.includes("write")) && (key === "filePath" || key === "path" || key === "file"));
+
+            return (
+              <div key={key} className={cn("px-2.5 py-1.5", isPrimary && "bg-primary/5")}>
+                <div className="flex items-start gap-3">
+                  <span className={cn(
+                    "text-[9px] font-semibold uppercase tracking-wide w-16 shrink-0 pt-0.5",
+                    isPrimary ? "text-primary" : "text-muted-foreground/60",
+                  )}>{key}</span>
+                  <span className="text-[10px] flex-1 min-w-0">
+                    {isLong ? (
+                      showAsDiff ? (
+                        <DiffHighlight code={strVal} />
+                      ) : isJsonValue ? (
+                        <JsonHighlight code={strVal} />
+                      ) : (
+                        <pre className="text-[10px] font-mono whitespace-pre-wrap break-all bg-muted/30 rounded px-2 py-1 max-h-28 overflow-y-auto">{strVal}</pre>
+                      )
+                    ) : (
+                      <span className={cn(isPrimary && "text-foreground font-medium font-mono", !isPrimary && "text-foreground/70 font-mono")}>{strVal}</span>
+                    )}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  // Fallback: syntax-highlight raw text as JSON
+  if (rawArgs) {
+    return <JsonHighlight code={rawArgs} />;
+  }
+
+  return null;
+}
+
+/** Visual result preview with truncation, JSON detection, and diff detection. */
+function ResultBlock({ tc }: { tc: ToolCallRecord }) {
+  const [expanded, setExpanded] = useState(false);
+
+  // Prefer tool_result (JSON object from API), fall back to result_preview (string)
+  let displayText = "";
+  let isJson = false;
+  let isDiff = false;
+
+  const rawResult = tc.tool_result ?? tc.result_preview ?? null;
+
+  if (rawResult != null) {
+    if (typeof rawResult === "string") {
+      const trimmed = rawResult.trim();
+      // Try parsing as JSON — handle truncated data via auto-closing
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        let parsed: unknown = null;
+        // Attempt 1: direct parse
+        try { parsed = JSON.parse(trimmed); } catch { /* fall through */ }
+        // Attempt 2: fix control chars then parse
+        if (parsed == null) {
+          try {
+            const fixed = fixJsonControlChars(trimmed);
+            parsed = JSON.parse(fixed);
+          } catch { /* fall through */ }
+        }
+        // Attempt 3: auto-close truncated JSON then parse
+        if (parsed == null) {
+          const closed = tryCloseAndParseJson(trimmed);
+          if (closed) {
+            try { parsed = JSON.parse(closed); } catch { /* fall through */ }
+          }
+        }
+        if (parsed != null && typeof parsed === "object") {
+          displayText = JSON.stringify(parsed, null, 2);
+          isJson = true;
+        } else {
+          displayText = trimmed;
+        }
+      } else {
+        // Not JSON-like — show as raw text
+        displayText = trimmed;
+      }
+    } else {
+      displayText = JSON.stringify(rawResult, null, 2);
+      isJson = true;
+    }
+  }
+
+  if (!displayText) return null;
+
+  // Detect diff/patch content
+  if (!isJson && isDiffContent(displayText)) {
+    isDiff = true;
+  }
+
+  const lines = displayText.split(/\r?\n/);
+  const isLong = displayText.length > 300 || lines.length > 12;
+
+  if (!isLong) {
+    if (isDiff) return <DiffHighlight code={displayText} />;
+    if (isJson) return <JsonHighlight code={displayText} />;
+    return (
+      <pre className="px-2.5 py-1.5 bg-muted/40 rounded border border-border/30 text-[10px] font-mono text-foreground/80 whitespace-pre-wrap break-all">{displayText}</pre>
+    );
+  }
+
+  const preview = lines.slice(0, 8).join("\n");
+
+  return (
+    <div>
+      {isDiff ? (
+        <DiffHighlight code={expanded ? displayText : `${preview}\n…`} />
+      ) : isJson ? (
+        <JsonHighlight code={expanded ? displayText : `${preview}…`} />
+      ) : (
+        <pre className="px-2.5 py-1.5 bg-muted/40 rounded border border-border/30 rounded-b-none text-[10px] font-mono text-foreground/80 whitespace-pre-wrap break-all">{expanded ? displayText : `${preview}…`}</pre>
+      )}
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        className="w-full px-2.5 py-1 bg-muted/30 rounded border border-t-0 border-border/30 rounded-t-none text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors font-mono"
+      >
+        {expanded ? "Collapse" : `Show all ${lines.length} lines · ${(displayText.length / 1024).toFixed(1)} KB`}
+      </button>
+    </div>
+  );
+}
+
 function isDirectInvokeExecution(execution: Pick<ExecutionListItem, "workflow_name" | "triggered_by"> | Pick<ExecutionTrace, "workflow_name" | "triggered_by">): boolean {
   return execution.triggered_by === "direct-invoke" || execution.workflow_name.startsWith("invoke-") || execution.workflow_name.startsWith("invoke:");
 }
@@ -244,7 +637,8 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   // Models tab: tool search/grouping
   const [toolSearch, setToolSearch] = useState("");
-  const [toolGroupBy, setToolGroupBy] = useState<"individual" | "tool">("tool");
+  const [toolGroupBy, setToolGroupBy] = useState<"individual" | "tool">("individual");
+  const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
   // Logs tab: JSON formatting, fullscreen, wrap, live stream
   const [logJsonFormat, setLogJsonFormat] = useState(false);
   const [logFullscreen, setLogFullscreen] = useState(false);
@@ -778,7 +1172,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                                             </div>
                                           </td>
                                           <td className="px-2.5 py-1.5 text-right tabular-nums text-muted-foreground">
-                                            {tc.latency_ms > 0 ? formatDuration(tc.latency_ms) : <span className="text-muted-foreground/40">--</span>}
+                                            {tcLatency(tc) > 0 ? formatDuration(tcLatency(tc)) : <span className="text-muted-foreground/40">--</span>}
                                           </td>
                                           <td className="px-2.5 py-1.5 text-right">
                                             <span className={cn(
@@ -1159,11 +1553,13 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                           </table>
                         </div>
                       ) : (
-                        <div className="rounded-md border border-border/40 overflow-hidden max-h-80 overflow-y-auto">
+                        <div className="rounded-md border border-border/40 overflow-hidden max-h-[500px] overflow-y-auto">
                           <table className="w-full text-xs">
-                            <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
+                            <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm z-10">
                               <tr className="border-b border-border/30">
+                                <th className="w-6 px-1 py-1.5" />
                                 <th className="px-2.5 py-1.5 text-left text-[10px] font-medium text-muted-foreground">Tool</th>
+                                <th className="px-2.5 py-1.5 text-left text-[10px] font-medium text-muted-foreground">Detail</th>
                                 <th className="px-2.5 py-1.5 text-right text-[10px] font-medium text-muted-foreground">Duration</th>
                                 <th className="px-2.5 py-1.5 text-right text-[10px] font-medium text-muted-foreground">Status</th>
                               </tr>
@@ -1174,25 +1570,87 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                                 : detail.tool_calls
                               ).map((tc) => {
                                 const IndIcon = getToolIcon(tc.tool_name);
+                                const isExpanded = expandedToolCalls.has(tc.id);
+                                const summary = getToolCallSummary(tc);
+                                const detailLabel = getToolDetailLabel(tc.tool_name);
+
                                 return (
-                                  <tr key={tc.id} className="border-b border-border/20 last:border-0 hover:bg-accent/20 transition-colors">
-                                    <td className="px-2.5 py-1.5">
-                                      <div className="flex items-center gap-2">
-                                        <IndIcon className={cn("h-3.5 w-3.5 shrink-0", getToolIconColor(tc.tool_name))} />
-                                        <span className="font-medium text-foreground">{tc.tool_name}</span>
-                                      </div>
-                                    </td>
-                                    <td className="px-2.5 py-1.5 text-right tabular-nums text-muted-foreground">
-                                      {tc.latency_ms > 0 ? formatDuration(tc.latency_ms) : <span className="text-muted-foreground/40">--</span>}
-                                    </td>
-                                    <td className="px-2.5 py-1.5 text-right">
-                                      <span className={cn(
-                                        "text-[10px] font-medium",
-                                        tc.status.toLowerCase() === "completed" || tc.status.toLowerCase() === "succeeded"
-                                          ? "text-emerald-500" : "text-red-500",
-                                      )}>{tc.status}</span>
-                                    </td>
-                                  </tr>
+                                  <Fragment key={tc.id}>
+                                    <tr
+                                      className="border-b border-border/20 last:border-0 hover:bg-accent/20 transition-colors cursor-pointer"
+                                      onClick={() => {
+                                        setExpandedToolCalls((prev) => {
+                                          const next = new Set(prev);
+                                          if (next.has(tc.id)) next.delete(tc.id);
+                                          else next.add(tc.id);
+                                          return next;
+                                        });
+                                      }}
+                                    >
+                                      <td className="px-1 py-1.5 w-6">
+                                        <ChevronRight className={cn(
+                                          "h-3 w-3 text-muted-foreground transition-transform",
+                                          isExpanded && "rotate-90",
+                                        )} />
+                                      </td>
+                                      <td className="px-2.5 py-1.5">
+                                        <div className="flex items-center gap-2">
+                                          <IndIcon className={cn("h-3.5 w-3.5 shrink-0", getToolIconColor(tc.tool_name))} />
+                                          <span className="font-medium text-foreground">{tc.tool_name}</span>
+                                        </div>
+                                      </td>
+                                      <td className="px-2.5 py-1.5 max-w-[240px]">
+                                        <span className="text-muted-foreground/80 font-mono text-[10px] block truncate" title={summary}>
+                                          {summary || <span className="text-muted-foreground/40 italic">no detail</span>}
+                                        </span>
+                                      </td>
+                                      <td className="px-2.5 py-1.5 text-right tabular-nums text-muted-foreground">
+                                        {tcLatency(tc) > 0 ? formatDuration(tcLatency(tc)) : <span className="text-muted-foreground/40">--</span>}
+                                      </td>
+                                      <td className="px-2.5 py-1.5 text-right">
+                                        <span className={cn(
+                                          "text-[10px] font-medium",
+                                          tc.status.toLowerCase() === "completed" || tc.status.toLowerCase() === "succeeded"
+                                            ? "text-emerald-500" : "text-red-500",
+                                        )}>{tc.status}</span>
+                                      </td>
+                                    </tr>
+                                    {isExpanded && (
+                                      <tr key={`${tc.id}-detail`} className="bg-muted/15">
+                                        <td colSpan={5} className="px-4 py-2.5">
+                                          <div className="space-y-2.5 text-[11px]">
+                                            {/* args as visual key-value card */}
+                                            {(tc.tool_args || tc.args_preview) && (
+                                              <div>
+                                                <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide block mb-1">{detailLabel}</span>
+                                                <ArgsCard tc={tc} />
+                                              </div>
+                                            )}
+                                            {/* result with truncation */}
+                                            {(tc.tool_result != null || tc.result_preview) && (
+                                              <div>
+                                                <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide block mb-1">Result</span>
+                                                <ResultBlock tc={tc} />
+                                              </div>
+                                            )}
+                                            {/* error_message */}
+                                            {tc.error_message && (
+                                              <div className="rounded-md bg-red-500/10 border border-red-500/20 px-2.5 py-1.5">
+                                                <span className="text-[10px] font-semibold text-red-500 uppercase tracking-wide">Error</span>
+                                                <pre className="mt-1 text-[10px] font-mono text-red-400 whitespace-pre-wrap break-all">{tc.error_message}</pre>
+                                              </div>
+                                            )}
+                                            {/* Timestamps */}
+                                            <div className="flex items-center gap-3 text-[10px] text-muted-foreground/60 pt-1">
+                                              <span>Created: {formatCompactDate(tcTimestamp(tc))}</span>
+                                              {tcLatency(tc) > 0 && <span>Latency: {formatDuration(tcLatency(tc))}</span>}
+                                              <span className="font-mono text-[9px] text-muted-foreground/40 ml-auto">ID: {tc.id}</span>
+                                            </div>
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </Fragment>
                                 );
                               })}
                             </tbody>

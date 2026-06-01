@@ -8,8 +8,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased] - Sprint 10 (Observatory Pipeline Hardening & UI Fixes)
 
+### Added
+- **Token Breakdown**:
+  - Full token breakdown (prompt, completion, cache_read, cache_write, reasoning) propagated end-to-end from OpenCode runtime through operator/gateway into LLMCallRecord and WorkflowExecution
+  - `cache_read_tokens`, `cache_write_tokens`, `reasoning_tokens` columns added to `runtime_run_events` table
+  - Observatory UI Token Breakdown panel with stacked bar, cache hit ratio, and quality flags
+- **Tool Call Duration**:
+  - Per-tool `duration_ms` extracted from OpenCode's native `state.time.start`/`state.time.end` timestamps in `extract_tool_calls_from_messages()`
+  - Duration propagated through operator worker and gateway direct-invoke handler into `ToolCallRecord.duration_ms`
+  - Observatory Tool Mix chart now shows real per-tool wall-clock time
+- **Policy Enforcement**:
+  - Added optional OPA Gatekeeper sub-chart integration with admission constraints for required policy references, sealed policy protection, tool-pattern validation, and policy orphan prevention
+  - Added `AgentPolicy.spec.sealed` and `AgentPolicy.spec.toolPolicy.adminToolCeiling`
+  - Added operator-side policy attestation via `KUBESYNAPSE_POLICY_HASH` and runtime env injection for `OPENCODE_ADMIN_PERMISSION_CEILING_JSON`
+- **Observatory UI**:
+  - Added Prism-based JSON syntax highlighting for tool arguments and results
+  - Added diff-aware rendering for patch-style tool payloads
+  - Added expandable tool call rows with icon mapping, ArgsCard field extraction, and ResultBlock auto-detection
+  - Added run-level insight charts to the Overview tab: Recent Run Trend (duration sparkline across the workflow's last runs), Step Contribution (share bars), Step Variability (min/median/max range per step with current-run marker), Tool Mix (time-weighted MCP tool usage with failure counts), Model Efficiency (token-vs-latency scatter, bubble by cost), and Quality Flags strip (warning/error events, tool failures, longest quiet gap, missing token data). Pure CSS, no charting library added; derives from payloads already fetched for the Observatory.
+
+### Changed
+- **OpenCode Runtime**:
+  - Increased extracted tool-result payload limit from `2000` to `40000` characters before forwarding trace data to the operator and gateway
+- **Documentation**:
+  - Updated repo docs and in-app docs to reflect the current Observatory workspace, trace payload fields, Gatekeeper-backed policy enforcement, and OpenCode runtime behavior
+
 ### Fixed
 - **Trace Pipeline**:
+  - Fixed 0-tokens issue: operator worker and gateway were reading flat `metadata.prompt_tokens` instead of nested `metadata.tokens.input/output/reasoning/cache_read/cache_write`
+  - Fixed runtime `_sync_emit` omitting `cache_read_tokens`, `cache_write_tokens`, `reasoning_tokens` from event envelopes
+  - Fixed gateway `_upsert_from_event` missing handler for `llm.call` event type (LLM calls from runtime events were silently dropped)
+  - Fixed direct-invoke gateway handler assigning overall execution latency to every tool call instead of per-tool duration
+  - Fixed direct-invoke tool call field name mismatch: gateway now accepts both runtime format (`tool`/`input`/`output`) and legacy format (`name`/`args`/`result`)
   - Fixed `DEFAULT_API_GATEWAY_SHARED_TOKEN` not propagating to worker jobs (workers couldn't auth to `/api/traces/batch`)
   - Changed helm chart from `valueFrom: secretKeyRef` (optional) to direct `value:` for reliable token injection
   - Fixed worker log endpoint looking up pods in workflow namespace instead of operator namespace (`kubesynapse`)
@@ -22,6 +52,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Fixed tabs (Steps, Logs, Insights, Compare) not scrollable — added `flex-1 overflow-y-auto`
   - Fixed observatory sidebar list not rendering in AppSidebar
   - Made tool/LLM call parsers defensive against missing `execution_id` (old data compatibility)
+  - Fixed malformed or truncated JSON results falling back to plain text when the runtime output was missing closing braces
 - **Auth Page**:
   - Tab now shows "Create Account" during bootstrap instead of misleading "Sign In"
   - Hidden broken "Sign in instead" toggle when no users exist (bootstrap mode)

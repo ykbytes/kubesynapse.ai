@@ -111,6 +111,9 @@ def _record_invoke_trace(
     prompt_tokens = int(token_info.get("input", token_info.get("prompt_tokens", 0)))
     completion_tokens = int(token_info.get("output", token_info.get("completion_tokens", 0)))
     total_tokens = int(token_info.get("total", token_info.get("total_tokens", 0)))
+    cache_read_tokens = int(token_info.get("cache_read", token_info.get("cache_read_tokens", 0)))
+    cache_write_tokens = int(token_info.get("cache_write", token_info.get("cache_write_tokens", 0)))
+    reasoning_tokens = int(token_info.get("reasoning", token_info.get("reasoning_tokens", 0)))
     tool_calls = data.get("tool_calls") or []
     tool_calls_count = len(tool_calls)
     llm_calls_count = 1 if total_tokens > 0 else 0
@@ -146,6 +149,9 @@ def _record_invoke_trace(
                 total_tokens=total_tokens,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
+                cache_read_tokens=cache_read_tokens,
+                cache_write_tokens=cache_write_tokens,
+                reasoning_tokens=reasoning_tokens,
                 estimated_cost_usd=float(cost_info) if cost_info else None,
                 triggered_by="direct-invoke",
                 error_message=data.get("error_message") or (str(data.get("detail", ""))[:4096] if data.get("detail") else None),
@@ -163,6 +169,9 @@ def _record_invoke_trace(
                     provider=model_name.split("/")[0] if "/" in model_name else None,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
+                    cache_read_tokens=cache_read_tokens,
+                    cache_write_tokens=cache_write_tokens,
+                    reasoning_tokens=reasoning_tokens,
                     total_tokens=total_tokens,
                     cost_usd=float(cost_info) if cost_info else None,
                     latency_ms=duration_ms,
@@ -172,15 +181,18 @@ def _record_invoke_trace(
 
             for idx, tc in enumerate(tool_calls):
                 tc_id = f"tc-{execution_id[:12]}-{idx}"
+                # Support both runtime format (tool/input/output/duration_ms)
+                # and legacy format (name/args/result)
+                tc_duration = tc.get("duration_ms") or tc.get("duration") or None
                 tc_record = ToolCallRecord(
                     id=tc_id,
                     execution_id=execution_id,
                     step_id=step_id,
-                    tool_name=str(tc.get("name", "unknown")),
-                    tool_args=tc.get("args") if isinstance(tc.get("args"), (dict, list)) else None,
-                    tool_result=str(tc.get("result", ""))[:4096] if tc.get("result") else None,
+                    tool_name=str(tc.get("tool") or tc.get("name") or "unknown"),
+                    tool_args=tc.get("input") or tc.get("args") if isinstance(tc.get("input") or tc.get("args"), (dict, list, str)) else None,
+                    tool_result=str(tc.get("output") or tc.get("result") or "")[:4096] or None,
                     error_message=str(tc.get("error", ""))[:4096] if tc.get("error") else None,
-                    duration_ms=duration_ms,
+                    duration_ms=float(tc_duration) if tc_duration else None,
                     started_at=started_at,
                 )
                 session.add(tc_record)

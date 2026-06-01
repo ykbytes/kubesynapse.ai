@@ -672,7 +672,9 @@ class ExtractToolCallsTests(unittest.TestCase):
             }
         ]
         tool_calls = opencode_runtime_main.extract_tool_calls_from_messages(messages)
-        self.assertLessEqual(len(tool_calls[0]["output"]), 2003)
+        # Cap is 40,000 chars (matches the 40,000 cap applied before traces
+        # enter the gateway trace pipeline); 5,000 fits unchanged.
+        self.assertLessEqual(len(tool_calls[0]["output"]), 40000)
 
 
 class BuildToolOnlyResponseTests(unittest.TestCase):
@@ -1069,6 +1071,93 @@ class ResponseMetadataTests(unittest.TestCase):
     def test_returns_none_when_no_info(self) -> None:
         meta = opencode_runtime_main._build_response_metadata({})
         self.assertIsNone(meta)
+
+    def test_aggregates_tokens_from_step_finish_parts(self) -> None:
+        """parts-walk: sum per-step tokens when step-finish parts carry them,
+        even if info.tokens is zero. This is the canonical multi-step source."""
+        payload = {
+            "info": {
+                "role": "assistant",
+                "tokens": {"input": 0, "output": 0, "total": 0, "cache": {"read": 0, "write": 0}},
+                "cost": 0,
+                "finish": "stop",
+            },
+            "parts": [
+                {"type": "text", "text": "thinking..."},
+                {
+                    "type": "step-finish",
+                    "tokens": {
+                        "input": 1200,
+                        "output": 400,
+                        "reasoning": 100,
+                        "cache": {"read": 800, "write": 200},
+                    },
+                    "cost": 0.0012,
+                },
+                {"type": "text", "text": "more text"},
+                {
+                    "type": "step-finish",
+                    "tokens": {
+                        "input": 1500,
+                        "output": 600,
+                        "reasoning": 0,
+                        "cache": {"read": 1200, "write": 0},
+                    },
+                    "cost": 0.0021,
+                },
+            ],
+        }
+        meta = opencode_runtime_main._build_response_metadata(payload)
+        self.assertIsNotNone(meta)
+        self.assertEqual(meta["tokens"]["input"], 2700)
+        self.assertEqual(meta["tokens"]["output"], 1000)
+        self.assertEqual(meta["tokens"]["reasoning"], 100)
+        self.assertEqual(meta["tokens"]["cache_read"], 2000)
+        self.assertEqual(meta["tokens"]["cache_write"], 200)
+        self.assertEqual(meta["tokens"]["total"], 6000)
+        self.assertEqual(meta["tokens"]["source"], "parts")
+        self.assertAlmostEqual(meta["cost"], 0.0033, places=6)
+
+    def test_merges_info_and_parts_token_buckets(self) -> None:
+        """When parts is zero but info has reasoning, prefer parts and backfill from info."""
+        payload = {
+            "info": {
+                "tokens": {
+                    "input": 100,
+                    "output": 50,
+                    "reasoning": 25,
+                    "cache": {"read": 0, "write": 0},
+                },
+                "cost": 0,
+            },
+            "parts": [
+                {
+                    "type": "step-finish",
+                    "tokens": {
+                        "input": 100,
+                        "output": 50,
+                        "reasoning": 0,  # info has the real number
+                        "cache": {"read": 0, "write": 0},
+                    },
+                    "cost": 0,
+                },
+            ],
+        }
+        meta = opencode_runtime_main._build_response_metadata(payload)
+        self.assertIsNotNone(meta)
+        self.assertEqual(meta["tokens"]["reasoning"], 25)  # backfilled from info
+        self.assertEqual(meta["tokens"]["source"], "parts+info")
+
+    def test_estimates_tokens_from_text_when_no_signal(self) -> None:
+        """When neither parts nor info have tokens, fall back to chars/4 estimation."""
+        payload = {
+            "info": {"role": "assistant", "tokens": {"input": 0, "output": 0, "total": 0}},
+            "parts": [{"type": "text", "text": "a" * 400}],  # 100 estimated output tokens
+        }
+        meta = opencode_runtime_main._build_response_metadata(payload)
+        self.assertIsNotNone(meta)
+        self.assertEqual(meta["tokens"]["output"], 100)
+        self.assertEqual(meta["tokens"]["source"], "estimated")
 
 
 class StructuredOutputExtractionTests(unittest.TestCase):
@@ -4630,3 +4719,117 @@ class RuntimeCapabilitiesSafeIntTests(unittest.TestCase):
             # Should fall back to defaults (3 and 10)
             self.assertEqual(auto["default_max_retries"], 3)
             self.assertEqual(auto["default_max_turns"], 10)
+
+
+class SSEBridgeParserTests(unittest.TestCase):
+    """Tests for the SSE parser used by the live bridge in opencode_client."""
+
+    def test_parses_single_event(self) -> None:
+        from opencode_client import _parse_sse_lines
+        events = list(_parse_sse_lines(iter([
+            "event: message.part.updated",
+            "data: {\"payload\": {\"sessionID\": \"abc\"}}",
+            "",
+        ])))
+        self.assertEqual(len(events), 1)
+        event_type, payload = events[0]
+        self.assertEqual(event_type, "message.part.updated")
+        self.assertEqual(payload["payload"]["sessionID"], "abc")
+
+    def test_parses_multiple_events_with_blank_separators(self) -> None:
+        from opencode_client import _parse_sse_lines
+        events = list(_parse_sse_lines(iter([
+            "event: a",
+            "data: {\"x\": 1}",
+            "",
+            "",
+            "event: b",
+            "data: {\"y\": 2}",
+            "",
+        ])))
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0][0], "a")
+        self.assertEqual(events[0][1], {"x": 1})
+        self.assertEqual(events[1][0], "b")
+        self.assertEqual(events[1][1], {"y": 2})
+
+    def test_ignores_comment_lines_and_partial_frames(self) -> None:
+        from opencode_client import _parse_sse_lines
+        events = list(_parse_sse_lines(iter([
+            ": this is a comment",
+            "event: foo",
+            "data: {\"ok\": true}",
+            "",
+            "event: bar",
+            # missing data
+            "",
+        ])))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0][0], "foo")
+        self.assertTrue(events[0][1]["ok"])
+
+    def test_ignores_malformed_json(self) -> None:
+        from opencode_client import _parse_sse_lines
+        events = list(_parse_sse_lines(iter([
+            "data: {not json}",
+            "",
+            "data: {\"good\": 1}",
+            "",
+        ])))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0][1], {"good": 1})
+
+
+class SafeIntFloatTestsBridge(unittest.TestCase):
+    def test_safe_int_handles_strings_floats_booleans(self) -> None:
+        from opencode_client import _safe_int
+        self.assertEqual(_safe_int("42"), 42)
+        self.assertEqual(_safe_int(3.7), 3)
+        self.assertEqual(_safe_int(True), 1)
+        self.assertEqual(_safe_int(None), 0)
+        self.assertEqual(_safe_int("nope"), 0)
+
+    def test_safe_float_handles_strings_ints_booleans(self) -> None:
+        from opencode_client import _safe_float
+        self.assertAlmostEqual(_safe_float("0.005"), 0.005)
+        self.assertEqual(_safe_float(2), 2.0)
+        self.assertEqual(_safe_float(True), 1.0)
+        self.assertEqual(_safe_float(None), 0.0)
+
+
+class StuckIdlePayloadTests(unittest.TestCase):
+    """Tests for the stuck-idle safety net in the live poller."""
+
+    def test_stuck_when_finish_unknown_and_no_signal(self) -> None:
+        from invoke import _is_stuck_idle_payload
+        payload = {
+            "info": {"role": "assistant", "finish": "unknown", "tokens": {"input": 0, "output": 0}},
+            "parts": [],
+        }
+        self.assertTrue(_is_stuck_idle_payload(payload))
+
+    def test_not_stuck_when_text_present(self) -> None:
+        from invoke import _is_stuck_idle_payload
+        payload = {
+            "info": {"role": "assistant", "finish": "unknown"},
+            "parts": [{"type": "text", "text": "hi"}],
+        }
+        self.assertFalse(_is_stuck_idle_payload(payload))
+
+    def test_not_stuck_when_finish_completed(self) -> None:
+        from invoke import _is_stuck_idle_payload
+        payload = {
+            "info": {"role": "assistant", "finish": "stop"},
+            "parts": [],
+        }
+        self.assertFalse(_is_stuck_idle_payload(payload))
+
+    def test_not_stuck_when_tool_call_present(self) -> None:
+        from invoke import _is_stuck_idle_payload
+        payload = {
+            "info": {"role": "assistant", "finish": "unknown"},
+            "parts": [
+                {"type": "tool", "tool": "bash", "state": {"status": "completed", "input": {}, "output": "ok"}},
+            ],
+        }
+        self.assertFalse(_is_stuck_idle_payload(payload))

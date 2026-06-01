@@ -2856,18 +2856,22 @@ function parseToolCallRecordPayload(payload: unknown, label = "ToolCallRecord"):
     step_id: readOptionalString(record, "step_id", label),
     execution_id: readOptionalString(record, "execution_id", label) ?? "",
     tool_name: readString(record, "tool_name", label, ""),
+    tool_args: (toolArgs as Record<string, unknown> | null) ?? null,
+    tool_result: toolResult,
     args_preview:
       readOptionalString(record, "args_preview", label) ??
       (toolArgs === null ? null : JSON.stringify(toolArgs, null, 2)),
     result_preview:
       readOptionalString(record, "result_preview", label) ??
       (toolResult === null ? errorMessage : JSON.stringify(toolResult, null, 2)),
+    duration_ms: readOptionalNumber(record, "duration_ms", label),
     latency_ms:
       readOptionalNumber(record, "latency_ms", label) ??
       readOptionalNumber(record, "duration_ms", label) ??
       0,
     status: readString(record, "status", label, errorMessage ? "failed" : "completed"),
     error_message: errorMessage,
+    started_at: readOptionalString(record, "started_at", label),
     created_at:
       readOptionalString(record, "created_at", label) ??
       readOptionalString(record, "started_at", label) ??

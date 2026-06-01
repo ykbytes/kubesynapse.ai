@@ -48,6 +48,20 @@ flowchart LR
 - **Circuit Breaker** — Prevents cascading failures when downstream runtimes or
   sidecars become unhealthy.
 
+## Policy Enforcement Notes
+
+The operator is also the runtime-policy enforcement point for `AgentPolicy`:
+
+- It resolves the referenced policy for each `AIAgent` and injects the effective
+  runtime ceiling through `OPENCODE_ADMIN_PERMISSION_CEILING_JSON`.
+- It computes a stable policy hash and annotates runtime workloads so the platform can
+  verify the running policy configuration.
+- It forwards runtime-derived `tool_calls` from the final invoke payload into the
+  gateway trace store so the Observatory can render full tool arguments and results.
+- When the chart enables Gatekeeper, admission constraints complement this runtime
+  enforcement by blocking invalid policy references, updates to sealed policies, and
+  deletion of in-use policies.
+
 ## Worker Engine Deep Dive
 
 The worker engine is the heart of workflow execution:
@@ -64,6 +78,8 @@ The worker engine is the heart of workflow execution:
 - **SSE Streaming Invoke** — For streaming runtimes, the worker opens an SSE
   connection, applies delta transforms, and reconstructs the final response from
   streamed chunks.
+- **Trace Forwarding** — After step completion, the worker emits execution trace events
+  and forwards runtime-extracted `tool_calls` into the gateway's execution trace model.
 
 ## Key Modules
 

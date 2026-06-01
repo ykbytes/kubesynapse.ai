@@ -1166,9 +1166,18 @@ def _emit_llm_call_from_response(
 
     prompt_tokens = _coerce_int(tokens.get("input") or tokens.get("prompt"))
     completion_tokens = _coerce_int(tokens.get("output") or tokens.get("completion"))
+    cache_read_tokens = _coerce_int(tokens.get("cache_read") or tokens.get("cache_read_tokens"))
+    cache_write_tokens = _coerce_int(tokens.get("cache_write") or tokens.get("cache_write_tokens"))
+    reasoning_tokens = _coerce_int(tokens.get("reasoning") or tokens.get("reasoning_tokens"))
     total_tokens = _coerce_int(tokens.get("total") or context_budget.get("total_tokens"))
     if total_tokens == 0:
-        total_tokens = prompt_tokens + completion_tokens
+        total_tokens = (
+            prompt_tokens
+            + completion_tokens
+            + reasoning_tokens
+            + cache_read_tokens
+            + cache_write_tokens
+        )
     duration_ms = _coerce_int(time_info.get("total_ms") or time_info.get("duration_ms") or fallback_duration_ms)
 
     emit_llm_call(
@@ -1176,6 +1185,9 @@ def _emit_llm_call_from_response(
         model=response.model,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+        reasoning_tokens=reasoning_tokens,
         total_tokens=total_tokens,
         cost_usd=_coerce_float(metadata.get("cost")),
         duration_ms=duration_ms,

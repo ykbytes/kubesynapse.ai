@@ -35,6 +35,33 @@ class TestTraceClient:
             assert client._buffer[0]["event_type"] == "execution_completed"
             mock_flush.assert_called_once()
 
+    def test_end_execution_includes_full_metrics_payload(self) -> None:
+        """end_execution should forward aggregate execution metrics unchanged."""
+        client = TraceClient(gateway_url="http://gateway:8080", enabled=True, batch_size=10, flush_interval_sec=60)
+        with patch.object(client, "flush") as mock_flush:
+            client.end_execution(
+                "exec-123",
+                status="completed",
+                outputs={"result": "ok"},
+                metrics={
+                    "total_steps": 3,
+                    "completed_steps": 3,
+                    "failed_steps": 0,
+                    "total_llm_calls": 3,
+                    "total_tool_calls": 7,
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "total_tokens": 150,
+                    "cost_usd": 0.0123,
+                },
+            )
+            event = client._buffer[0]
+            assert event["payload"]["metrics"]["total_tool_calls"] == 7
+            assert event["payload"]["metrics"]["total_llm_calls"] == 3
+            assert event["payload"]["metrics"]["total_tokens"] == 150
+            assert event["payload"]["metrics"]["cost_usd"] == 0.0123
+            mock_flush.assert_called_once()
+
     def test_record_tool_call_queues_event(self) -> None:
         """record_tool_call should queue an event."""
         client = TraceClient(gateway_url="http://gateway:8080", enabled=True, batch_size=10, flush_interval_sec=60)

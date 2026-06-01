@@ -69,6 +69,9 @@ class ExecutionDetailResponse(BaseModel):
     total_tokens: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
     estimated_cost_usd: float | None = None
     triggered_by: str | None = None
     error_message: str | None = None
@@ -101,6 +104,9 @@ class StepDetailResponse(BaseModel):
     llm_calls_count: int = 0
     tool_calls_count: int = 0
     tokens_used: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
     cost_usd: float | None = None
 
     llm_calls: list[dict[str, Any]] = Field(default_factory=list)
@@ -474,6 +480,20 @@ def _event_timestamp_to_utc(event_timestamp: Any) -> datetime | None:
         return None
 
 
+def _coerce_int(value: Any) -> int:
+    """Best-effort int coercion that treats None / non-numeric as 0."""
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
     """Update DB records from a single trace event."""
     event_type = event_data.get("event_type", "custom")
@@ -514,6 +534,7 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
             execution.total_llm_calls = metrics.get("total_llm_calls", execution.total_llm_calls)
             execution.total_tool_calls = metrics.get("total_tool_calls", execution.total_tool_calls)
             execution.duration_ms = trace_store.duration_ms_between(execution.started_at, execution.completed_at)
+            trace_store.refresh_execution_aggregates(session, execution)
         return
 
     if event_type == "step_started" and step_id:
@@ -545,15 +566,29 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
         return
 
     if event_type == "llm_call_completed" and step_id:
+        prompt_tokens = _coerce_int(payload.get("prompt_tokens"))
+        completion_tokens = _coerce_int(payload.get("completion_tokens"))
+        cache_read_tokens = _coerce_int(payload.get("cache_read_tokens"))
+        cache_write_tokens = _coerce_int(payload.get("cache_write_tokens"))
+        reasoning_tokens = _coerce_int(payload.get("reasoning_tokens"))
         record = trace_store.LLMCallRecord(
             id=f"llm-{uuid.uuid4().hex[:12]}",
             execution_id=execution_id,
             step_id=step_id,
             model=payload.get("model", ""),
             provider=payload.get("provider"),
-            prompt_tokens=payload.get("prompt_tokens", 0),
-            completion_tokens=payload.get("completion_tokens", 0),
-            total_tokens=(payload.get("prompt_tokens", 0) + payload.get("completion_tokens", 0)),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+            reasoning_tokens=reasoning_tokens,
+            total_tokens=(
+                prompt_tokens
+                + completion_tokens
+                + cache_read_tokens
+                + cache_write_tokens
+                + reasoning_tokens
+            ),
             cost_usd=payload.get("cost_usd"),
             latency_ms=payload.get("latency_ms"),
             started_at=_event_timestamp_to_utc(event_data.get("timestamp")) or trace_store.utc_now(),
@@ -569,8 +604,77 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
         if step:
             step.llm_calls_count += 1
             step.tokens_used += record.total_tokens
+            step.cache_read_tokens = (step.cache_read_tokens or 0) + cache_read_tokens
+            step.cache_write_tokens = (step.cache_write_tokens or 0) + cache_write_tokens
+            step.reasoning_tokens = (step.reasoning_tokens or 0) + reasoning_tokens
             if record.cost_usd:
                 step.cost_usd = (step.cost_usd or 0.0) + record.cost_usd
+        return
+
+    # Handle runtime-emitted llm.call events (no step_id required)
+    if event_type == "llm.call":
+        prompt_tokens = _coerce_int(event_data.get("prompt_tokens"))
+        completion_tokens = _coerce_int(event_data.get("completion_tokens"))
+        cache_read_tokens = _coerce_int(event_data.get("cache_read_tokens"))
+        cache_write_tokens = _coerce_int(event_data.get("cache_write_tokens"))
+        reasoning_tokens = _coerce_int(event_data.get("reasoning_tokens"))
+        total_tokens = _coerce_int(event_data.get("total_tokens"))
+        if total_tokens == 0:
+            total_tokens = prompt_tokens + completion_tokens + cache_read_tokens + cache_write_tokens + reasoning_tokens
+        if total_tokens == 0:
+            return  # Skip zero-token LLM call events (nothing to record)
+        effective_step_id = step_id or f"step-runtime-{execution_id[:16]}"
+        # Ensure the step exists (create a synthetic one if needed)
+        if not step_id:
+            existing_step = (
+                session.query(trace_store.StepExecution)
+                .filter_by(id=effective_step_id)
+                .one_or_none()
+            )
+            if not existing_step:
+                _get_or_create_step(session, execution_id, effective_step_id, {
+                    "step_name": "runtime-invoke",
+                    "step_type": "llm",
+                })
+        record = trace_store.LLMCallRecord(
+            id=f"llm-{uuid.uuid4().hex[:12]}",
+            execution_id=execution_id,
+            step_id=effective_step_id,
+            model=payload.get("model", ""),
+            provider=payload.get("provider"),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+            reasoning_tokens=reasoning_tokens,
+            total_tokens=total_tokens,
+            cost_usd=event_data.get("cost_usd"),
+            latency_ms=event_data.get("duration_ms"),
+            started_at=_event_timestamp_to_utc(event_data.get("timestamp")) or trace_store.utc_now(),
+        )
+        session.add(record)
+        # Update step aggregates
+        step_obj = (
+            session.query(trace_store.StepExecution)
+            .filter_by(id=effective_step_id)
+            .one_or_none()
+        )
+        if step_obj:
+            step_obj.llm_calls_count += 1
+            step_obj.tokens_used = (step_obj.tokens_used or 0) + total_tokens
+            step_obj.cache_read_tokens = (step_obj.cache_read_tokens or 0) + cache_read_tokens
+            step_obj.cache_write_tokens = (step_obj.cache_write_tokens or 0) + cache_write_tokens
+            step_obj.reasoning_tokens = (step_obj.reasoning_tokens or 0) + reasoning_tokens
+            if record.cost_usd:
+                step_obj.cost_usd = (step_obj.cost_usd or 0.0) + record.cost_usd
+        # Refresh execution-level aggregates so cache/reasoning totals propagate
+        execution = (
+            session.query(trace_store.WorkflowExecution)
+            .filter_by(id=execution_id)
+            .one_or_none()
+        )
+        if execution:
+            trace_store.refresh_execution_aggregates(session, execution)
         return
 
     if event_type in ("tool_call_completed", "tool_call_failed") and step_id:
@@ -926,6 +1030,17 @@ async def ingest_runtime_events(
             ensure_namespace_access(user, evt_ns)
 
     inserted = trace_store.ingest_runtime_events(body.events)
+
+    # Also upsert execution/step/LLM DB records for trace-relevant events
+    _TRACE_RELEVANT_EVENT_TYPES = {"llm.call", "run.completed", "run.error", "run.started"}
+    for evt in body.events:
+        if evt.get("event_type") in _TRACE_RELEVANT_EVENT_TYPES and evt.get("execution_id"):
+            try:
+                with trace_store.db_session() as session:
+                    _upsert_from_event(session, evt)
+            except Exception:
+                logger.debug("Failed to upsert from runtime event %s", evt.get("event_id"), exc_info=True)
+
     return JSONResponse(
         status_code=201,
         content={"inserted": inserted, "total_submitted": len(body.events)},

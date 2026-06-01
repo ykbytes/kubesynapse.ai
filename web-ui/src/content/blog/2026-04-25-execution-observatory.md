@@ -24,40 +24,37 @@ Every execution — whether a single agent invocation or a multi-step workflow �
 
 ## The Interface
 
-The Observatory provides three views:
+The Observatory provides five tabs:
 
-### Execution List
+### Overview
+A dashboard view with key execution metrics: total steps, LLM calls, tool calls, tokens, cost, and signal warnings. Shows a step waterfall and anomaly signals detected during the run.
 
-A filterable list of all executions, sorted by recency. Each entry shows the workflow/agent name, status indicator, duration, and timestamp. Click any execution to expand its trace.
+### Steps
+A split-pane view: step list on the left, detail inspector on the right. Each step shows its LLM calls (with model, tokens, cost, latency) and tool calls (with expandable rows, icon+color mapping, duration, and status).
 
-### Timeline View
+### Logs
+Worker logs with filter modes (all, activity, errors, tooling), step-scoped filtering, JSON formatting toggle, line-wrap toggle, and fullscreen mode. Live log streaming is available for running workflows.
 
-A waterfall timeline showing each step as a horizontal bar. Bar width represents duration. Color indicates status — green for success, red for failure, amber for in-progress. This makes it immediately obvious which steps are bottlenecks.
+### Models & Tools
+All LLM and tool calls for the execution. Tool calls expand inline to show:
+- **ArgsCard** — key-value cards with primary field highlighting (URL, command, filePath, etc.)
+- **ResultBlock** — auto-detects JSON for syntax highlighting via Prism, diff/patch content for GitHub-style colored rendering (green/red/purple/blue), or falls back to plain text
+- **Truncated JSON handling** — auto-closes truncated JSON by appending missing brackets
+- **Tool icons** — distinct icon and color for each tool type (search, bash, read, write, skill, etc.)
 
-### LLM Inspector
-
-Drill into individual LLM calls within a step. See the full prompt, completion, token counts, model used, and response latency. Useful for debugging prompt quality and model behavior.
-
-## Execution Comparison
-
-Select any two executions and compare them side-by-side. The diff view highlights:
-
-- Steps that changed status between runs
-- Duration differences per step
-- Token usage changes
-- New or removed steps
-
-This is invaluable for regression testing — run a workflow, change a prompt, run again, and compare.
+### Compare
+Side-by-side diff of any two executions. Select from recent runs or paste execution IDs. Shows step-level differences in status, duration, and LLM/tool counts.
 
 ## How Traces Are Recorded
 
-Traces are recorded by the gateway and operator during execution:
+Traces are recorded end-to-end by the worker, runtime, and gateway during execution:
 
-1. When `invoke_agent_runtime` is called, a trace row is created with status `running`
-2. As steps complete, timing and token data are appended
-3. On completion or failure, the trace is finalized with the full result summary
+1. The operator worker invokes the runtime and accumulates step, LLM, and tool records in memory
+2. As steps complete, the worker emits batched trace events to `POST /api/v1/traces/batch`
+3. The gateway stores execution detail in PostgreSQL, including `tool_args`, `tool_result`, `duration_ms`, and `started_at`
+4. The worker also forwards semantic runtime events into the Run Intelligence store for cross-run analysis
 
-All trace data is stored in PostgreSQL and exposed through the REST API.
+All trace data is stored in PostgreSQL and exposed through the REST API. Tool call results are stored as full JSON objects (`tool_args`, `tool_result`) with `duration_ms` and `started_at` timestamps. The runtime caps individual tool outputs at 40,000 characters to balance storage with meaningful data.
 
 ## Roadmap
 

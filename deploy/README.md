@@ -66,6 +66,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
   -AdminPassword "KubesynapseAdmin9!"
 ```
 
+This helper is the preferred local quickstart because it keeps the chart overlays,
+local image tags, and same-host `/api` UI routing aligned with the current repo.
+
 > **MCP sidecars:** The quickstart above installs without MCP sidecars (the sample
 > agents in `examples/` don't use them). If your agents reference sidecars via
 > `spec.mcpSidecars`, build the matching images first — see the Kind Development
@@ -162,6 +165,18 @@ The script creates or reuses the `kind-kubesynapse-dev` context, builds the requ
 platform images and the pinned LiteLLM image, loads them into Kind, applies the local
 image override plus `deploy/values.kind.quickstart.yaml`, injects the skills catalog,
 and reconciles the persisted PostgreSQL password on repeat upgrades.
+
+If you want admission-time policy protection in local clusters, enable the optional
+Gatekeeper sub-chart in an extra values file and pass it during `helm upgrade`:
+
+```yaml
+gatekeeper:
+  enabled: true
+  enforcementAction: warn
+```
+
+`warn` is a good local default while iterating on `AgentPolicy.spec.sealed` and
+`spec.toolPolicy.adminToolCeiling`; switch to `deny` once the policy set is stable.
 
 It also restarts the core deployments after Helm succeeds. That restart matters when
 you keep reusing the same local `:dev` image tag, because `kind load docker-image`

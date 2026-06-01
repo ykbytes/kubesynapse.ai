@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import threading
 import time
 import uuid
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import httpx
@@ -588,3 +591,223 @@ def get_session_diff(session_id: str) -> str:
     except (httpx.HTTPError, ValueError):
         logger.warning("Failed to get session diff for %s", session_id)
         return ""
+
+
+# ---------------------------------------------------------------------------
+# Live SSE bridge: subscribe to OpenCode's /api/event stream and emit
+# intermediate step-finish updates to a callback as they arrive.
+#
+# The parts-walk fix in ``analysis._build_response_metadata`` is the
+# authoritative source for per-execution totals because OpenCode's
+# ``info.tokens`` is last-step-wins (see processor.ts in OpenCode 1.15.13).
+# The bridge below is purely additive: it provides real-time liveness in
+# the Run Intelligence stream and the live dashboard, without disturbing
+# the existing trace storage model.
+# ---------------------------------------------------------------------------
+
+
+def _parse_sse_lines(lines: Iterator[str]) -> Iterator[tuple[str, dict[str, Any]]]:
+    """Parse Server-Sent Events from an iterator of text lines.
+
+    Yields ``(event_type, data_dict)`` for every complete event frame.
+    Comment lines (``#``), empty lines, and malformed data are ignored.
+    """
+    event_type = "message"
+    data_lines: list[str] = []
+    for raw in lines:
+        if raw is None:
+            continue
+        line = raw.rstrip("\r\n")
+        if not line:
+            if data_lines:
+                raw_data = "\n".join(data_lines)
+                try:
+                    yield event_type, json.loads(raw_data)
+                except (ValueError, TypeError):
+                    pass
+                event_type = "message"
+                data_lines = []
+            continue
+        if line.startswith(":"):
+            continue
+        if line.startswith("event:"):
+            event_type = line[len("event:") :].strip() or "message"
+            continue
+        if line.startswith("data:"):
+            data_lines.append(line[len("data:") :].lstrip())
+            continue
+    if data_lines:
+        raw_data = "\n".join(data_lines)
+        try:
+            yield event_type, json.loads(raw_data)
+        except (ValueError, TypeError):
+            pass
+
+
+def _coerce_sse_payload(value: Any) -> dict[str, Any] | None:
+    """Extract a payload dict from an SSE event's ``payload`` field."""
+    if isinstance(value, dict):
+        return value
+    return None
+
+
+def stream_session_step_finishes(
+    session_id: str,
+    on_step_finish: Callable[[dict[str, Any], dict[str, Any]], None],
+    *,
+    stop_after_idle: bool = True,
+    max_seconds: float = 900.0,
+) -> threading.Thread:
+    """Subscribe to OpenCode's SSE event stream and forward step-finish parts.
+
+    The function runs in a background thread and returns the thread object.
+    Callers should keep a reference to the thread (and join with a timeout
+    on shutdown) or rely on the daemon flag for clean process exit.
+
+    Parameters
+    ----------
+    session_id:
+        The OpenCode session to filter on. Events with a different
+        ``sessionID`` are ignored.
+    on_step_finish:
+        Callable invoked as ``on_step_finish(part, step_finish_payload)``
+        for each ``message.part.updated`` event whose part type is
+        ``step-finish``. The first argument is the raw part envelope; the
+        second is the normalized tokens/cost payload suitable for direct
+        ingestion by the runtime_events emitter.
+    stop_after_idle:
+        If true, exit the listener as soon as the session becomes idle.
+    max_seconds:
+        Hard timeout to prevent runaway listeners (default 15 minutes).
+    """
+    stop_event = threading.Event()
+    thread = threading.Thread(
+        target=_run_sse_bridge,
+        args=(session_id, on_step_finish, stop_event, stop_after_idle, max_seconds),
+        name=f"opencode-sse-{session_id[:8]}",
+        daemon=True,
+    )
+    thread._stop_event = stop_event  # type: ignore[attr-defined]
+    thread.start()
+    return thread
+
+
+def stop_sse_bridge(thread: threading.Thread | None) -> None:
+    """Signal a stream_session_step_finishes thread to exit and join briefly."""
+    if thread is None:
+        return
+    stop_event = getattr(thread, "_stop_event", None)
+    if stop_event is not None:
+        stop_event.set()
+    thread.join(timeout=2.0)
+
+
+def _run_sse_bridge(
+    session_id: str,
+    on_step_finish: Callable[[dict[str, Any], dict[str, Any]], None],
+    stop_event: threading.Event,
+    stop_after_idle: bool,
+    max_seconds: float,
+) -> None:
+    """Worker for stream_session_step_finishes. Runs until stopped or session idle."""
+    base = server_base_url().rstrip("/")
+    url = f"{base}/event"
+    deadline = time.monotonic() + max_seconds
+
+    while not stop_event.is_set() and time.monotonic() < deadline:
+        try:
+            with httpx.Client(timeout=None, trust_env=False) as client:
+                with client.stream("GET", url, headers={"Accept": "text/event-stream"}) as response:
+                    if response.status_code != 200:
+                        logger.debug("SSE bridge: non-200 status %s, exiting", response.status_code)
+                        return
+                    saw_step_finish = False
+                    for event_type, payload in _parse_sse_lines(response.iter_lines()):
+                        if stop_event.is_set():
+                            return
+                        if not isinstance(payload, dict):
+                            continue
+                        event_payload = _coerce_sse_payload(payload.get("payload"))
+                        if event_payload is None:
+                            continue
+                        if str(event_payload.get("sessionID") or event_payload.get("session_id") or "") != session_id:
+                            continue
+                        if event_type != "message.part.updated":
+                            continue
+                        part = event_payload.get("part")
+                        if not isinstance(part, dict):
+                            continue
+                        if str(part.get("type") or "") != "step-finish":
+                            continue
+                        tokens = part.get("tokens") if isinstance(part.get("tokens"), dict) else {}
+                        info_payload = {
+                            "tokens": {
+                                "input": _safe_int(tokens.get("input")),
+                                "output": _safe_int(tokens.get("output")),
+                                "reasoning": _safe_int(tokens.get("reasoning")),
+                                "cache_read": _safe_int(
+                                    (tokens.get("cache") or {}).get("read")
+                                    if isinstance(tokens.get("cache"), dict)
+                                    else 0
+                                ),
+                                "cache_write": _safe_int(
+                                    (tokens.get("cache") or {}).get("write")
+                                    if isinstance(tokens.get("cache"), dict)
+                                    else 0
+                                ),
+                                "total": _safe_int(tokens.get("total")),
+                            },
+                            "cost": _safe_float(part.get("cost")),
+                        }
+                        try:
+                            on_step_finish(part, info_payload)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning("SSE step-finish callback raised: %s", exc)
+                        saw_step_finish = True
+                    if stop_after_idle and saw_step_finish:
+                        # Stream ended cleanly after a step-finish was seen; loop will
+                        # check session idleness on the next iteration if needed.
+                        if _session_is_idle(session_id):
+                            return
+        except (httpx.HTTPError, OSError) as exc:
+            logger.debug("SSE bridge connection error (will retry if not stopped): %s", exc)
+            if stop_event.wait(timeout=1.0):
+                return
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("SSE bridge unexpected error: %s", exc)
+            if stop_event.wait(timeout=2.0):
+                return
+
+
+def _safe_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
+
+
+def _safe_float(value: Any) -> float:
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def _session_is_idle(session_id: str) -> bool:
+    try:
+        status = get_session_status(session_id)
+        return str(status.get("type", "idle")) == "idle"
+    except (httpx.HTTPError, ValueError):
+        return True

@@ -158,17 +158,43 @@ def _extract_structured_output(payload: dict[str, Any]) -> Any | None:
 
 
 def _build_response_metadata(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """Extract metadata (tokens, cost, timing, structured_output) from the OpenCode response."""
+    """Extract metadata (tokens, cost, timing, structured_output) from the OpenCode response.
+
+    Token aggregation strategy (in priority order):
+
+    1. ``parts[].step-finish`` parts — the canonical per-step usage OpenCode
+       writes. Summed across all ``step-finish`` parts in the response. This is
+       the most reliable source because it captures every model step in a
+       multi-step tool loop, not just the last one.
+    2. ``info.tokens`` — the assistant message's own rollup, which OpenCode
+       writes as the *last* step's usage (``processor.ts:576``) and which can
+       be stale/zero when an upstream provider fails to return usage chunks.
+    3. Heuristic estimation from response text — last-resort fallback so a
+       completed run is never shown as "0 tokens" when there is real text.
+
+    The final ``metadata["tokens"]`` always includes the full breakdown
+    (``input``, ``output``, ``reasoning``, ``cache.read``, ``cache.write``,
+    ``total``) plus a ``source`` field for diagnostics.
+    """
     info = payload.get("info")
     if not isinstance(info, dict):
         return None
     metadata: dict[str, Any] = {}
-    tokens = info.get("tokens")
-    if isinstance(tokens, dict):
-        metadata["tokens"] = tokens
-    cost = info.get("cost")
-    if isinstance(cost, (int, float)):
-        metadata["cost"] = cost
+    parts_tokens, parts_cost = _aggregate_tokens_from_parts(payload)
+    info_tokens, info_cost = _extract_info_tokens_and_cost(info)
+    merged_tokens, token_source = _merge_token_sources(parts_tokens, info_tokens)
+    response_text = extract_response_text(payload)
+    if _tokens_have_no_signal(merged_tokens) and response_text.strip():
+        estimated = _estimate_tokens_from_text(payload, response_text)
+        if estimated is not None:
+            merged_tokens = estimated
+            token_source = "estimated"
+    if merged_tokens is not None:
+        merged_tokens = {**merged_tokens, "source": token_source}
+        metadata["tokens"] = merged_tokens
+    merged_cost = _merge_cost(parts_cost, info_cost)
+    if merged_cost is not None:
+        metadata["cost"] = merged_cost
     time_info = info.get("time")
     if isinstance(time_info, dict):
         metadata["time"] = time_info
@@ -179,6 +205,190 @@ def _build_response_metadata(payload: dict[str, Any]) -> dict[str, Any] | None:
     if structured is not None:
         metadata["structured_output"] = structured
     return metadata or None
+
+
+def _coerce_int(value: Any) -> int:
+    """Best-effort int coercion that treats None / non-numeric as 0."""
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _aggregate_tokens_from_parts(payload: dict[str, Any]) -> tuple[dict[str, int] | None, float | None]:
+    """Sum tokens and cost across every ``step-finish`` part in the payload.
+
+    Returns ``(tokens, cost)``; both may be ``None`` if no parts carried data.
+    The shape returned matches the OpenCode ``Session.Info.tokens`` contract:
+    ``{input, output, reasoning, cache_read, cache_write, total}``.
+    """
+    parts = payload.get("parts")
+    if not isinstance(parts, list):
+        return None, None
+    buckets: dict[str, int] = {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+    }
+    total_cost: float | None = None
+    saw_token_signal = False
+    saw_cost_signal = False
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        if str(part.get("type") or "").strip() != "step-finish":
+            continue
+        step_tokens = part.get("tokens")
+        if isinstance(step_tokens, dict):
+            saw_token_signal = True
+            cache = step_tokens.get("cache") or {}
+            buckets["input"] += _coerce_int(step_tokens.get("input"))
+            buckets["output"] += _coerce_int(step_tokens.get("output"))
+            buckets["reasoning"] += _coerce_int(step_tokens.get("reasoning"))
+            buckets["cache_read"] += _coerce_int(cache.get("read"))
+            buckets["cache_write"] += _coerce_int(cache.get("write"))
+        step_cost = part.get("cost")
+        if isinstance(step_cost, (int, float)) and not isinstance(step_cost, bool):
+            saw_cost_signal = True
+            total_cost = (total_cost or 0.0) + float(step_cost)
+    if not saw_token_signal and not saw_cost_signal:
+        return None, None
+    if saw_token_signal:
+        buckets["total"] = _bucket_total(buckets)
+    if not saw_token_signal:
+        buckets = {}
+    return (buckets or None), (total_cost if saw_cost_signal else None)
+
+
+def _extract_info_tokens_and_cost(info: dict[str, Any]) -> tuple[dict[str, int] | None, float | None]:
+    """Extract the ``info.tokens`` / ``info.cost`` from the assistant message.
+
+    These are OpenCode's own rollup values. They can be stale/zero when the
+    upstream provider did not return usage chunks.
+    """
+    tokens = info.get("tokens")
+    normalized: dict[str, int] | None = None
+    if isinstance(tokens, dict):
+        cache = tokens.get("cache") or {}
+        normalized = {
+            "input": _coerce_int(tokens.get("input")),
+            "output": _coerce_int(tokens.get("output")),
+            "reasoning": _coerce_int(tokens.get("reasoning")),
+            "cache_read": _coerce_int(cache.get("read")),
+            "cache_write": _coerce_int(cache.get("write")),
+        }
+        explicit_total = _coerce_int(tokens.get("total"))
+        if explicit_total > 0:
+            normalized["total"] = explicit_total
+        else:
+            normalized["total"] = _bucket_total(normalized)
+    cost = info.get("cost")
+    cost_value: float | None = None
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+        cost_value = float(cost)
+    return normalized, cost_value
+
+
+def _bucket_total(tokens: dict[str, int]) -> int:
+    """Sum of all token buckets, excluding the redundant ``total`` key."""
+    return (
+        tokens.get("input", 0)
+        + tokens.get("output", 0)
+        + tokens.get("reasoning", 0)
+        + tokens.get("cache_read", 0)
+        + tokens.get("cache_write", 0)
+    )
+
+
+def _merge_token_sources(
+    parts_tokens: dict[str, int] | None,
+    info_tokens: dict[str, int] | None,
+) -> tuple[dict[str, int] | None, str]:
+    """Pick the most reliable token source.
+
+    - If both have signal, prefer the parts sum but fall back to info values
+      for any bucket the parts sum left at zero (e.g. providers that put
+      reasoning only on the message-level).
+    - If only one has signal, use it.
+    - If neither, return ``None``.
+    """
+    parts_signal = parts_tokens is not None and _bucket_total(parts_tokens) > 0
+    info_signal = info_tokens is not None and _bucket_total(info_tokens) > 0
+    if parts_signal and info_signal:
+        merged: dict[str, int] = dict(parts_tokens or {})
+        for key in ("input", "output", "reasoning", "cache_read", "cache_write"):
+            if merged.get(key, 0) == 0 and (info_tokens or {}).get(key, 0) > 0:
+                merged[key] = (info_tokens or {}).get(key, 0)
+        merged["total"] = _bucket_total(merged)
+        return merged, "parts+info"
+    if parts_signal:
+        return dict(parts_tokens or {}), "parts"
+    if info_signal:
+        return dict(info_tokens or {}), "info"
+    return None, "none"
+
+
+def _merge_cost(parts_cost: float | None, info_cost: float | None) -> float | None:
+    """Pick the more complete cost; prefer parts when both have a value."""
+    if parts_cost is not None and parts_cost > 0:
+        return parts_cost
+    if info_cost is not None and info_cost > 0:
+        return info_cost
+    if parts_cost is not None:
+        return parts_cost
+    if info_cost is not None:
+        return info_cost
+    return None
+
+
+def _tokens_have_no_signal(tokens: dict[str, int] | None) -> bool:
+    """Return True if a token dict has no non-zero values."""
+    if not tokens:
+        return True
+    if _bucket_total(tokens) > 0:
+        return False
+    return tokens.get("total", 0) == 0
+
+
+def _estimate_tokens_from_text(
+    payload: dict[str, Any],
+    response_text: str,
+) -> dict[str, int] | None:
+    """Heuristic token estimate from text length when OpenCode returned no usage.
+
+    Uses the standard ``chars / 4`` approximation, which is accurate within ~25%
+    for English prose and is a better-than-zero signal for the UI. Estimates
+    only the *output* side; input estimation would require re-tokenizing the
+    request which we deliberately do not do.
+    """
+    if not response_text or not response_text.strip():
+        return None
+    output_tokens = max(1, len(response_text) // 4)
+    info = payload.get("info")
+    prompt_tokens = 0
+    if isinstance(info, dict):
+        prompt_text = info.get("system") or ""
+        if not prompt_text and isinstance(info.get("user"), str):
+            prompt_text = info["user"]
+        if prompt_text:
+            prompt_tokens = max(0, len(prompt_text) // 4)
+    total = prompt_tokens + output_tokens
+    return {
+        "input": prompt_tokens,
+        "output": output_tokens,
+        "reasoning": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+        "total": total,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -821,16 +1031,30 @@ def extract_tool_calls_from_messages(messages: list[dict[str, Any]]) -> list[dic
             if not isinstance(state, dict):
                 continue
             raw_input = state.get("input")
-            raw_output = truncate_text(str(state.get("output", "")), 2000)
+            raw_output = truncate_text(str(state.get("output", "")), 40000)
             # Redact secrets from both input and output before exposing to the frontend
             sanitized_input = redact_secrets(str(raw_input)) if isinstance(raw_input, str) else raw_input
             sanitized_output = redact_secrets(raw_output)
+            # Extract per-tool duration from state.time (natively provided by OpenCode)
+            time_info = state.get("time")
+            duration_ms: int | None = None
+            if isinstance(time_info, dict):
+                start_ms = time_info.get("start")
+                end_ms = time_info.get("end")
+                if start_ms and end_ms:
+                    try:
+                        duration_ms = int(end_ms) - int(start_ms)
+                        if duration_ms < 0:
+                            duration_ms = None
+                    except (TypeError, ValueError):
+                        pass
             tool_calls.append(
                 {
                     "tool": str(part.get("tool", "")),
                     "status": str(state.get("status", "unknown")),
                     "input": sanitized_input,
                     "output": sanitized_output,
+                    "duration_ms": duration_ms,
                 }
             )
     return tool_calls

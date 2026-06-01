@@ -141,7 +141,7 @@ A full web console with chat workbench, workflow composer, and execution observa
 
 - Chat Workbench with saved sessions and memory-backed continuity
 - Workflow Composer with visual DAG editing and live execution state
-- Execution Observatory: timeline, step detail, LLM/tool call inspection, HTML/JSON export
+- Execution Observatory: overview, steps, logs, models and tools, compare, HTML/JSON export
 - System agents auto-analyze failures, anomalies, and cost spikes
 
 ### Secure and govern
@@ -153,6 +153,7 @@ Security is built in, not bolted on. Every layer — network, container, token, 
 - Non-root runtimes with read-only root filesystem and dropped capabilities
 - Rate limiting on login and agent invocation
 - Audit logging with structured errors and correlation IDs
+- Optional Gatekeeper admission constraints for policy references, sealed policies, and tool-ceiling validation
 
 ### Operate with a single CLI
 
@@ -200,7 +201,7 @@ A separate `collector` sidecar is available for intelligence workflows and is co
 
 ### UI Surfaces
 
-**Chat Workbench** — direct agent interaction, SSE streaming, saved sessions, memory-backed continuity. **Team View** — explicit agent-to-agent collaboration. **Workflow Composer** — visual DAG editing, run history, inline approvals. **Execution Observatory** — execution lists, timelines, step inspection, LLM/tool calls, HTML/JSON export. **Catalog** — MCP registry and skills. **Intelligence** — observability resources and collector-driven flows.
+**Chat Workbench** — direct agent interaction, SSE streaming, saved sessions, memory-backed continuity. **Team View** — explicit agent-to-agent collaboration. **Workflow Composer** — visual DAG editing, run history, inline approvals. **Execution Observatory** — overview, step inspection, logs, models and tools, compare, HTML/JSON export. **Catalog** — MCP registry and skills. **Intelligence** — observability resources and collector-driven flows.
 
 <br>
 
@@ -403,6 +404,7 @@ Read [`cli/README.md`](cli/README.md) for the full command surface.
 | Current implementation walkthrough | [`docs/walkthrough.md`](docs/walkthrough.md) |
 | Runtime API contract | [`docs/runtime-api-spec.md`](docs/runtime-api-spec.md) |
 | Execution Observatory & run intelligence | [`docs/observability-explained.md`](docs/observability-explained.md) |
+| Configuration reference | [`docs/configuration-reference.md`](docs/configuration-reference.md) |
 | Getting started guide | [`docs/getting-started.md`](docs/getting-started.md) |
 | Installation & operations | [`INSTALL.md`](INSTALL.md) |
 | Helm chart guide | [`charts/kubesynapse/README.md`](charts/kubesynapse/README.md) |

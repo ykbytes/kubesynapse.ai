@@ -134,6 +134,7 @@ flowchart TB
 - The operator is the active control-plane engine.
 - Detailed workflow evidence lives in artifacts and logs, while CRD status remains summary-level.
 - MCP is both sidecar-based and connection-driven.
+- Durable Observatory tool payloads come from runtime-extracted final `tool_calls` forwarded by the operator, not from transient runtime status events.
 - NATS is configured, but it is not on the primary invoke or workflow execution path.
 
 ---
@@ -242,16 +243,16 @@ The run-intelligence path is implemented directly in the current repository.
 | Component | Location | Purpose |
 | --- | --- | --- |
 | `runtime_events.py` | Runtimes and worker paths | Emits structured runtime and workflow events |
-| `trace_store.py` | API gateway | Persists execution events in PostgreSQL |
+| `trace_store.py` | API gateway | Persists execution traces and runtime events in PostgreSQL |
 | `traces_router.py` | API gateway | Timeline, trace, summary, and live activity APIs |
 | `signal_watch.py` | Operator | Periodic SQL-based anomaly detection |
 | `system-agents.yaml` | Helm chart | Predefined agents for AI-assisted explanations |
 
 ### Event Flow
 
-1. Runtimes and worker flows emit structured events.
-2. Events are POSTed to `POST /api/v1/traces/runtime-events`.
-3. The gateway stores them in the trace store.
+1. Worker flows emit batched execution traces to `POST /api/v1/traces/batch`.
+2. Runtimes and worker flows also emit structured semantic events to `POST /api/v1/traces/runtime-events`.
+3. The gateway stores execution detail and runtime events in the trace store.
 4. Signal Watch runs SQL checks over recent executions.
 5. Detected anomalies become `ObservationReport` resources.
 6. System agents can be invoked to explain failures, spend spikes, or unusual run behavior.
@@ -285,7 +286,7 @@ sequenceDiagram
     LLM-->>RT: Model response or stream
     RT-->>GW: Response + metadata.memory
     RT-.->>GW: POST /api/v1/traces/runtime-events
-    GW->>DB: Persist chat state, memory, trace refs
+    GW->>DB: Persist chat state, memory, execution traces, runtime events
     GW-->>U: JSON response or SSE stream
 ```
 

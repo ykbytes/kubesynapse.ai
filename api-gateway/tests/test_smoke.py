@@ -204,7 +204,7 @@ class TestTraceEndpoints:
         response = client.post("/api/traces/batch", json={"events": []})
         assert response.status_code == 401
 
-    def test_batch_ingest_persists_step_timing_and_order(self, client: TestClient, auth_headers: dict) -> None:
+    def test_batch_ingest_persists_step_timing_and_order(self) -> None:
         """Batch ingest helpers should preserve step order and derive duration from event timestamps."""
         trace_store.init_trace_database()
         execution_id = f"exec-{uuid.uuid4().hex[:12]}"
@@ -265,6 +265,87 @@ class TestTraceEndpoints:
             step = session.query(trace_store.StepExecution).filter_by(id=step_id).one()
             session.delete(step)
             execution = session.query(trace_store.WorkflowExecution).filter_by(id=execution_id).one()
+            session.delete(execution)
+
+    def test_execution_completion_recomputes_tool_call_totals(self) -> None:
+        """Completion ingest should backfill tool totals from persisted tool rows."""
+        trace_store.init_trace_database()
+        execution_id = f"exec-{uuid.uuid4().hex[:12]}"
+        step_id = f"step-{uuid.uuid4().hex[:12]}"
+
+        events = [
+            {
+                "event_type": "execution_started",
+                "execution_id": execution_id,
+                "timestamp": 1000,
+                "payload": {
+                    "namespace": "default",
+                    "workflow_name": "observatory-demo",
+                    "agent_name": "observatory-demo",
+                    "run_id": "wf-run-tool-count",
+                },
+            },
+            {
+                "event_type": "step_started",
+                "execution_id": execution_id,
+                "step_id": step_id,
+                "timestamp": 1001,
+                "payload": {
+                    "step_name": "verify",
+                    "step_type": "agent",
+                    "step_index": 1,
+                },
+            },
+            {
+                "event_type": "tool_call_completed",
+                "execution_id": execution_id,
+                "step_id": step_id,
+                "timestamp": 1002,
+                "payload": {
+                    "tool_name": "read",
+                    "tool_args": {"filePath": "/tmp/demo.txt"},
+                    "tool_result": {"content": "ok"},
+                },
+            },
+            {
+                "event_type": "step_completed",
+                "execution_id": execution_id,
+                "step_id": step_id,
+                "timestamp": 1003,
+                "payload": {
+                    "status": "completed",
+                    "outputs": {"ok": True},
+                },
+            },
+            {
+                "event_type": "execution_completed",
+                "execution_id": execution_id,
+                "timestamp": 1004,
+                "payload": {
+                    "outputs": {"ok": True},
+                    "metrics": {
+                        "total_steps": 1,
+                        "completed_steps": 1,
+                        "failed_steps": 0,
+                    },
+                },
+            },
+        ]
+
+        with db_session() as session:
+            for event in events:
+                traces_router._upsert_from_event(session, event)
+
+        payload = trace_store.get_execution(execution_id)
+        assert payload is not None
+        assert payload["total_tool_calls"] == 1
+
+        with db_session() as session:
+            tool = session.query(trace_store.ToolCallRecord).filter_by(execution_id=execution_id).one()
+            step = session.query(trace_store.StepExecution).filter_by(id=step_id).one()
+            execution = session.query(trace_store.WorkflowExecution).filter_by(id=execution_id).one()
+            session.delete(tool)
+            session.delete(step)
             session.delete(execution)
 
     def test_execution_events_survive_missing_jsonl_file(self, client: TestClient, auth_headers: dict) -> None:

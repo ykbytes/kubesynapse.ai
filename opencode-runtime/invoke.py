@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 from analysis import (
     _build_response_metadata,
+    assistant_payload_has_signal,
     build_prompt_format,
     build_tool_only_response,
     check_context_overflow,
@@ -632,6 +633,25 @@ def _emit_live_snapshot_updates(
         last_snapshots["reasoning"] = reasoning
 
 
+def _is_stuck_idle_payload(payload: dict[str, Any]) -> bool:
+    """Return True when an assistant payload has no progress markers and finish='unknown'.
+
+    Used as a safety net by the live poller to avoid infinite polling when
+    upstream providers (e.g. github-copilot via the credential-proxy and
+    AI-SDK v6 openai-compatible) return content-less responses with
+    finish='unknown'. Detected as: no extractable text, no reasoning, no
+    tool calls, no patches, and finish='unknown' on the latest assistant
+    info.
+    """
+    info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+    finish = str(info.get("finish", "")).strip().lower()
+    if finish not in ("unknown", ""):
+        return False
+    if assistant_payload_has_signal(payload):
+        return False
+    return True
+
+
 def _send_prompt_async_with_session_recovery(
     *,
     session_id: str,
@@ -727,13 +747,30 @@ def _send_prompt_async_with_session_recovery(
                 "error",
             )
             session_status = get_session_status(session_id)
-            if str(session_status.get("type", "idle")) == "idle" and completed:
+            session_idle = str(session_status.get("type", "idle")) == "idle"
+            # Safety net: if the session is idle and the latest assistant
+            # message has no progress markers (finish="unknown" with empty
+            # text/reasoning/tools), upstream providers like github-copilot
+            # occasionally return a stuck, content-less reply. Returning the
+            # best-known payload prevents the poller from spinning forever
+            # waiting for content that will never arrive.
+            if session_idle and completed:
                 payload = dict(latest_payload)
                 payload["_session_recovered"] = recovered
                 payload["_live_streamed"] = bool(last_snapshots["text"] or last_snapshots["reasoning"])
                 return session_id, payload
+            if session_idle and _is_stuck_idle_payload(latest_payload):
+                payload = dict(latest_payload)
+                payload["_session_recovered"] = recovered
+                payload["_live_streamed"] = bool(last_snapshots["text"] or last_snapshots["reasoning"])
+                logger.warning(
+                    "Session %s idle with stuck payload (finish=unknown, no content) — "
+                    "returning best-known payload to avoid infinite poll.",
+                    session_id,
+                )
+                return session_id, payload
             # Session is busy and making progress — extend deadline (capped)
-            if str(session_status.get("type", "idle")) != "idle":
+            if not session_idle:
                 deadline = min(time.monotonic() + LIVE_UPDATE_TIMEOUT_SECONDS, absolute_deadline)
         else:
             # No assistant reply yet.  If the session went idle, the sidecar

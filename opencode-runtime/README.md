@@ -25,6 +25,9 @@ and runtime-local memory services.
 - **Stream Parity Support** — The runtime supports both `/invoke` and
   `/invoke/stream`, with the primary invoke path using OpenCode's async prompt
   flow even when a system prompt is present.
+- **Trace Extraction** — Final invoke results include extracted `tool_calls`
+  used by the Execution Observatory, with individual tool outputs capped at
+  40,000 characters before they are forwarded to the operator and gateway.
 
 ## Invoke Behavior
 
@@ -34,6 +37,17 @@ and runtime-local memory services.
 - In practice this reduces taskrunner-style invokes from the prior 30s to 40s
   range down into the single-digit seconds when the model and session are
   healthy.
+
+## Observatory Payload Notes
+
+- The runtime is the primary source of `tool_result` data shown in the Web UI's
+  Execution Observatory.
+- Tool call status events emitted during execution do not include full
+  `tool_result` payloads; those are reconstructed from the runtime's final
+  response payload and forwarded by the operator.
+- Tool outputs are truncated with an ellipsis only when they exceed the current
+  40,000-character cap, which keeps JSON payloads large enough for practical
+  inspection without allowing unbounded trace storage growth.
 
 ## Memory Model
 

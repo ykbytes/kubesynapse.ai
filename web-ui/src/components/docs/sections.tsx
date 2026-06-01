@@ -1033,8 +1033,9 @@ function PoliciesSection() {
       <SectionHeading icon={ShieldCheck}>Agent Policies</SectionHeading>
       <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
         An <code>AgentPolicy</code> is a namespaced CRD that attaches governance guardrails to agents
-        via <code>policyRef</code>. Every field is enforced by the operator at runtime — nothing is
-        advisory.
+        via <code>policyRef</code>. Every field is enforced by the operator at runtime, and optional
+        Gatekeeper constraints add admission-time protection for sealed policies and invalid policy
+        references.
       </p>
 
       {/* Input Guardrails */}
@@ -1111,6 +1112,19 @@ function PoliciesSection() {
           ["toolPolicy.allowedToolPrefixes", "string[]", "Whitelist of tool name prefixes (e.g. 'local.command.', 'filesystem.')"],
           ["toolPolicy.blockedToolNames", "string[]", "Explicitly blocked tools including MCP-qualified names like 'github/create_issue'"],
           ["toolPolicy.requireApprovalFor", "string[]", "Tool names that always require human approval before execution"],
+          ["toolPolicy.adminToolCeiling", "object", "Per-tool ceiling applied by the operator via OPENCODE_ADMIN_PERMISSION_CEILING_JSON. Use values like allow, ask, or deny to cap runtime permissions even when the global preset is more permissive."],
+        ]} />
+        <Callout variant="info" title="Admission-time validation">
+          When <code>gatekeeper.enabled=true</code>, the chart installs constraints that validate
+          <code>adminToolCeiling</code> entries, require valid policy references, prevent deleting policies
+          still referenced by live agents, and block changes to sealed policies.
+        </Callout>
+      </div>
+
+      <div id="policy-seal">
+        <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Policy Seal</h3>
+        <DocsTable headers={["Field", "Type", "Description"]} rows={[
+          ["sealed", "boolean", "Marks the policy immutable. The operator still resolves and hashes the policy, and Gatekeeper can block UPDATE and DELETE operations when sealing is enabled."],
         ]} />
       </div>
 
@@ -1151,6 +1165,7 @@ metadata:
   name: strict-policy
   namespace: default
 spec:
+  sealed: true
   inputGuardrails:
     blockPromptInjection: true
     maxInputTokens: 8192
@@ -1169,6 +1184,10 @@ spec:
       - "local.command."
     blockedToolNames:
       - "github/delete_repo"
+    adminToolCeiling:
+      bash: deny
+      external_directory: deny
+      webfetch: ask
   memoryPolicy:
     maxInjectedMemories: 10
     maxInjectedChars: 8000
@@ -1808,10 +1827,21 @@ function TracesSection() {
       <div id="traces-overview">
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Trace Lifecycle</h3>
         <DocsTable headers={["Stage", "Description"]} rows={[
-          ["Emission", "Runtimes and worker jobs emit trace events via POST /api/v1/traces/batch during execution"],
-          ["Indexing", "Events are indexed by execution_id, step_id, and event_type for querying"],
+          ["Emission", "Worker jobs emit execution trace batches to POST /api/v1/traces/batch during execution, while runtimes and workers also send semantic runtime events for Run Intelligence"],
+          ["Indexing", "Events are indexed by execution_id, step_id, and event_type for querying; execution detail includes full tool and LLM records"],
           ["Runtime events", "A separate runtime-events store indexes operational events (errors, warnings, metrics) for the Run Intelligence layer"],
           ["Export", "Full executions can be exported as JSON or self-contained HTML reports"],
+        ]} />
+      </div>
+
+      <div id="traces-observatory-ui">
+        <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Execution Observatory UI</h3>
+        <DocsTable headers={["Surface", "Behavior"]} rows={[
+          ["Overview", "Run metrics, waterfall timing, cost, token totals, and signal warnings, plus run-level insight charts: Recent Run Trend (duration sparkline across the workflow's last runs, color-toned by phase), Step Contribution (share bars showing which steps dominate total runtime), Step Variability (min/median/max range per step with a current-run marker), Tool Mix (time-weighted MCP tool usage with failure counts), Model Efficiency (token-vs-latency scatter, bubble by cost), and Quality Flags (warning/error events, tool failures, longest quiet gap, missing token data; runs can complete green but still be flagged shaky)"],
+          ["Steps", "Per-step inspector with LLM calls, tool rows, latency, and status"],
+          ["Logs", "Live or archived worker logs with filters, JSON formatting, wrapping, and fullscreen mode"],
+          ["Models & Tools", "Expandable tool calls with icon mapping, ArgsCard field extraction, Prism JSON highlighting, and diff-aware rendering for patch output"],
+          ["Compare", "Side-by-side execution comparison across status, duration, and tool or LLM counts"],
         ]} />
       </div>
 
@@ -1844,6 +1874,10 @@ function TracesSection() {
           ["session_id", "string", "Session this event belongs to"],
           ["severity", "string", "info | warning | error | critical"],
         ]} />
+        <Callout variant="info" title="Tool result payloads">
+          Full <code>tool_result</code> payloads rendered in the Observatory come from the runtime's final
+          response payload and are forwarded by the operator. They are not carried in the live runtime status events.
+        </Callout>
       </div>
     </div>
   );

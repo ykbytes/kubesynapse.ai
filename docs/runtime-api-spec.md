@@ -11,6 +11,10 @@
 4. **Secure** — No credentials in URLs. Token-based auth via `Authorization: Bearer <token>`. Rate-limited by default.
 5. **Backward Compatible** — New fields are additive. Breaking changes require a new contract version.
 
+For the current production OpenCode runtime, tool result payloads later surfaced in the
+Execution Observatory are extracted from the final runtime response and capped at 40,000
+characters per tool call before they are forwarded into the trace pipeline.
+
 ---
 
 ## API Tiers
@@ -931,6 +935,11 @@ All runtimes that implement `/invoke/stream` MUST emit events using this canonic
 3. `response.delta` events MUST be concatenated in order to form the full response text.
 4. `question.asked` pauses the stream until answered via `/question/{id}/reply`.
 5. The `id` field in tool calls MUST be unique within a session.
+
+`response.tool_result` events are part of the live stream contract, but KubeSynapse's
+durable Execution Observatory view is populated from the runtime's final response payload
+after the operator reconstructs the completed step. Runtime status-event pipelines do not
+have to carry the full durable `tool_result` body themselves.
 
 ---
 

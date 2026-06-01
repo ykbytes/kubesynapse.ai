@@ -200,6 +200,9 @@ class WorkflowExecution(Base):
     total_tokens = Column(Integer, nullable=False, default=0)
     prompt_tokens = Column(Integer, nullable=False, default=0)
     completion_tokens = Column(Integer, nullable=False, default=0)
+    cache_read_tokens = Column(Integer, nullable=False, default=0)
+    cache_write_tokens = Column(Integer, nullable=False, default=0)
+    reasoning_tokens = Column(Integer, nullable=False, default=0)
     estimated_cost_usd = Column(Float, nullable=True)
     triggered_by = Column(String(128), nullable=True)
     error_message = Column(String(4096), nullable=True)
@@ -226,6 +229,9 @@ class WorkflowExecution(Base):
             "total_tokens": self.total_tokens,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
             "estimated_cost_usd": self.estimated_cost_usd,
             "triggered_by": self.triggered_by,
             "error_message": self.error_message,
@@ -252,6 +258,9 @@ class StepExecution(Base):
     llm_calls_count = Column(Integer, nullable=False, default=0)
     tool_calls_count = Column(Integer, nullable=False, default=0)
     tokens_used = Column(Integer, nullable=False, default=0)
+    cache_read_tokens = Column(Integer, nullable=False, default=0)
+    cache_write_tokens = Column(Integer, nullable=False, default=0)
+    reasoning_tokens = Column(Integer, nullable=False, default=0)
     cost_usd = Column(Float, nullable=True)
     checkpoint_ref = Column(String(256), nullable=True)
 
@@ -273,6 +282,9 @@ class StepExecution(Base):
             "llm_calls_count": self.llm_calls_count,
             "tool_calls_count": self.tool_calls_count,
             "tokens_used": self.tokens_used,
+            "cache_read_tokens": self.cache_read_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
             "cost_usd": self.cost_usd,
         }
 
@@ -289,6 +301,9 @@ class LLMCallRecord(Base):
     response_chars = Column(Integer, nullable=False, default=0)
     prompt_tokens = Column(Integer, nullable=False, default=0)
     completion_tokens = Column(Integer, nullable=False, default=0)
+    cache_read_tokens = Column(Integer, nullable=False, default=0)
+    cache_write_tokens = Column(Integer, nullable=False, default=0)
+    reasoning_tokens = Column(Integer, nullable=False, default=0)
     total_tokens = Column(Integer, nullable=False, default=0)
     cost_usd = Column(Float, nullable=True)
     latency_ms = Column(Float, nullable=True)
@@ -306,6 +321,9 @@ class LLMCallRecord(Base):
             "provider": self.provider,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
             "total_tokens": self.total_tokens,
             "cost_usd": self.cost_usd,
             "latency_ms": self.latency_ms,
@@ -343,6 +361,29 @@ class ToolCallRecord(Base):
         }
 
 
+def refresh_execution_aggregates(session: Any, execution: WorkflowExecution) -> None:
+    """Recompute persisted execution summary fields from related trace rows."""
+
+    step_rows = session.query(StepExecution).filter_by(execution_id=execution.id).all()
+    llm_rows = session.query(LLMCallRecord).filter_by(execution_id=execution.id).all()
+    tool_rows = session.query(ToolCallRecord).filter_by(execution_id=execution.id).all()
+
+    execution.total_steps = len(step_rows)
+    execution.completed_steps = sum(1 for step in step_rows if step.status == StepStatus.COMPLETED.value)
+    execution.failed_steps = sum(1 for step in step_rows if step.status == StepStatus.FAILED.value)
+    execution.total_llm_calls = len(llm_rows)
+    execution.total_tool_calls = len(tool_rows)
+    execution.prompt_tokens = sum((row.prompt_tokens or 0) for row in llm_rows)
+    execution.completion_tokens = sum((row.completion_tokens or 0) for row in llm_rows)
+    execution.cache_read_tokens = sum((row.cache_read_tokens or 0) for row in llm_rows)
+    execution.cache_write_tokens = sum((row.cache_write_tokens or 0) for row in llm_rows)
+    execution.reasoning_tokens = sum((row.reasoning_tokens or 0) for row in llm_rows)
+    execution.total_tokens = sum((row.total_tokens or 0) for row in llm_rows)
+
+    known_costs = [row.cost_usd for row in llm_rows if row.cost_usd is not None]
+    execution.estimated_cost_usd = sum(known_costs) if known_costs else None
+
+
 # ---------------------------------------------------------------------------
 # Runtime Run Event — Semantic Event Index (Run Intelligence Layer)
 # ---------------------------------------------------------------------------
@@ -376,6 +417,9 @@ class RuntimeRunEvent(Base):
     completion_tokens = Column(Integer, nullable=True)
     total_tokens = Column(Integer, nullable=True)
     cost_usd = Column(Float, nullable=True)
+    cache_read_tokens = Column(Integer, nullable=True)
+    cache_write_tokens = Column(Integer, nullable=True)
+    reasoning_tokens = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, index=True)
 
     def to_dict(self) -> dict[str, Any]:
@@ -397,6 +441,9 @@ class RuntimeRunEvent(Base):
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
             "cost_usd": self.cost_usd,
+            "cache_read_tokens": self.cache_read_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -615,6 +662,7 @@ class ExecutionTracer:
                     execution.failed_steps = metrics.get("failed_steps", execution.failed_steps)
                     execution.total_llm_calls = metrics.get("total_llm_calls", execution.total_llm_calls)
                     execution.total_tool_calls = metrics.get("total_tool_calls", execution.total_tool_calls)
+                refresh_execution_aggregates(session, execution)
 
         logger.info("Ended execution trace %s with status %s", execution_id, status.value)
 
@@ -693,6 +741,9 @@ class ExecutionTracer:
         response: str,
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
+        cache_read_tokens: int = 0,
+        cache_write_tokens: int = 0,
+        reasoning_tokens: int = 0,
         cost_usd: float | None = None,
         latency_ms: float | None = None,
         provider: str | None = None,
@@ -707,6 +758,9 @@ class ExecutionTracer:
                 "provider": provider,
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
+                "cache_read_tokens": cache_read_tokens,
+                "cache_write_tokens": cache_write_tokens,
+                "reasoning_tokens": reasoning_tokens,
                 "cost_usd": cost_usd,
                 "latency_ms": latency_ms,
             },
@@ -723,7 +777,10 @@ class ExecutionTracer:
                 response_chars=len(response),
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens,
+                cache_read_tokens=cache_read_tokens,
+                cache_write_tokens=cache_write_tokens,
+                reasoning_tokens=reasoning_tokens,
+                total_tokens=prompt_tokens + completion_tokens + cache_read_tokens + cache_write_tokens + reasoning_tokens,
                 cost_usd=cost_usd,
                 latency_ms=latency_ms,
                 prompt_preview=prompt[:1024],
@@ -734,7 +791,16 @@ class ExecutionTracer:
             step = session.query(StepExecution).filter_by(id=step_id).one_or_none()
             if step:
                 step.llm_calls_count += 1
-                step.tokens_used += prompt_tokens + completion_tokens
+                step.tokens_used += (
+                    prompt_tokens
+                    + completion_tokens
+                    + cache_read_tokens
+                    + cache_write_tokens
+                    + reasoning_tokens
+                )
+                step.cache_read_tokens = (step.cache_read_tokens or 0) + cache_read_tokens
+                step.cache_write_tokens = (step.cache_write_tokens or 0) + cache_write_tokens
+                step.reasoning_tokens = (step.reasoning_tokens or 0) + reasoning_tokens
                 if cost_usd:
                     step.cost_usd = (step.cost_usd or 0.0) + cost_usd
 
@@ -1060,6 +1126,9 @@ def ingest_runtime_events(events: list[dict[str, Any]]) -> int:
                 completion_tokens=evt.get("completion_tokens"),
                 total_tokens=evt.get("total_tokens"),
                 cost_usd=evt.get("cost_usd"),
+                cache_read_tokens=evt.get("cache_read_tokens"),
+                cache_write_tokens=evt.get("cache_write_tokens"),
+                reasoning_tokens=evt.get("reasoning_tokens"),
             )
             session.add(record)
             inserted += 1

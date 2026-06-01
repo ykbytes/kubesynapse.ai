@@ -205,6 +205,10 @@ spec:
 The operator injects the ceiling as `OPENCODE_ADMIN_PERMISSION_CEILING_JSON`
 into the agent pod. The runtime reads this at startup to cap permissions.
 
+This ceiling is applied per policy. It works alongside the chart-level
+`opencodeRuntime.securityLevel`, `permissionOverrides`, and `permissionFloor`
+values rather than replacing them.
+
 ### Policy Seal
 
 Setting `spec.sealed: true` on an AgentPolicy makes it immutable. When
@@ -229,6 +233,13 @@ The operator computes a SHA-256 hash of each resolved policy spec and
 annotates the agent pod with `kubesynapse.ai/policy-hash`. The gateway
 can verify this hash in healthz responses to ensure agents are running
 with their expected policy configuration.
+
+## Observatory Notes
+
+- The Web UI's durable tool-result panels are populated from the runtime's final
+  extracted `tool_calls`, forwarded by the operator into the gateway trace store.
+- OpenCode currently caps extracted tool output at 40,000 characters per tool call
+  before forwarding it into the trace pipeline.
 
 ## Garbage Collection
 

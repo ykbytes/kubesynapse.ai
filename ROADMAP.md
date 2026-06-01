@@ -26,6 +26,9 @@ This document outlines the planned evolution of KubeSynapse. Timelines are best-
 
 ### v1.0.1 — Observability Consistency Hardening
 
+- [x] Fix runtime-side tool-result truncation for Observatory rendering by raising the extracted payload cap to 40,000 characters
+- [x] Align the Web UI Observatory with the current execution model: overview, step inspector, logs, models and tools, and compare views
+- [x] Add Gatekeeper-backed policy hardening for sealed policies, required policy refs, orphan prevention, and admin tool ceiling validation
 
 
 - [ ] Replace demo-only `ObservationTarget` status reconciliation with connector-backed health, scrape, and report state
@@ -35,6 +38,8 @@ This document outlines the planned evolution of KubeSynapse. Timelines are best-
 - [ ] Add observability contract tests and smoke coverage for trace APIs, signal watch, and runtime event parity
 
 **Target**: May 2026
+
+> **Progress**: Observatory trace fidelity, UI rendering, and policy-admission hardening are now in place. Remaining work in this milestone is focused on connector-backed observability reconciliation, contract tests, and broader runtime parity.
 
 ---
 
