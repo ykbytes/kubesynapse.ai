@@ -81,6 +81,7 @@ export function McpConnectionsTab({
 }: McpConnectionsTabProps) {
   return (
     <div className="animate-fade-in space-y-4">
+      <p className="text-xs text-muted-foreground">Saved connections drive agent attachments. Configure a connection here, then attach it from the agent's Capabilities tab.</p>
       <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
         {/* Connection List */}
         <Card className="border-border/60 bg-card/55 rounded-2xl">

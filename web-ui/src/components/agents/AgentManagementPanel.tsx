@@ -109,7 +109,6 @@ const MCP_VALIDATION_BADGE_STYLES = {
 } as const;
 
 const PANEL_CARD_CLASS = "border-border/80 bg-background/80 shadow-sm";
-const METRIC_PANEL_CLASS = "rounded-lg border px-3 py-1.5 shadow-sm";
 
 type ConnectionFilterValue = "all" | "selected" | "remote" | "hub" | "sidecar";
 
@@ -809,67 +808,11 @@ export function AgentManagementPanel({
             <CardDescription className="max-w-none break-words text-sm leading-5">
               Edit runtime, policy, capabilities, and workspace files. Saving writes the updated spec and triggers an operator reconcile.
             </CardDescription>
-
-            <div className="flex flex-wrap gap-2">
-              <Badge variant="outline" className="rounded-full border-primary/20 bg-primary/10 text-[10px] uppercase tracking-[0.14em] text-primary">
-                {currentSignals.runtime.label}
-              </Badge>
-              <Badge variant="outline" className="rounded-full border-border/60 bg-background/70 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                {currentSignals.access.label}
-              </Badge>
-              <Badge
-                variant="outline"
-                className={`rounded-full text-[10px] uppercase tracking-[0.14em] ${policyRef.trim() ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300" : "border-border/60 bg-background/70 text-muted-foreground"}`}
-              >
-                {policyRef.trim() ? "Guardrails enabled" : "No policy attached"}
-              </Badge>
-              <Badge
-                variant="outline"
-                className={`rounded-full text-[10px] uppercase tracking-[0.14em] ${enableGvisor ? "border-cyan-500/25 bg-cyan-500/10 text-cyan-300" : "border-border/60 bg-background/70 text-muted-foreground"}`}
-              >
-                {enableGvisor ? "gVisor active" : "Standard sandbox"}
-              </Badge>
-            </div>
           </div>
         </div>
       </CardHeader>
       <CardContent>
         <Tabs defaultValue="basics" className="space-y-4">
-          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-            <div className={`${METRIC_PANEL_CLASS} border-primary/30 bg-primary/10`}>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-primary">Runtime</span>
-                <span className="text-sm font-bold text-foreground">{currentSignals.runtime.label}</span>
-              </div>
-              <p className="text-[11px] font-medium text-foreground/80">{currentSignals.access.label}</p>
-            </div>
-            <div className={`${METRIC_PANEL_CLASS} border-sky-500/30 bg-sky-500/10`}>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-sky-500">Connections</span>
-                <span className="text-sm font-bold text-foreground">{selectedConnections.length}</span>
-              </div>
-              <p className="text-[11px] font-medium text-foreground/80">
-                {usingSavedConnections
-                  ? `${selectedConnectionStats.remote} remote · ${selectedConnectionStats.sidecar} sidecar`
-                  : `${effectiveMcpSidecars.length} legacy sidecar${effectiveMcpSidecars.length === 1 ? "" : "s"}`}
-              </p>
-            </div>
-            <div className={`${METRIC_PANEL_CLASS} border-violet-500/30 bg-violet-500/10`}>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-violet-500">Guidance</span>
-                <span className="text-sm font-bold text-foreground">{selectedCatalogSkills.length + skillFileDrafts.length}</span>
-              </div>
-              <p className="text-[11px] font-medium text-foreground/80">{selectedCatalogSkills.length} catalog · {skillFileDrafts.length} file{skillFileDrafts.length === 1 ? "" : "s"}</p>
-            </div>
-            <div className={`${METRIC_PANEL_CLASS} border-emerald-500/30 bg-emerald-500/10`}>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-500">Hardening</span>
-                <span className="text-sm font-bold text-foreground">{policyRef.trim() ? "On" : "Off"}</span>
-              </div>
-              <p className="text-[11px] font-medium text-foreground/80">{enableGvisor ? "gVisor sandbox" : "Standard sandbox"}</p>
-            </div>
-          </div>
-
           <TabsList className="h-auto flex-wrap justify-start gap-1 rounded-[1.15rem] border border-border/60 bg-background/75 p-1.5 shadow-sm backdrop-blur-sm">
             <TabsTrigger value="basics">Basics</TabsTrigger>
             <TabsTrigger value="behavior">Behavior</TabsTrigger>

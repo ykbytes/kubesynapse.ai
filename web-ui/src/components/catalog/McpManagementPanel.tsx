@@ -7,7 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AlertTriangle, Layers, Plug, RefreshCw, Server, Shield } from "lucide-react";
+import { AlertTriangle, Plug, RefreshCw } from "lucide-react";
 
 import {
   createMcpConnection,
@@ -432,9 +432,6 @@ export function McpManagementPanel({ token, namespace }: McpManagementPanelProps
             <Badge variant="outline" className="border-border/60 bg-background/80 text-xs">
               {namespace}
             </Badge>
-            <Badge variant="outline" className="border-orange-500/25 bg-orange-500/10 text-orange-500 text-xs">
-              Saved connections drive agent attachments
-            </Badge>
           </div>
           <Button variant="outline" size="sm" onClick={() => void loadData()} disabled={loading} className="gap-1.5">
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
@@ -453,43 +450,30 @@ export function McpManagementPanel({ token, namespace }: McpManagementPanelProps
 
         {/* Stats */}
         {stats && (
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <div className="flex items-center justify-between rounded-2xl border border-border/60 bg-card/55 px-4 py-3">
-              <span className="text-xs text-muted-foreground">Servers</span>
-              <span className="text-base font-bold tabular-nums text-foreground">{stats.total_servers}</span>
-            </div>
-            <div className="flex items-center justify-between rounded-2xl border border-border/60 bg-card/55 px-4 py-3">
-              <span className="text-xs text-muted-foreground">Tools</span>
-              <span className="text-base font-bold tabular-nums text-foreground">{stats.total_tools}</span>
-            </div>
-            <div className="flex items-center justify-between rounded-2xl border border-amber-500/25 bg-amber-500/5 px-4 py-3">
-              <span className="text-xs text-muted-foreground">Profiles</span>
-              <span className="text-base font-bold tabular-nums text-foreground">{stats.total_profiles}</span>
-            </div>
-            <div className="flex items-center justify-between rounded-2xl border border-border/60 bg-card/55 px-4 py-3">
-              <span className="text-xs text-muted-foreground">Categories</span>
-              <span className="text-base font-bold tabular-nums text-foreground">{stats.categories}</span>
-            </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <span>Servers <span className="font-semibold tabular-nums text-foreground">{stats.total_servers}</span></span>
+            <span>·</span>
+            <span>Tools <span className="font-semibold tabular-nums text-foreground">{stats.total_tools}</span></span>
+            <span>·</span>
+            <span>Profiles <span className="font-semibold tabular-nums text-foreground">{stats.total_profiles}</span></span>
+            <span>·</span>
+            <span>Categories <span className="font-semibold tabular-nums text-foreground">{stats.categories}</span></span>
           </div>
         )}
 
         {/* Tabs */}
         <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as McpManagementTab)} className="space-y-4">
           <TabsList className="h-auto flex-wrap justify-start gap-1 rounded-2xl border border-border/60 bg-background/70 p-1">
-            <TabsTrigger value="registry" className="gap-1.5 rounded-xl px-4 py-2 text-sm">
-              <Server className="h-4 w-4" />
+            <TabsTrigger value="registry" className="rounded-xl px-4 py-2 text-sm">
               Registry
             </TabsTrigger>
-            <TabsTrigger value="connections" className="gap-1.5 rounded-xl px-4 py-2 text-sm">
-              <Plug className="h-4 w-4" />
+            <TabsTrigger value="connections" className="rounded-xl px-4 py-2 text-sm">
               Connections
             </TabsTrigger>
-            <TabsTrigger value="profiles" className="gap-1.5 rounded-xl px-4 py-2 text-sm">
-              <Layers className="h-4 w-4" />
+            <TabsTrigger value="profiles" className="rounded-xl px-4 py-2 text-sm">
               Profiles
             </TabsTrigger>
-            <TabsTrigger value="architecture" className="gap-1.5 rounded-xl px-4 py-2 text-sm">
-              <Shield className="h-4 w-4" />
+            <TabsTrigger value="architecture" className="rounded-xl px-4 py-2 text-sm">
               Architecture
             </TabsTrigger>
           </TabsList>

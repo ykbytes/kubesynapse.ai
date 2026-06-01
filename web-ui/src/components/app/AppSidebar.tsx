@@ -195,12 +195,9 @@ export function AppSidebar({
     <TooltipProvider delayDuration={100}>
     <aside className="flex h-full w-full min-w-0 flex-col border-r border-sidebar-border/80 bg-sidebar/92 backdrop-blur-xl">
       {/* Header */}
-      <div className="flex h-10 items-center justify-between border-b border-sidebar-border/80 px-2">
-        <div className="min-w-0">
-          <p className="text-[9px] font-medium uppercase tracking-[0.22em] text-muted-foreground">Workspace</p>
-          <p className="truncate text-xs font-semibold text-sidebar-foreground">{VIEW_META[activeView].label}</p>
-        </div>
-        <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0 rounded-lg text-muted-foreground hover:bg-sidebar-accent/75 hover:text-sidebar-accent-foreground" onClick={onToggleCollapse} aria-label="Collapse sidebar">
+      <div className="flex h-8 items-center justify-between gap-2 border-b border-sidebar-border/80 px-2">
+        <p className="truncate text-xs font-semibold text-sidebar-foreground">{VIEW_META[activeView].label}</p>
+        <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0 rounded-md text-muted-foreground hover:bg-sidebar-accent/75 hover:text-sidebar-accent-foreground" onClick={onToggleCollapse} aria-label="Collapse sidebar">
           <PanelLeftClose className="h-3 w-3" />
         </Button>
       </div>
@@ -243,23 +240,18 @@ export function AppSidebar({
         </div>
       </nav>
 
-      {/* Actions */}
-      <div className="flex gap-1 border-b border-sidebar-border/80 px-2 py-1">
+      {/* Actions + Search */}
+      <div className="flex items-center gap-1 border-b border-sidebar-border/80 px-2 py-1">
         {canMutate && (
-          <Button size="sm" className="h-7 flex-1 gap-1 rounded-lg text-[11px]" onClick={onCreateNew}>
-            <Plus className="h-3 w-3" />
-            New
+          <Button size="icon" className="h-7 w-7 shrink-0 rounded-lg" onClick={onCreateNew} aria-label={`Create new ${VIEW_META[activeView].label.replace(/s$/, "")}`}>
+            <Plus className="h-3.5 w-3.5" />
           </Button>
         )}
-        <Button variant="outline" size="icon" className="h-7 w-7 rounded-lg" onClick={onRefresh} disabled={loading} aria-label="Refresh list">
-          <RefreshCw className={cn("h-3 w-3", loading && "animate-spin")} />
+        <Button variant="outline" size="icon" className="h-7 w-7 shrink-0 rounded-lg" onClick={onRefresh} disabled={loading} aria-label="Refresh list">
+          <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
         </Button>
-      </div>
-
-      {/* Search */}
-      <div className="border-b border-sidebar-border/80 px-2 py-1">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+        <div className="relative flex-1">
+          <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={filter}
             onChange={(e) => handleFilterChange(e.target.value)}
