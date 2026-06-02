@@ -740,23 +740,19 @@ def runtime_error_message(response: httpx.Response, *, max_body_chars: int = 400
     return f"{base}: {body}" if body else base
 
 
-def _preview_stream_value(value: Any, *, limit: int = 160) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, (dict, list)):
-        try:
-            rendered = json.dumps(value, sort_keys=True, default=str)
-        except Exception:
-            rendered = str(value)
-    else:
-        rendered = str(value)
-    collapsed = " ".join(rendered.split())
+def summarize_preview_text(value: Any, *, limit: int = 280) -> str | None:
+    """Render a short, whitespace-collapsed preview of a value for log output."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    collapsed = re.sub(r"\s+", " ", text)
     if len(collapsed) <= limit:
         return collapsed
     return f"{collapsed[: max(limit - 3, 1)].rstrip()}..."
 
 
-def _tool_call_input_preview(tool_input: Any) -> str:
+def summarize_tool_input(tool_input: Any) -> str | None:
+    """Pick a meaningful preview from a tool input dict, list, or scalar."""
     if isinstance(tool_input, dict):
         for key in (
             "command",
@@ -771,10 +767,22 @@ def _tool_call_input_preview(tool_input: Any) -> str:
             "repo",
             "name",
         ):
-            preview = _preview_stream_value(tool_input.get(key))
+            preview = summarize_preview_text(tool_input.get(key), limit=160)
             if preview:
                 return preview
-    return _preview_stream_value(tool_input)
+        return summarize_preview_text(json.dumps(tool_input, sort_keys=True, default=str), limit=160)
+    if isinstance(tool_input, list):
+        return summarize_preview_text(json.dumps(tool_input, sort_keys=True, default=str), limit=160)
+    return summarize_preview_text(tool_input, limit=160)
+
+
+def _preview_stream_value(value: Any, *, limit: int = 160) -> str:
+    preview = summarize_preview_text(value, limit=limit)
+    return preview or ""
+
+
+def _tool_call_input_preview(tool_input: Any) -> str:
+    return summarize_tool_input(tool_input) or ""
 
 
 def invoke_agent_runtime(

@@ -68,6 +68,8 @@ parse_json_output = worker_utils.parse_json_output
 ready_workflow_steps = worker_utils.ready_workflow_steps
 render_prompt = worker_utils.render_prompt
 runtime_url = worker_utils.runtime_url
+summarize_preview_text = worker_utils.summarize_preview_text
+summarize_tool_input = worker_utils.summarize_tool_input
 validate_workflow_graph = worker_utils.validate_workflow_graph
 workflow_journal_path = worker_utils.workflow_journal_path
 
@@ -883,40 +885,6 @@ def build_step_state(
         "warnings": warnings,
     }
     return state
-
-
-def summarize_preview_text(value: Any, *, limit: int = 280) -> str | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    collapsed = re.sub(r"\s+", " ", text)
-    if len(collapsed) <= limit:
-        return collapsed
-    return f"{collapsed[: max(limit - 3, 1)].rstrip()}..."
-
-
-def summarize_tool_input(tool_input: Any) -> str | None:
-    if isinstance(tool_input, dict):
-        for key in (
-            "command",
-            "path",
-            "filePath",
-            "file_path",
-            "target_dir",
-            "workingDirectory",
-            "working_directory",
-            "query",
-            "url",
-            "repo",
-            "name",
-        ):
-            preview = summarize_preview_text(tool_input.get(key), limit=160)
-            if preview:
-                return preview
-        return summarize_preview_text(json.dumps(tool_input, sort_keys=True, default=str), limit=160)
-    if isinstance(tool_input, list):
-        return summarize_preview_text(json.dumps(tool_input, sort_keys=True, default=str), limit=160)
-    return summarize_preview_text(tool_input, limit=160)
 
 
 def summarize_step_artifacts(artifacts: Any, *, limit: int = 8) -> list[dict[str, Any]]:
