@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased] - Sprint 11 (Dead Code Cleanup & Operator Hardening)
+
+### Removed
+- **OpenCode Runtime** (Phase 2 + 3, ~2,124 lines net):
+  - Deleted unused modules: `opencode-runtime/memory/entity.py` (EntityExtractor, 170 lines), `opencode-runtime/config_generator.py` (183 lines), `opencode-runtime/pi_client.py` (354 lines), `opencode-runtime/pi_types.py` (341 lines), `opencode-runtime/memory.py` (355 lines)
+  - Removed dead SSE bridge subsystem from `opencode_client.py` (204 lines, including `_parse_sse_lines`, `_safe_int`, `_safe_float`, `SseEvent`, and threading bridge)
+  - Removed 6 unused `MemoryManager` methods: `remove_provider`, `build_context`, `compact`, `get_stats`, `on_turn_start`, `on_session_end`
+  - Removed 15 unused config constants (`OPENCODE_API_KEY`, `GITHUB_TOKEN`, `COPILOT_API_KEY`, `ANTHROPIC_API_KEY`, `GITHUB_MCP_TOKEN`, `COMPACTION_PRESERVE_*`, `MEMORY_*`, etc.)
+  - Removed `list_providers()` from `providers.py`
+  - Removed `emit_agent_call()` from `runtime_events.py`
+  - Removed unused `Callable` import from `runtime_events.py`
+  - Removed unused `json` import from `memory/manager.py`
+  - Removed `EntityExtractor` / `ENTITY_EXTRACTOR` exports from `memory/__init__.py`
+  - Removed dead SSE bridge test classes (`SSEBridgeParserTests`, `SafeIntFloatTestsBridge`)
+- **Operator** (Phase 2 + 3 + 4, ~196 lines net):
+  - Deleted `operator/errors.py` (entire module unused, 85 lines)
+  - Deleted `operator/mock_entrypoint.py` (copied into Docker image but never executed, 62 lines)
+  - Removed dead `_start_readiness_server` / `_render_prometheus_metrics` / `_READINESS_PORT` from `operator/main.py` (referenced an undefined `_ReadinessHandler` class — wrapped in try/except so the operator silently lost its readiness server; kopf's `--liveness=http://0.0.0.0:8080/healthz` flag already provides health checks)
+  - Removed dead dedup helpers: `is_duplicate_event`, `_event_key`, `_dedup_cache`, `_dedup_lock`, `_DEDUP_TTL_SECONDS`
+  - Removed dead metric helpers: `record_reconcile_metric`, `_metrics_lock`, `_reconcile_*_globals`
+  - Removed dead in-flight reconciliation: `in_flight_reconciliation`, `wait_for_in_flight`
+  - Removed `get_tracer` / `get_trace_id` from `tracing.py`
+  - Removed `normalize_text`, `exact_match_score`, `estimate_toxicity` from `utils.py`
+  - Removed `_find_mcp_connection_cr` from `controllers/mcp_connection_controller.py`
+  - Removed `_reconcile_connector_status` from `controllers/observation_controller.py`
+  - Removed `ORPHAN_PVC_CLEANUP_INTERVAL` from `config.py`
+  - Consolidated duplicate `summarize_preview_text` / `summarize_tool_input` (worker.py) and `_preview_stream_value` / `_tool_call_input_preview` (utils.py) into single canonical versions in `utils.py` with backward-compat shims
+  - Removed unused `threading` / `time` / `http.server` (BaseHTTPRequestHandler, HTTPServer) imports from `main.py`
+  - Updated `operator/Dockerfile` to drop deleted `mock_entrypoint.py` and long-deleted `errors.py` from COPY list
+
+### Changed
+- **Live Verification**: Dead code cleanup rolled out as `localhost/kubesynapse/kubesynapse-operator:cleanup-20260602`. Workflow generation 12 (`context7-research-analysis`) ran end-to-end in 248.9s with 54 tool calls and full token breakdown (92,847 total: 254 prompt / 1,201 completion / 91,392 cache_read). 100% of tool calls have per-tool `duration_ms` populated (avg 373ms, max 1455ms). One duplicate worker job was correctly rejected by the lease lock during the rollout race, confirming the dedup fix works as designed.
+- **Tests**: 393/393 opencode-runtime tests pass, 261/262 operator tests pass (1 pre-existing tenant isolation failure unrelated to cleanup)
+
 ## [Unreleased] - Sprint 10 (Observatory Pipeline Hardening & UI Fixes)
 
 ### Added
