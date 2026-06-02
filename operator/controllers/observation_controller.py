@@ -391,30 +391,6 @@ def _reconcile_policy_status(namespace: str, policy_ref: str | None) -> None:
     )
 
 
-def _reconcile_connector_status(namespace: str, connector_ref: str | None) -> None:
-    connector_name = str(connector_ref or "").strip()
-    if not connector_name:
-        return
-
-    custom_api = kubernetes.client.CustomObjectsApi()
-    try:
-        connector = custom_api.get_namespaced_custom_object(
-            group=GROUP,
-            version=VERSION,
-            namespace=namespace,
-            plural=CONNECTOR_PLURAL,
-            name=connector_name,
-        )
-    except ApiException as exc:
-        if exc.status == 404:
-            return
-        raise
-
-    status = connector.get("status") or {}
-    if not status:
-        return
-
-
 def _normalize_ready_state(raw_ready: Any) -> str:
     value = str(raw_ready or "Unknown").strip().lower()
     if value in {"true", "ready", "healthy"}:

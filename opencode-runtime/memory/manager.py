@@ -11,7 +11,6 @@ Inspired by Hermes Agent's MemoryManager architecture.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from typing import Any
@@ -72,15 +71,6 @@ class MemoryManager:
         self._providers.append(provider)
         self._provider_map[provider.name] = provider
         logger.info("Registered memory provider: %s", provider.name)
-
-    def remove_provider(self, name: str) -> bool:
-        """Remove a provider by name."""
-        if name not in self._provider_map:
-            return False
-        provider = self._provider_map.pop(name)
-        self._providers.remove(provider)
-        provider.shutdown()
-        return True
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
         """Initialize all providers for a session."""
@@ -157,39 +147,6 @@ class MemoryManager:
                 )
         return results[:limit]
 
-    def build_context(self, query: str, limit: int = 5) -> str:
-        """Build a fenced memory context block for injection into prompts.
-
-        Returns empty string if no relevant memories found.
-        """
-        results = self.recall(query, limit=limit, min_relevance=0.3)
-        if not results:
-            return ""
-
-        lines: list[str] = []
-        for entry, score in results:
-            type_label = entry.memory_type.value.replace("_", " ").title()
-            lines.append(f"[{type_label}] (relevance: {score:.2f})")
-            content_str = json.dumps(entry.content, ensure_ascii=False, default=str)
-            # Truncate very long content
-            if len(content_str) > 500:
-                content_str = content_str[:500] + "..."
-            lines.append(content_str)
-            lines.append("")
-
-        raw = "\n".join(lines)
-        return build_memory_context_block(raw)
-
-    def compact(self, thread_id: str | None = None) -> None:
-        """Trigger compaction across all providers."""
-        for provider in self._providers:
-            try:
-                provider.compact(thread_id)
-            except Exception as exc:
-                logger.warning(
-                    "Provider '%s' compaction failed: %s", provider.name, exc, exc_info=True
-                )
-
     def clear(self, thread_id: str | None = None) -> None:
         """Clear memories across all providers."""
         for provider in self._providers:
@@ -208,32 +165,4 @@ class MemoryManager:
             except Exception as exc:
                 logger.warning(
                     "Provider '%s' shutdown failed: %s", provider.name, exc, exc_info=True
-                )
-
-    def get_stats(self) -> dict[str, Any]:
-        """Get statistics from all providers."""
-        stats: dict[str, Any] = {}
-        for provider in self._providers:
-            try:
-                stats[provider.name] = provider.get_stats()
-            except Exception as exc:
-                logger.warning("Provider '%s' stats failed: %s", provider.name, exc)
-        return stats
-
-    def on_turn_start(self, turn_number: int, user_message: str) -> None:
-        """Notify all providers of turn start."""
-        for provider in self._providers:
-            try:
-                provider.on_turn_start(turn_number, user_message)
-            except Exception as exc:
-                logger.debug("Provider '%s' on_turn_start failed: %s", provider.name, exc)
-
-    def on_session_end(self, messages: list[dict[str, Any]]) -> None:
-        """Notify all providers of session end."""
-        for provider in self._providers:
-            try:
-                provider.on_session_end(messages)
-            except Exception as exc:
-                logger.warning(
-                    "Provider '%s' on_session_end failed: %s", provider.name, exc, exc_info=True
                 )

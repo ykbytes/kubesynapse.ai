@@ -33,7 +33,6 @@ from memory.compat import (
     build_handoff_entry,
     build_task_summary_entry,
 )
-from memory.entity import ENTITY_EXTRACTOR, EntityExtractor
 from memory.manager import MemoryManager, build_memory_context_block, sanitize_context
 from memory.provider import MemoryProvider
 from memory.semantic import SemanticMemoryProvider
@@ -49,11 +48,9 @@ from memory.types import (
 __all__ = [
     "DEFAULT_PRIORITY",
     "DEFAULT_RETENTION",
-    "ENTITY_EXTRACTOR",
     "MEMORY_ENTRY_TYPES",
     "SESSION_MEMORY",
     "BuiltinMemoryProvider",
-    "EntityExtractor",
     "MemoryEntry",
     "MemoryManager",
     "MemoryPriority",

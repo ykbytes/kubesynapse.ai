@@ -123,14 +123,6 @@ LITELLM_BASE_PATH = os.getenv("LITELLM_BASE_PATH", "v1/chat/completions").strip(
 LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "").strip()
 
 # ---------------------------------------------------------------------------
-# Provider API keys
-# ---------------------------------------------------------------------------
-OPENCODE_API_KEY = os.getenv("OPENCODE_API_KEY", "").strip()
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
-COPILOT_API_KEY = os.getenv("COPILOT_API_KEY", "").strip()
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
-
-# ---------------------------------------------------------------------------
 # Selected provider
 # ---------------------------------------------------------------------------
 SELECTED_PROVIDER_JSON = os.getenv("OPENCODE_SELECTED_PROVIDER_JSON", "").strip()
@@ -140,7 +132,6 @@ SELECTED_PROVIDER_JSON = os.getenv("OPENCODE_SELECTED_PROVIDER_JSON", "").strip(
 # ---------------------------------------------------------------------------
 MCP_HUB_NAMESPACE = os.getenv("MCP_HUB_NAMESPACE", "mcp-hub").strip() or "mcp-hub"
 MCP_BEARER_TOKEN = os.getenv("MCP_BEARER_TOKEN", "").strip()
-GITHUB_MCP_TOKEN = os.getenv("GITHUB_MCP_TOKEN", "").strip()
 HELM_RELEASE_NAME = os.getenv("HELM_RELEASE_NAME", "kubesynapse").strip() or "kubesynapse"
 
 # ---------------------------------------------------------------------------
@@ -150,7 +141,6 @@ HELM_RELEASE_NAME = os.getenv("HELM_RELEASE_NAME", "kubesynapse").strip() or "ku
 # (MCP Hub) without needing any auth tokens.
 # ---------------------------------------------------------------------------
 CREDENTIAL_PROXY_ENABLED = os.getenv("CREDENTIAL_PROXY_ENABLED", "false").strip().lower() in ("true", "1", "yes")
-CREDENTIAL_PROXY_LITELLM_PORT = max(_safe_int("CREDENTIAL_PROXY_LITELLM_PORT", 4001), 1)
 CREDENTIAL_PROXY_MCP_HUB_PORT = max(_safe_int("CREDENTIAL_PROXY_MCP_HUB_PORT", 4010), 1)
 CREDENTIAL_PROXY_PROVIDER_PORT = max(_safe_int("CREDENTIAL_PROXY_PROVIDER_PORT", 4003), 1)
 
@@ -184,18 +174,6 @@ STRUCTURED_OUTPUT_RETRY_COUNT = max(_safe_int("OPENCODE_STRUCTURED_OUTPUT_RETRY_
 COMPACTION_TOKEN_THRESHOLD = min(max(_safe_float("OPENCODE_COMPACTION_TOKEN_THRESHOLD", 0.75), 0.1), 0.99)
 COMPACTION_PRUNE_THRESHOLD = min(max(_safe_float("OPENCODE_COMPACTION_PRUNE_THRESHOLD", 0.50), 0.1), 0.99)
 COMPACTION_AGGRESSIVE_THRESHOLD = min(max(_safe_float("OPENCODE_COMPACTION_AGGRESSIVE_THRESHOLD", 0.25), 0.01), 0.99)
-COMPACTION_PRESERVE_SYSTEM_PROMPTS = os.getenv("OPENCODE_COMPACTION_PRESERVE_SYSTEM", "true").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-COMPACTION_PRESERVE_TODO_PLANS = os.getenv("OPENCODE_COMPACTION_PRESERVE_TODOS", "true").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
 SESSION_ABORT_TIMEOUT_SECONDS = max(_safe_float("OPENCODE_ABORT_TIMEOUT_SECONDS", 30.0), 5.0)
 PLAN_AGENT_PROMPT_THRESHOLD = max(_safe_int("OPENCODE_PLAN_THRESHOLD_CHARS", 500), 100)
 SESSION_MAX_AGE_SECONDS = max(_safe_int("OPENCODE_SESSION_MAX_AGE_SECONDS", 86400), 60)
@@ -223,10 +201,6 @@ MEMORY_CONTEXT_FENCING_ENABLED = os.getenv("OPENCODE_MEMORY_CONTEXT_FENCING", "t
     "1", "true", "yes", "on"
 }
 MEMORY_CONTEXT_MAX_TOKENS = max(_safe_int("OPENCODE_MEMORY_CONTEXT_MAX_TOKENS", 2048), 256)
-MEMORY_PRUNE_INTERVAL_HOURS = max(_safe_int("OPENCODE_MEMORY_PRUNE_INTERVAL_HOURS", 24), 1)
-MEMORY_ENTITY_EXTRACTION_ENABLED = os.getenv("OPENCODE_MEMORY_ENTITY_EXTRACTION", "true").strip().lower() in {
-    "1", "true", "yes", "on"
-}
 
 # Semantic memory (Qdrant vector DB) — optional
 MEMORY_SEMANTIC_ENABLED = os.getenv("OPENCODE_MEMORY_SEMANTIC_ENABLED", "false").strip().lower() in {
@@ -236,10 +210,6 @@ MEMORY_QDRANT_URL = os.getenv("OPENCODE_MEMORY_QDRANT_URL", "http://localhost:63
 MEMORY_QDRANT_COLLECTION = os.getenv("OPENCODE_MEMORY_QDRANT_COLLECTION", "KUBESYNAPSE_memory").strip()
 MEMORY_QDRANT_DIMENSION = max(_safe_int("OPENCODE_MEMORY_QDRANT_DIMENSION", 768), 64)
 MEMORY_QDRANT_TIMEOUT = max(_safe_float("OPENCODE_MEMORY_QDRANT_TIMEOUT", 5.0), 1.0)
-
-# Memory relevance scoring
-MEMORY_RELEVANCE_DECAY_HOURS = max(_safe_float("OPENCODE_MEMORY_RELEVANCE_DECAY_HOURS", 168.0), 1.0)  # 7 days
-MEMORY_MIN_RELEVANCE_SCORE = max(_safe_float("OPENCODE_MEMORY_MIN_RELEVANCE_SCORE", 0.3), 0.0)
 
 # ---------------------------------------------------------------------------
 # Workspace awareness

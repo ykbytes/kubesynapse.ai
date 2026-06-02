@@ -110,23 +110,6 @@ def _extract_credential_metadata(entry: dict[str, Any], configured_keys: set[str
     return metadata_entries
 
 
-def _find_mcp_connection_cr(name: str, namespace: str) -> dict[str, Any] | None:
-    """Look up the McpConnection CR that backs a DB row."""
-    try:
-        custom_api = kubernetes.client.CustomObjectsApi()
-        return custom_api.get_namespaced_custom_object(
-            group="kubesynapse.ai",
-            version="v1alpha1",
-            namespace=namespace,
-            plural="mcpconnections",
-            name=name,
-        )  # type: ignore[return-value]
-    except ApiException as exc:
-        if exc.status == 404:
-            return None
-        raise
-
-
 def _patch_connection_status(
     namespace: str,
     name: str,

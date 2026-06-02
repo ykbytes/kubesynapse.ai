@@ -252,7 +252,6 @@ OPA_SIDECAR_RESOURCES: Any = get_json_env("OPA_SIDECAR_RESOURCES_JSON", {
 # ---------------------------------------------------------------------------
 
 ORPHAN_PRUNING_ENABLED: bool = os.getenv("ORPHAN_PRUNING_ENABLED", "true").strip().lower() in ("true", "1", "yes")
-ORPHAN_PVC_CLEANUP_INTERVAL: int = get_int_env("ORPHAN_PVC_CLEANUP_INTERVAL_SECONDS", 300, minimum=60)
 
 # ---------------------------------------------------------------------------
 # MCP sidecar catalog (mutable — populated once at import time)

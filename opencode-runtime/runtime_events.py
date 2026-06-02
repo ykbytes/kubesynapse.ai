@@ -20,7 +20,6 @@ import os
 import threading
 import time
 import uuid
-from collections.abc import Callable
 from queue import Queue
 from typing import Any
 
@@ -460,26 +459,6 @@ def emit_llm_call(
         "reasoning_tokens": reasoning_tokens,
         "total_tokens": total_tokens,
         "cost_usd": cost_usd,
-        "duration_ms": duration_ms,
-    })
-
-
-def emit_agent_call(
-    execution_id: str,
-    caller_agent: str,
-    target_agent: str,
-    status: str = "started",
-    duration_ms: int | None = None,
-    session_id: str | None = None,
-    thread_id: str | None = None,
-) -> None:
-    _sync_emit({
-        "event_type": f"agent.call.{status}",
-        "execution_id": execution_id,
-        "session_id": session_id,
-        "thread_id": thread_id,
-        "severity": "error" if status == "failed" else "info",
-        "payload": {"caller_agent": caller_agent, "target_agent": target_agent, "status": status},
         "duration_ms": duration_ms,
     })
 

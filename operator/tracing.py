@@ -67,24 +67,6 @@ def init_tracing(service_name: str = "kubesynapse-operator") -> None:
     logger.info("OpenTelemetry tracing initialized (endpoint=%s).", endpoint)
 
 
-def get_tracer() -> Any:
-    """Return the active tracer, or None if tracing is not available."""
-    return _tracer
-
-
-def get_trace_id() -> str | None:
-    """Return the current OTEL trace ID as a hex string, or None."""
-    if not _OTEL_AVAILABLE or trace is None:
-        return None
-    span = trace.get_current_span()
-    if span is None:
-        return None
-    ctx = span.get_span_context()
-    if ctx is None or not ctx.trace_id:
-        return None
-    return format(ctx.trace_id, "032x")
-
-
 @contextmanager
 def trace_reconcile(
     action: str,

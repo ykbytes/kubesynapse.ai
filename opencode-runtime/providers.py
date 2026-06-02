@@ -146,8 +146,3 @@ def get_provider(provider_id: str) -> ProviderConfig:
         return PROVIDER_REGISTRY[provider_id]
     logger.warning("Unknown provider '%s', falling back to 'litellm'", provider_id)
     return PROVIDER_REGISTRY["litellm"]
-
-
-def list_providers() -> list[str]:
-    """List all available provider IDs."""
-    return list(PROVIDER_REGISTRY.keys())
