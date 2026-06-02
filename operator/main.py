@@ -8,9 +8,6 @@ from __future__ import annotations
 import logging
 import os
 import signal
-import threading
-import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import kopf
 import kubernetes.config  # type: ignore[import-untyped]
@@ -83,40 +80,8 @@ _load_kubernetes_config()
 import controllers  # noqa: E402,F401
 
 # ---------------------------------------------------------------------------
-# §7.2 — Readiness server for operator probes
-# ---------------------------------------------------------------------------
-
-_READINESS_PORT = int(os.getenv("OPERATOR_READINESS_PORT", "8081"))
-
-
-def _render_prometheus_metrics() -> str:
-    return (
-        "# HELP KUBESYNAPSE_operator_reconcile_total Total reconciliation operations\n"
-        "# TYPE KUBESYNAPSE_operator_reconcile_total counter\n"
-        f"KUBESYNAPSE_operator_reconcile_total 0\n"
-        "# HELP KUBESYNAPSE_operator_reconcile_errors Total reconciliation errors\n"
-        "# TYPE KUBESYNAPSE_operator_reconcile_errors counter\n"
-        f"KUBESYNAPSE_operator_reconcile_errors 0\n"
-        "# HELP KUBESYNAPSE_operator_reconcile_latency_sum Sum of reconciliation latency (ms)\n"
-        "# TYPE KUBESYNAPSE_operator_reconcile_latency_sum counter\n"
-        f"KUBESYNAPSE_operator_reconcile_latency_sum 0.0\n"
-    )
-
-
-def _start_readiness_server() -> None:
-    try:
-        with HTTPServer(("0.0.0.0", _READINESS_PORT), _ReadinessHandler) as httpd:
-            logger.info("Operator readiness server listening on :%d", _READINESS_PORT)
-            httpd.serve_forever()
-    except Exception as exc:
-        logger.warning("Readiness server failed: %s", exc)
-
-
-threading.Thread(target=_start_readiness_server, daemon=True, name="readiness-server").start()
-
-
-# ---------------------------------------------------------------------------
 # Startup / shutdown hooks
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 
 @kopf.on.startup()
