@@ -25,9 +25,12 @@ spec:
         - name: SourceRef
           type: string
           jsonPath: .spec.sourceRef
-        - name: Workflow
+        - name: Target
           type: string
           jsonPath: .spec.workflowRef.name
+        - name: TargetType
+          type: string
+          jsonPath: .spec.targetKind
         - name: Enabled
           type: boolean
           jsonPath: .spec.enabled
@@ -44,7 +47,10 @@ spec:
           properties:
             spec:
               type: object
-              required: [sourceRef, sourceKind, workflowRef]
+              required: [sourceRef, sourceKind]
+              oneOf:
+                - required: ["workflowRef"]
+                - required: ["agentRef"]
               properties:
                 sourceRef:
                   type: string
@@ -59,7 +65,6 @@ spec:
                   description: "JSON filter conditions applied to the event payload"
                 workflowRef:
                   type: object
-                  required: [name]
                   properties:
                     name:
                       type: string
@@ -67,10 +72,19 @@ spec:
                     namespace:
                       type: string
                       description: "Namespace of the AgentWorkflow (defaults to trigger namespace)"
+                agentRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                      description: "Name of the AIAgent to invoke directly"
+                    namespace:
+                      type: string
+                      description: "Namespace of the AIAgent (defaults to trigger namespace)"
                 payloadMapping:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
-                  description: "Optional JSON payload mapping for workflow input"
+                  description: "Optional JSON payload mapping for workflow/agent input"
                 maxRetries:
                   type: integer
                   default: 0
@@ -81,6 +95,16 @@ spec:
                   default: 60
                   minimum: 0
                   description: "Backoff between retries in seconds"
+                notifications_on_success:
+                  type: array
+                  items:
+                    type: string
+                  description: "Notification channels on success"
+                notifications_on_failure:
+                  type: array
+                  items:
+                    type: string
+                  description: "Notification channels on failure"
                 enabled:
                   type: boolean
                   default: true
@@ -95,6 +119,18 @@ spec:
                   type: string
                   format: date-time
                 executionCount:
+                  type: integer
+                  minimum: 0
+                failureCount:
+                  type: integer
+                  minimum: 0
+                lastExecution:
+                  type: string
+                  format: date-time
+                lastFailure:
+                  type: string
+                  format: date-time
+                deadLetterCount:
                   type: integer
                   minimum: 0
                 conditions:

@@ -92,6 +92,7 @@ import type {
   WorkflowSummary,
   WorkflowUpdatePayload,
   AgentMcpConnection,
+  WebhookProvider,
   WebhookReceiverInfo,
   WebhookInvocationInfo,
   WorkflowTriggerInfo,
@@ -4753,6 +4754,11 @@ function parseWebhookReceiverPayload(payload: unknown, label = "WebhookReceiverI
     rate_limit: readOptionalNumber(record, "rate_limit", label) ?? 0,
     max_payload_bytes: readOptionalNumber(record, "max_payload_bytes", label) ?? 0,
     enabled: readBoolean(record, "enabled", label, true),
+    provider: (readOptionalString(record, "provider", label) ?? "generic") as WebhookProvider,
+    api_key_enabled: readBoolean(record, "api_key_enabled", label, false),
+    failure_count: readOptionalNumber(record, "failure_count", label) ?? 0,
+    last_failure: readOptionalString(record, "last_failure", label),
+    active_keys: readOptionalNumber(record, "active_keys", label) ?? 1,
     created_at: readOptionalString(record, "created_at", label) ?? "",
     updated_at: readOptionalString(record, "updated_at", label) ?? "",
   };
@@ -4770,6 +4776,8 @@ function parseWebhookInvocationPayload(payload: unknown, label = "WebhookInvocat
     signature_verified: readBoolean(record, "signature_verified", label, false),
     status: readString(record, "status", label, ""),
     matched_triggers: readOptionalNumber(record, "matched_triggers", label) ?? 0,
+    provider: readOptionalString(record, "provider", label) ?? undefined,
+    event_type: readOptionalString(record, "event_type", label) ?? undefined,
   };
 }
 
@@ -4793,6 +4801,8 @@ export interface CreateWebhookPayload {
   rate_limit?: number;
   max_payload_bytes?: number;
   enabled?: boolean;
+  provider?: WebhookProvider;
+  api_key_enabled?: boolean;
 }
 
 export interface UpdateWebhookPayload {
@@ -4801,6 +4811,8 @@ export interface UpdateWebhookPayload {
   rate_limit?: number;
   max_payload_bytes?: number;
   enabled?: boolean;
+  provider?: WebhookProvider;
+  api_key_enabled?: boolean;
 }
 
 export async function createWebhook(token: string, namespace: string, payload: CreateWebhookPayload): Promise<WebhookReceiverInfo> {
@@ -4854,12 +4866,16 @@ function parseWorkflowTriggerPayload(payload: unknown, label = "WorkflowTriggerI
     source_ref: readString(record, "source_ref", label),
     event_filter: readRecord(record, "event_filter", label, {}),
     workflow_ref: readRecord(record, "workflow_ref", label, {}) as Record<string, string>,
+    agent_ref: readRecord(record, "agent_ref", label, {}) as Record<string, string>,
+    target_kind: readOptionalString(record, "target_kind", label) ?? "workflow",
     payload_mapping: readRecord(record, "payload_mapping", label, {}) as Record<string, string>,
     max_retries: readOptionalNumber(record, "max_retries", label) ?? 3,
     backoff_seconds: readOptionalNumber(record, "backoff_seconds", label) ?? 60,
     enabled: readBoolean(record, "enabled", label, true),
     execution_count: readOptionalNumber(record, "execution_count", label) ?? 0,
+    dead_letter_count: readOptionalNumber(record, "dead_letter_count", label) ?? 0,
     last_triggered: readOptionalString(record, "last_triggered", label),
+    notifications: readRecord(record, "notifications", label, {}) as { on_success?: string[]; on_failure?: string[] },
   };
 }
 
@@ -4874,6 +4890,10 @@ function parseTriggerExecutionPayload(payload: unknown, label = "TriggerExecutio
     status: readString(record, "status", label, ""),
     workflow_run_id: readOptionalString(record, "workflow_run_id", label),
     error_message: readOptionalString(record, "error_message", label),
+    attempt_count: readOptionalNumber(record, "attempt_count", label) ?? 0,
+    target_kind: readOptionalString(record, "target_kind", label) ?? undefined,
+    agent_name: readOptionalString(record, "agent_name", label) ?? undefined,
+    agent_namespace: readOptionalString(record, "agent_namespace", label) ?? undefined,
   };
 }
 
@@ -4896,10 +4916,13 @@ export interface CreateTriggerPayload {
   source_ref: string;
   event_filter?: Record<string, unknown>;
   workflow_ref?: Record<string, string>;
+  agent_ref?: Record<string, string>;
+  target_kind?: string;
   payload_mapping?: Record<string, string>;
   max_retries?: number;
   backoff_seconds?: number;
   enabled?: boolean;
+  notifications?: { on_success?: string[]; on_failure?: string[] };
 }
 
 export interface UpdateTriggerPayload {
@@ -4907,10 +4930,13 @@ export interface UpdateTriggerPayload {
   source_ref?: string;
   event_filter?: Record<string, unknown>;
   workflow_ref?: Record<string, string>;
+  agent_ref?: Record<string, string>;
+  target_kind?: string;
   payload_mapping?: Record<string, string>;
   max_retries?: number;
   backoff_seconds?: number;
   enabled?: boolean;
+  notifications?: { on_success?: string[]; on_failure?: string[] };
 }
 
 export async function createTrigger(token: string, namespace: string, payload: CreateTriggerPayload): Promise<WorkflowTriggerInfo> {
@@ -4951,3 +4977,47 @@ export async function fetchTriggerHistory(token: string, namespace: string, name
     return payload.map((item, index) => parseTriggerExecutionPayload(item, `TriggerExecutionInfo[${index}]`));
   });
 }
+
+// ── Webhook Secret Generation ─────────────────────────────────────────────
+
+export async function generateWebhookSecret(token: string, namespace: string, name: string): Promise<{ secret: string; key_id: string }> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/v1/webhooks/${encodeURIComponent(name)}/generate-secret`, namespace),
+    token,
+    { method: "POST" },
+  );
+  return parseJsonResponse(response, (p) => {
+    const record = expectRecord(p, "SecretGeneration");
+    return {
+      secret: readString(record, "secret", "SecretGeneration"),
+      key_id: readString(record, "key_id", "SecretGeneration", "primary"),
+    };
+  });
+}
+
+// ── Dead-Letter Queue ─────────────────────────────────────────────────────
+
+export async function fetchDeadLetterExecutions(token: string, namespace: string, name: string, limit = 50): Promise<TriggerExecutionInfo[]> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/v1/webhooks/${encodeURIComponent(name)}/dead-letter`, namespace) + `&limit=${limit}`,
+    token,
+  );
+  return parseJsonResponse(response, (payload) => {
+    if (!Array.isArray(payload)) return [];
+    return payload.map((item, index) => parseTriggerExecutionPayload(item, `TriggerExecutionInfo[${index}]`));
+  });
+}
+
+export async function replayDeadLetter(token: string, namespace: string, executionId: number): Promise<void> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/v1/webhooks/dead-letter/${executionId}/replay`, namespace),
+    token,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, "Failed to replay execution", text);
+  }
+}
+
+// ── Agent API ─────────────────────────────────────────────────────────────

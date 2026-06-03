@@ -56,7 +56,7 @@ If you prefer a manual path, see:
 
 - [`deploy/README.md`](../deploy/README.md)
 - [`charts/kubesynapse/README.md`](../charts/kubesynapse/README.md)
-- [`INSTALL.md`](../INSTALL.md)
+- [`docs/operator-guide.md`](operator-guide.md)
 
 ---
 

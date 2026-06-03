@@ -110,15 +110,11 @@ from constants import (
 )
 
 from auth_store import (
-    AlertHistoryRow,
-    IntelligenceAlertRow,
-    IntelligenceCollectorRow,
-    IntelligenceScheduleRow,
-    IntelligenceTaskRow,
     api_rate_limit_key,
     api_rate_limited,
     apply_memory_feedback,
     change_user_password,
+    claim_trigger_execution,
     count_recent_webhook_invocations,
     count_users,
     create_chat_session,
@@ -129,6 +125,7 @@ from auth_store import (
     create_workflow_trigger,
     db_session,
     delete_chat_session,
+    delete_local_user,
     delete_mcp_connection,
     delete_memory_record,
     delete_webhook_receiver,
@@ -138,6 +135,7 @@ from auth_store import (
     get_chat_session_messages,
     get_mcp_connection,
     get_mcp_connection_rows_by_ids,
+    get_user_by_id,
     get_user_by_username,
     get_webhook_receiver,
     get_workflow_trigger,
@@ -147,6 +145,7 @@ from auth_store import (
     list_mcp_connections,
     list_memory_records,
     list_promoted_memory_records,
+    list_stale_trigger_executions,
     list_trigger_executions,
     list_webhook_invocations,
     list_webhook_receivers,
@@ -179,10 +178,12 @@ from auth_store import (
     update_mcp_connection,
     update_memory_record,
     update_user_fields,
+    update_trigger_execution_status,
     update_webhook_invocation_matched_triggers,
     update_webhook_receiver,
     update_workflow_trigger,
     upsert_external_user,
+    utc_now,
     validate_email,
     verify_password,
 )
@@ -1153,21 +1154,36 @@ class UpdateUserRequest(BaseModel):
     allowed_namespaces: list[str] | None = None
 
 
+WEBHOOK_PROVIDERS = frozenset({"generic", "github", "slack", "stripe", "pagerduty", "grafana"})
+
+
 class WebhookReceiverRequest(BaseModel):
     name: str = Field(min_length=1, max_length=63, pattern=K8S_NAME_PATTERN)
     secret_ref: str = Field(min_length=1, max_length=253)
+    additional_secrets: dict[str, str] = Field(default_factory=dict)
+    provider: str = Field(default="generic", pattern=r"^(generic|github|slack|stripe|pagerduty|grafana)$")
+    api_key_enabled: bool = False
     ip_allowlist: list[str] = Field(default_factory=list)
     rate_limit: int = Field(default=60, ge=1, le=10000)
+    max_concurrent: int = Field(default=0, ge=0)
     max_payload_bytes: int = Field(default=1048576, ge=1024, le=16777216)
+    response_timeout_seconds: int = Field(default=30, ge=1, le=300)
+    payload_schema: dict[str, Any] | None = Field(default=None)
     enabled: bool = True
 
 
 class WebhookReceiverUpdateRequest(BaseModel):
-    secret_ref: str = Field(default="", min_length=1, max_length=253)
-    ip_allowlist: list[str] = Field(default_factory=list)
-    rate_limit: int = Field(default=60, ge=1, le=10000)
-    max_payload_bytes: int = Field(default=1048576, ge=1024, le=16777216)
-    enabled: bool = True
+    secret_ref: str | None = Field(default=None)
+    additional_secrets: dict[str, str] | None = None
+    provider: str | None = Field(default=None, pattern=r"^(generic|github|slack|stripe|pagerduty|grafana)$")
+    api_key_enabled: bool | None = None
+    ip_allowlist: list[str] | None = None
+    rate_limit: int | None = Field(default=None, ge=1, le=10000)
+    max_concurrent: int | None = Field(default=None, ge=0)
+    max_payload_bytes: int | None = Field(default=None, ge=1024, le=16777216)
+    response_timeout_seconds: int | None = Field(default=None, ge=1, le=300)
+    payload_schema: dict[str, Any] | None = None
+    enabled: bool | None = None
 
 
 class WebhookReceiverInfo(BaseModel):
@@ -1175,9 +1191,15 @@ class WebhookReceiverInfo(BaseModel):
     name: str
     namespace: str
     secret_ref: str
+    additional_secrets: dict[str, str] = Field(default_factory=dict)
+    provider: str = "generic"
+    api_key_enabled: bool = False
     ip_allowlist: list[str] = Field(default_factory=list)
     rate_limit: int = 60
+    max_concurrent: int = 0
     max_payload_bytes: int = 1048576
+    response_timeout_seconds: int = 30
+    payload_schema: dict[str, Any] | None = None
     enabled: bool = True
     created_at: str | None = None
     updated_at: str | None = None
@@ -1189,6 +1211,7 @@ class WorkflowTriggerRequest(BaseModel):
     source_ref: str = Field(min_length=1, max_length=63)
     event_filter: dict[str, Any] | None = Field(default=None)
     workflow_ref: dict[str, str] = Field(default_factory=dict)
+    agent_ref: dict[str, str] = Field(default_factory=dict)
     payload_mapping: dict[str, str] = Field(default_factory=dict)
     max_retries: int = Field(default=3, ge=0, le=10)
     backoff_seconds: int = Field(default=60, ge=0, le=3600)
@@ -1219,12 +1242,19 @@ class WorkflowTriggerRequest(BaseModel):
                 }
         return payload
 
+    @model_validator(mode="after")
+    def check_target_ref(self) -> "WorkflowTriggerRequest":
+        if not self.workflow_ref and not self.agent_ref:
+            raise ValueError("Either workflow_ref or agent_ref must be provided")
+        return self
+
 
 class WorkflowTriggerUpdateRequest(BaseModel):
     source_kind: str | None = Field(default=None, pattern=r"^(WebhookReceiver|AgentEvent)$")
     source_ref: str | None = Field(default=None, min_length=1, max_length=63)
     event_filter: dict[str, Any] | None = Field(default=None)
     workflow_ref: dict[str, str] | None = Field(default=None)
+    agent_ref: dict[str, str] | None = Field(default=None)
     payload_mapping: dict[str, str] | None = Field(default=None)
     max_retries: int | None = Field(default=None, ge=0, le=10)
     backoff_seconds: int | None = Field(default=None, ge=0, le=3600)
@@ -1264,6 +1294,7 @@ class WorkflowTriggerInfo(BaseModel):
     source_ref: str
     event_filter: dict[str, Any] | None = None
     workflow_ref: dict[str, str] = Field(default_factory=dict)
+    agent_ref: dict[str, str] = Field(default_factory=dict)
     payload_mapping: dict[str, str] = Field(default_factory=dict)
     max_retries: int = 3
     backoff_seconds: int = 60

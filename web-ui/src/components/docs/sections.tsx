@@ -1399,7 +1399,10 @@ agentctl skills list                        # Available skills
 agentctl skills tools --agent my-agent      # Tools for an agent
 agentctl providers list                     # LLM provider registry
 agentctl webhooks list                      # Webhook receivers
-agentctl webhooks dispatch my-webhook       # Invoke a webhook`}
+agentctl webhooks dispatch my-webhook       # Invoke a webhook
+agentctl webhooks executions                # List trigger executions
+agentctl webhooks execution-show <id>       # Show execution detail
+agentctl webhooks replay <id>               # Replay a dead-letter execution`}
         lang="bash"
       />
 
@@ -1549,6 +1552,9 @@ function ApiReferenceSection() {
           ["POST", "/api/v1/workflow-triggers", "Create workflow trigger"],
           ["PUT", "/api/v1/workflow-triggers/{name}", "Update workflow trigger"],
           ["DELETE", "/api/v1/workflow-triggers/{name}", "Delete workflow trigger"],
+          ["GET", "/api/v1/webhooks/dispatched?status=pending", "List trigger executions (filterable by status, namespace)"],
+          ["POST", "/api/v1/webhooks/dispatched/{id}/claim", "Atomically claim a pending execution (compare-and-set to queued)"],
+          ["PATCH", "/api/v1/webhooks/dispatched/{id}/status", "Update execution status and lineage metadata"],
         ]} />
       </div>
 
@@ -1667,6 +1673,10 @@ function TroubleshootingSection() {
           ["Durable memory is not recalled", "Saved history exists but the agent forgets", "Verify memoryPolicy is enabled, then inspect gateway memory_records for the right user, namespace, and agent"],
           ["Local fix does not show up", "Kind still serves old code after loading :dev", "Run kubectl rollout restart on the touched deployment when the image tag did not change"],
           ["MCP tool unavailable", "Tool call timeouts", "Check sidecar logs or the remote MCP endpoint auth configuration"],
+          ["Webhook dispatch stuck in pending", "Execution never transitions to queued", "Check operator logs for claim errors. Verify NATS connection (kubectl logs -l app=operator -n kubesynapse). The timer fallback reclaims pending records every 30s."],
+          ["Duplicate webhook events not caught", "Same event triggers twice", "Verify event_id is set in the incoming payload. Dedup uses (namespace, trigger_name, event_id). If the sender does not set event_id, the gateway generates one per request."],
+          ["Claim conflict 409 on webhook", "Second operator replica logs 409", "Expected — the first operator to claim wins. The second skips dispatch. This is normal in multi-replica deployments."],
+          ["Webhook HMAC validation fails", "Invoke returns 401", "Verify the secret key in the referenced K8s Secret matches what the caller uses. Check that the X-kubesynapse-Timestamp is within 5 minutes of the server clock."],
         ]} />
       </div>
 
@@ -1748,7 +1758,8 @@ function WebhooksSection() {
       <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
         KubeSynapse can react to external events through webhook receivers and workflow triggers.
         External systems POST signed payloads; the gateway validates HMAC signatures, rate limits,
-        and IP allowlists before dispatching to workflows.
+        and IP allowlists before creating a trigger execution record. The operator then claims the
+        record atomically and dispatches to the target workflow or agent.
       </p>
 
       <div id="wh-receiver">
@@ -1780,6 +1791,27 @@ function WebhooksSection() {
           ["backoffSeconds", "integer", "Delay between retries (min: 0, default: 60)"],
           ["enabled", "boolean", "Whether the trigger is active (default: true)"],
         ]} />
+      </div>
+
+      <div id="wh-execution-model">
+        <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Execution Model</h3>
+        <p className="mb-3 text-[oklch(0.80_0.01_264)]">
+          When the gateway receives a valid webhook invocation and a matching WorkflowTrigger exists, it creates a
+          <code>trigger_executions</code> record in <code>pending</code> state and publishes a NATS message.
+          The operator claims the record atomically before dispatching, ensuring each execution is handled exactly once
+          even when multiple operator replicas compete.
+        </p>
+        <DocsTable headers={["Aspect", "Detail"]} rows={[
+          ["State machine", "pending → queued → processing → completed | failed | dead_letter"],
+          ["Claim mechanism", "Atomic compare-and-set: only <code>pending</code> records can be claimed as <code>queued</code>. A second operator claiming the same record gets HTTP 409."],
+          ["Dispatch paths", "NATS (primary, sub-5s latency) or timer-based reconciliation fallback (every 30s)"],
+          ["Dedup", "Duplicate events with matching <code>(namespace, trigger_name, event_id)</code> return the existing record instead of creating a duplicate. The first claim wins."],
+          ["Lineage metadata", "workflow_run_id, workflow_generation, job_name, session_id, operator_instance, dispatch_path — persisted on every status update"],
+        ]} />
+        <Callout variant="info" title="Claim-first dispatch">
+          Both the NATS handler and the timer reconciliation path attempt to claim the execution before dispatching.
+          This ensures idempotency — the first operator wins, and subsequent attempts skip the already-claimed record.
+        </Callout>
       </div>
 
       <div id="wh-example">
@@ -2390,6 +2422,7 @@ export const SECTIONS: DocSection[] = [
     subsections: [
       { id: "wh-receiver", title: "WebhookReceiver" },
       { id: "wh-trigger", title: "WorkflowTrigger" },
+      { id: "wh-execution-model", title: "Execution Model" },
       { id: "wh-example", title: "Example" },
     ],
     content: <WebhooksSection />,

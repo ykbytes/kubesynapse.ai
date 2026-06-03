@@ -12,6 +12,18 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronUp,
+  Key,
+  Globe,
+  Activity,
+  AlertCircle,
+  SkipForward,
+  Zap,
+  Github,
+  MessageSquare,
+  CreditCard,
+  Radio,
+  BarChart3,
+  Skull,
 } from "lucide-react";
 import { useConnection } from "@/contexts/ConnectionContext";
 import {
@@ -20,6 +32,9 @@ import {
   updateWebhook,
   deleteWebhook,
   fetchWebhookHistory,
+  generateWebhookSecret,
+  fetchDeadLetterExecutions,
+  replayDeadLetter,
   apiErrorMessage,
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -30,11 +45,37 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConfirmDialog } from "../shared/ConfirmDialog";
 import { EmptyState } from "../shared/EmptyState";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import type { WebhookReceiverInfo, WebhookInvocationInfo } from "../../types";
+import type { WebhookReceiverInfo, WebhookInvocationInfo, WebhookProvider, TriggerExecutionInfo } from "../../types";
+
+const PROVIDERS: { value: WebhookProvider; label: string; icon: typeof Globe; color: string }[] = [
+  { value: "generic", label: "Generic", icon: Globe, color: "text-muted-foreground" },
+  { value: "github", label: "GitHub", icon: Github, color: "text-foreground" },
+  { value: "slack", label: "Slack", icon: MessageSquare, color: "text-[#4A154B]" },
+  { value: "stripe", label: "Stripe", icon: CreditCard, color: "text-[#635BFF]" },
+  { value: "pagerduty", label: "PagerDuty", icon: Radio, color: "text-[#06AC38]" },
+  { value: "grafana", label: "Grafana", icon: BarChart3, color: "text-[#F46800]" },
+];
+
+const PROVIDER_HEADERS: Record<WebhookProvider, { header: string; example: string }> = {
+  generic: { header: "X-kubesynapse-Signature", example: "sha256=..." },
+  github: { header: "X-Hub-Signature-256", example: "sha256=..." },
+  slack: { header: "X-Slack-Signature", example: "v0=a2114d57b48e89caf8d12..." },
+  stripe: { header: "Stripe-Signature", example: "v1=..." },
+  pagerduty: { header: "X-PD-Signature", example: "v1=..." },
+  grafana: { header: "X-Grafana-Signature", example: "sha256=..." },
+};
 
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: string }) {
   return (
@@ -59,13 +100,24 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: 
   );
 }
 
-function formatDate(dateStr: string): string {
+function formatDate(dateStr: string | null): string {
   if (!dateStr) return "—";
   try {
     return new Date(dateStr).toLocaleString();
   } catch {
     return dateStr;
   }
+}
+
+function relativeTime(dateStr: string | null): string {
+  if (!dateStr) return "never";
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }
 
 export function WebhookManager() {
@@ -83,6 +135,16 @@ export function WebhookManager() {
   const [isCreating, setIsCreating] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [expandedPayloadId, setExpandedPayloadId] = useState<number | null>(null);
+  const [detailTab, setDetailTab] = useState("overview");
+
+  // Dead-letter
+  const [deadLetter, setDeadLetter] = useState<TriggerExecutionInfo[]>([]);
+  const [deadLetterLoading, setDeadLetterLoading] = useState(false);
+  const [replayingId, setReplayingId] = useState<number | null>(null);
+
+  // Secret generation
+  const [generatedSecret, setGeneratedSecret] = useState<{ secret: string; key_id: string } | null>(null);
+  const [generatingSecret, setGeneratingSecret] = useState(false);
 
   // Form state
   const [formName, setFormName] = useState("");
@@ -91,6 +153,8 @@ export function WebhookManager() {
   const [formRateLimit, setFormRateLimit] = useState(60);
   const [formMaxPayload, setFormMaxPayload] = useState(1048576);
   const [formEnabled, setFormEnabled] = useState(true);
+  const [formProvider, setFormProvider] = useState<WebhookProvider>("generic");
+  const [formApiKeyEnabled, setFormApiKeyEnabled] = useState(false);
 
   const loadWebhooks = useCallback(async () => {
     if (!token || !namespace) return;
@@ -129,6 +193,20 @@ export function WebhookManager() {
   }, [token, namespace, selectedWebhook?.name]);
 
   useEffect(() => {
+    if (!token || !namespace || !selectedWebhook || detailTab !== "dead-letter") {
+      setDeadLetter([]);
+      return;
+    }
+    let cancelled = false;
+    setDeadLetterLoading(true);
+    fetchDeadLetterExecutions(token, namespace, selectedWebhook.name)
+      .then((data) => { if (!cancelled) setDeadLetter(data); })
+      .catch(() => { if (!cancelled) setDeadLetter([]); })
+      .finally(() => { if (!cancelled) setDeadLetterLoading(false); });
+    return () => { cancelled = true; };
+  }, [token, namespace, selectedWebhook?.name, detailTab]);
+
+  useEffect(() => {
     if (selectedWebhook) {
       setFormName(selectedWebhook.name);
       setFormSecretRef(selectedWebhook.secret_ref);
@@ -136,6 +214,8 @@ export function WebhookManager() {
       setFormRateLimit(selectedWebhook.rate_limit);
       setFormMaxPayload(selectedWebhook.max_payload_bytes);
       setFormEnabled(selectedWebhook.enabled);
+      setFormProvider(selectedWebhook.provider || "generic");
+      setFormApiKeyEnabled(selectedWebhook.api_key_enabled);
       setIsCreating(false);
     } else if (isCreating) {
       setFormName("");
@@ -144,6 +224,9 @@ export function WebhookManager() {
       setFormRateLimit(60);
       setFormMaxPayload(1048576);
       setFormEnabled(true);
+      setFormProvider("generic");
+      setFormApiKeyEnabled(false);
+      setGeneratedSecret(null);
     }
   }, [selectedWebhook, isCreating]);
 
@@ -151,33 +234,35 @@ export function WebhookManager() {
     if (!search.trim()) return webhooks;
     const lower = search.toLowerCase();
     return webhooks.filter(
-      (w) => w.name.toLowerCase().includes(lower) || w.namespace.toLowerCase().includes(lower)
+      (w) => w.name.toLowerCase().includes(lower) || w.namespace.toLowerCase().includes(lower) || w.provider?.toLowerCase().includes(lower)
     );
   }, [webhooks, search]);
+
+  const totalInvocations = useMemo(() => history.length, [history]);
+  const recentFailures = useMemo(() => history.filter((h) => h.status === "failed" || h.status === "error").length, [history]);
+  const lastInvocation = useMemo(() => history.length > 0 ? history[0].received_at : null, [history]);
+  const latestInvocation = useMemo(() => history.length > 0 ? history[0] : null, [history]);
 
   const handleSelectWebhook = useCallback((webhook: WebhookReceiverInfo) => {
     setSelectedWebhook(webhook);
     setIsCreating(false);
     setError("");
+    setDetailTab("overview");
+    setGeneratedSecret(null);
   }, []);
 
   const handleCreateNew = useCallback(() => {
     setSelectedWebhook(null);
     setIsCreating(true);
     setError("");
+    setGeneratedSecret(null);
   }, []);
 
   const handleSave = useCallback(async () => {
     if (!token || !namespace) return;
     const name = formName.trim();
-    if (!name) {
-      setError("Webhook name is required.");
-      return;
-    }
-    if (!formSecretRef.trim()) {
-      setError("Secret reference is required.");
-      return;
-    }
+    if (!name) { setError("Webhook name is required."); return; }
+    if (!formSecretRef.trim()) { setError("Secret reference is required."); return; }
     setSaving(true);
     setError("");
     try {
@@ -188,6 +273,8 @@ export function WebhookManager() {
         rate_limit: Math.max(0, formRateLimit),
         max_payload_bytes: Math.max(0, formMaxPayload),
         enabled: formEnabled,
+        provider: formProvider,
+        api_key_enabled: formApiKeyEnabled,
       };
       if (isCreating) {
         const created = await createWebhook(token, namespace, payload);
@@ -208,7 +295,7 @@ export function WebhookManager() {
     } finally {
       setSaving(false);
     }
-  }, [token, namespace, formName, formSecretRef, formIpAllowlist, formRateLimit, formMaxPayload, formEnabled, isCreating, selectedWebhook]);
+  }, [token, namespace, formName, formSecretRef, formIpAllowlist, formRateLimit, formMaxPayload, formEnabled, formProvider, formApiKeyEnabled, isCreating, selectedWebhook]);
 
   const handleDelete = useCallback(async () => {
     if (!token || !namespace || !selectedWebhook) return;
@@ -221,27 +308,63 @@ export function WebhookManager() {
       setDeleteDialogOpen(false);
       toast.success("Webhook deleted");
     } catch (err) {
-      const msg = apiErrorMessage(err);
-      setError(msg);
-      toast.error("Failed to delete webhook", { description: msg });
+      setError(apiErrorMessage(err));
+      toast.error("Failed to delete webhook", { description: apiErrorMessage(err) });
     } finally {
       setDeleting(false);
     }
   }, [token, namespace, selectedWebhook]);
 
+  const handleGenerateSecret = useCallback(async () => {
+    if (!token || !namespace || !selectedWebhook) return;
+    setGeneratingSecret(true);
+    try {
+      const result = await generateWebhookSecret(token, namespace, selectedWebhook.name);
+      setGeneratedSecret(result);
+      toast.success("New webhook secret generated");
+    } catch (err) {
+      toast.error("Failed to generate secret", { description: apiErrorMessage(err) });
+    } finally {
+      setGeneratingSecret(false);
+    }
+  }, [token, namespace, selectedWebhook]);
+
+  const handleReplay = useCallback(async (executionId: number) => {
+    if (!token || !namespace) return;
+    setReplayingId(executionId);
+    try {
+      await replayDeadLetter(token, namespace, executionId);
+      setDeadLetter((prev) => prev.filter((e) => e.id !== executionId));
+      toast.success("Execution re-queued for replay");
+    } catch (err) {
+      toast.error("Failed to replay execution", { description: apiErrorMessage(err) });
+    } finally {
+      setReplayingId(null);
+    }
+  }, [token, namespace]);
+
   const gatewayUrl = typeof window !== "undefined" ? window.location.origin : "";
+  const provider = selectedWebhook?.provider || "generic";
+  const providerInfo = PROVIDERS.find((p) => p.value === provider) || PROVIDERS[0];
+  const sigHeader = PROVIDER_HEADERS[provider];
   const webhookUrl = selectedWebhook
     ? `${gatewayUrl}/api/v1/webhooks/${encodeURIComponent(selectedWebhook.name)}/invoke?namespace=${encodeURIComponent(selectedWebhook.namespace)}`
     : "";
-  const curlExample = selectedWebhook
-    ? `curl -X POST "${webhookUrl}" \\\n  -H "Content-Type: application/json" \\\n  -H "X-kubesynapse-Signature: <signature>" \\\n  -d '{"key":"value"}'`
-    : "";
+  const curlExample = provider === "github"
+    ? `curl -X POST "${webhookUrl}" \\\n  -H "Content-Type: application/json" \\\n  -H "X-GitHub-Event: push" \\\n  -H "${sigHeader.header}: <signature>" \\\n  -d '{"action":"opened","issue":{"id":1}}'`
+    : provider === "slack"
+      ? `curl -X POST "${webhookUrl}" \\\n  -H "Content-Type: application/json" \\\n  -H "${sigHeader.header}: v0=<computed>" \\\n  -d '{"event":{"type":"message","text":"hello","channel":"C123"}}'`
+      : provider === "stripe"
+        ? `curl -X POST "${webhookUrl}" \\\n  -H "Content-Type: application/json" \\\n  -H "${sigHeader.header}: v1=<signature>" \\\n  -d '{"type":"payment_intent.succeeded","data":{"object":{"id":"pi_123"}}}'`
+        : `curl -X POST "${webhookUrl}" \\\n  -H "Content-Type: application/json" \\\n  -H "${sigHeader.header}: <signature>" \\\n  -d '{"key":"value"}'`;
 
   const canSubmit = Boolean(formName.trim()) && Boolean(formSecretRef.trim());
 
+  const ProviderIcon = providerInfo.icon;
+
   return (
     <div className="grid h-full gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
-      {/* Left column: list */}
+      {/* ── Left column: webhook list ── */}
       <div className="flex min-h-0 flex-col gap-3">
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
@@ -261,7 +384,6 @@ export function WebhookManager() {
             </Button>
           )}
         </div>
-
         <ScrollArea className="flex-1 rounded-[1.75rem] border border-border/70 bg-card/55">
           <div className="space-y-1 p-2">
             {loading && webhooks.length === 0 && (
@@ -285,6 +407,7 @@ export function WebhookManager() {
             )}
             {filteredWebhooks.map((webhook) => {
               const isSelected = selectedWebhook?.name === webhook.name;
+              const whProvider = PROVIDERS.find((p) => p.value === (webhook.provider || "generic")) || PROVIDERS[0];
               return (
                 <button
                   key={webhook.name}
@@ -299,10 +422,13 @@ export function WebhookManager() {
                   aria-pressed={isSelected}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-foreground">
-                      {webhook.name}
-                    </span>
-                    <Badge variant={webhook.enabled ? "default" : "secondary"} className="text-[10px]">
+                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                      <whProvider.icon className={cn("h-3 w-3 shrink-0", whProvider.color)} />
+                      <span className="truncate text-[12.5px] font-medium text-foreground">
+                        {webhook.name}
+                      </span>
+                    </div>
+                    <Badge variant={webhook.enabled ? "default" : "secondary"} className="text-[10px] shrink-0">
                       {webhook.enabled ? "Enabled" : "Disabled"}
                     </Badge>
                   </div>
@@ -310,6 +436,12 @@ export function WebhookManager() {
                     <span className="truncate">{webhook.namespace}</span>
                     <span className="text-border">·</span>
                     <span>{webhook.rate_limit}/min</span>
+                    {webhook.failure_count > 0 && (
+                      <>
+                        <span className="text-border">·</span>
+                        <span className="text-destructive">{webhook.failure_count} failed</span>
+                      </>
+                    )}
                   </div>
                 </button>
               );
@@ -318,17 +450,57 @@ export function WebhookManager() {
         </ScrollArea>
       </div>
 
-      {/* Right column: detail/editor */}
+      {/* ── Right column: detail/editor ── */}
       <div className="flex min-h-0 flex-col gap-4">
         {(selectedWebhook || isCreating) ? (
           <>
+            {/* ── Health summary bar ── */}
+            {!isCreating && selectedWebhook && (
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-xl border border-border/70 bg-card/55 px-3 py-2.5">
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <Activity className="h-3 w-3" />
+                    Invocations
+                  </div>
+                  <div className="mt-0.5 text-lg font-semibold text-foreground">{totalInvocations}</div>
+                </div>
+                <div className="rounded-xl border border-border/70 bg-card/55 px-3 py-2.5">
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <AlertCircle className={cn("h-3 w-3", recentFailures > 0 ? "text-destructive" : "")} />
+                    Failures
+                  </div>
+                  <div className={cn("mt-0.5 text-lg font-semibold", recentFailures > 0 ? "text-destructive" : "text-foreground")}>
+                    {recentFailures}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-border/70 bg-card/55 px-3 py-2.5">
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <Clock className="h-3 w-3" />
+                    Last Invoked
+                  </div>
+                  <div className="mt-0.5 text-lg font-semibold text-foreground">{relativeTime(lastInvocation)}</div>
+                </div>
+              </div>
+            )}
+
+            {/* ── Editor card ── */}
             <Card className="border-border/70 bg-card/55">
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
-                    <CardTitle className="text-base font-semibold">
-                      {isCreating ? "New Webhook" : selectedWebhook?.name}
-                    </CardTitle>
+                    <div className="flex items-center gap-2">
+                      {!isCreating && selectedWebhook && (
+                        <ProviderIcon className={cn("h-4 w-4", providerInfo.color)} />
+                      )}
+                      <CardTitle className="text-base font-semibold">
+                        {isCreating ? "New Webhook" : selectedWebhook?.name}
+                      </CardTitle>
+                      {!isCreating && selectedWebhook && (
+                        <Badge variant={selectedWebhook.provider === "generic" ? "secondary" : "default"} className="text-[10px]">
+                          {selectedWebhook.provider || "generic"}
+                        </Badge>
+                      )}
+                    </div>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {isCreating ? "Configure a new webhook receiver." : `Updated ${formatDate(selectedWebhook?.updated_at ?? "")}`}
                     </p>
@@ -346,12 +518,7 @@ export function WebhookManager() {
                         Delete
                       </Button>
                     )}
-                    <Button
-                      size="sm"
-                      className="h-8 gap-1.5 text-xs"
-                      onClick={handleSave}
-                      disabled={saving || !canSubmit}
-                    >
+                    <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={handleSave} disabled={saving || !canSubmit}>
                       <Save className="h-3.5 w-3.5" />
                       {saving ? "Saving..." : "Save"}
                     </Button>
@@ -368,94 +535,91 @@ export function WebhookManager() {
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-1.5">
                     <Label htmlFor="wh-name">Name</Label>
-                    <Input
-                      id="wh-name"
-                      value={formName}
-                      onChange={(e) => setFormName(e.target.value)}
-                      disabled={!canMutate || !isCreating}
-                      placeholder="my-webhook"
-                      className="h-9 text-sm"
-                    />
+                    <Input id="wh-name" value={formName} onChange={(e) => setFormName(e.target.value)} disabled={!canMutate || !isCreating} placeholder="my-webhook" className="h-9 text-sm" />
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="wh-secret">Secret Reference</Label>
-                    <Input
-                      id="wh-secret"
-                      value={formSecretRef}
-                      onChange={(e) => setFormSecretRef(e.target.value)}
-                      disabled={!canMutate}
-                      placeholder="namespace/secret-name#key"
-                      className="h-9 text-sm"
-                    />
+                    <Input id="wh-secret" value={formSecretRef} onChange={(e) => setFormSecretRef(e.target.value)} disabled={!canMutate} placeholder="namespace/secret-name#key" className="h-9 text-sm" />
                   </div>
                 </div>
 
-                <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="wh-provider">Provider</Label>
+                    <Select value={formProvider} onValueChange={(v) => setFormProvider(v as WebhookProvider)} disabled={!canMutate}>
+                      <SelectTrigger id="wh-provider" className="h-9 text-sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PROVIDERS.map((p) => (
+                          <SelectItem key={p.value} value={p.value}>
+                            <span className="flex items-center gap-2">
+                              <p.icon className="h-3.5 w-3.5" />
+                              {p.label}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="wh-rate">Rate Limit (req/min)</Label>
-                    <Input
-                      id="wh-rate"
-                      type="number"
-                      value={formRateLimit}
-                      onChange={(e) => setFormRateLimit(Number(e.target.value))}
-                      disabled={!canMutate}
-                      min={0}
-                      className="h-9 text-sm"
-                    />
+                    <Input id="wh-rate" type="number" value={formRateLimit} onChange={(e) => setFormRateLimit(Number(e.target.value))} disabled={!canMutate} min={0} className="h-9 text-sm" />
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="wh-payload">Max Payload Bytes</Label>
-                    <Input
-                      id="wh-payload"
-                      type="number"
-                      value={formMaxPayload}
-                      onChange={(e) => setFormMaxPayload(Number(e.target.value))}
-                      disabled={!canMutate}
-                      min={0}
-                      className="h-9 text-sm"
-                    />
+                    <Input id="wh-payload" type="number" value={formMaxPayload} onChange={(e) => setFormMaxPayload(Number(e.target.value))} disabled={!canMutate} min={0} className="h-9 text-sm" />
                   </div>
                 </div>
 
                 <div className="space-y-1.5">
                   <Label htmlFor="wh-ips">IP Allowlist (one CIDR per line)</Label>
-                  <Textarea
-                    id="wh-ips"
-                    value={formIpAllowlist}
-                    onChange={(e) => setFormIpAllowlist(e.target.value)}
-                    disabled={!canMutate}
-                    placeholder="0.0.0.0/0\n10.0.0.0/8"
-                    rows={4}
-                    className="text-xs"
-                  />
+                  <Textarea id="wh-ips" value={formIpAllowlist} onChange={(e) => setFormIpAllowlist(e.target.value)} disabled={!canMutate} placeholder="0.0.0.0/0\n10.0.0.0/8" rows={3} className="text-xs" />
                 </div>
 
-                <div className="flex items-center gap-3">
-                  <Toggle checked={formEnabled} onChange={setFormEnabled} label="Enabled" />
-                  <span className="text-sm text-muted-foreground">{formEnabled ? "Enabled" : "Disabled"}</span>
+                <div className="flex items-center gap-6">
+                  <div className="flex items-center gap-3">
+                    <Toggle checked={formEnabled} onChange={setFormEnabled} label="Enabled" />
+                    <span className="text-sm text-muted-foreground">{formEnabled ? "Enabled" : "Disabled"}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Toggle checked={formApiKeyEnabled} onChange={setFormApiKeyEnabled} label="API Key Auth" />
+                    <span className="text-sm text-muted-foreground">{formApiKeyEnabled ? "API key" : "No API key"}</span>
+                  </div>
                 </div>
 
+                {/* ── Webhook URL & cURL example ── */}
                 {!isCreating && selectedWebhook && (
                   <>
                     <Separator />
                     <div className="space-y-3">
                       <div className="text-sm font-medium text-foreground">Webhook URL</div>
                       <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-background/60 px-3 py-2">
-                        <code className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
-                          {webhookUrl}
-                        </code>
+                        <code className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">{webhookUrl}</code>
                         <CopyButton value={webhookUrl} />
                       </div>
                       <div className="space-y-1">
-                        <div className="text-xs font-medium text-muted-foreground">cURL example</div>
-                        <div className="relative rounded-xl border border-border/60 bg-background/60 px-3 py-2">
-                          <pre className="overflow-x-auto text-[11px] text-muted-foreground">
-                            <code>{curlExample}</code>
-                          </pre>
-                          <div className="absolute right-2 top-2">
-                            <CopyButton value={curlExample} />
-                          </div>
+                        <div className="flex items-center justify-between">
+                          <div className="text-xs font-medium text-muted-foreground">cURL example</div>
+                          <Badge variant="outline" className="text-[10px]">{providerInfo.label}</Badge>
                         </div>
+                        <div className="relative rounded-xl border border-border/60 bg-background/60 px-3 py-2">
+                          <pre className="overflow-x-auto text-[11px] text-muted-foreground"><code>{curlExample}</code></pre>
+                          <div className="absolute right-2 top-2"><CopyButton value={curlExample} /></div>
+                        </div>
+                      </div>
+                      {/* ── Generate Secret ── */}
+                      <div className="flex items-center gap-3">
+                        <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={handleGenerateSecret} disabled={generatingSecret}>
+                          <Key className="h-3.5 w-3.5" />
+                          {generatingSecret ? "Generating..." : "Generate New Secret"}
+                        </Button>
+                        {generatedSecret && (
+                          <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5">
+                            <span className="text-[11px] text-emerald-400 font-medium">Secret generated</span>
+                            <code className="text-[10px] text-muted-foreground">key_id: {generatedSecret.key_id}</code>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </>
@@ -463,86 +627,160 @@ export function WebhookManager() {
               </CardContent>
             </Card>
 
-            {/* History */}
+            {/* ── Detail tabs: Overview / History / Dead Letter ── */}
             {!isCreating && selectedWebhook && (
-              <Card className="border-border/70 bg-card/55">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                    <Clock className="h-4 w-4 text-muted-foreground" />
-                    Invocation History
-                  </CardTitle>
+              <Card className="border-border/70 bg-card/55 flex-1">
+                <CardHeader className="pb-0">
+                  <Tabs value={detailTab} onValueChange={setDetailTab}>
+                    <TabsList className="h-auto gap-1.5 rounded-lg border border-border/60 bg-card/40 p-1">
+                      <TabsTrigger value="overview" className="gap-1.5 rounded-md px-3 py-1.5 text-[11px] data-[state=active]:bg-primary/10 data-[state=active]:text-foreground data-[state=active]:shadow-none">
+                        <Activity className="h-3 w-3" />
+                        Overview
+                      </TabsTrigger>
+                      <TabsTrigger value="history" className="gap-1.5 rounded-md px-3 py-1.5 text-[11px] data-[state=active]:bg-primary/10 data-[state=active]:text-foreground data-[state=active]:shadow-none">
+                        <Clock className="h-3 w-3" />
+                        History
+                      </TabsTrigger>
+                      <TabsTrigger value="dead-letter" className="gap-1.5 rounded-md px-3 py-1.5 text-[11px] data-[state=active]:bg-primary/10 data-[state=active]:text-foreground data-[state=active]:shadow-none">
+                        <Skull className="h-3 w-3" />
+                        Dead Letter
+                        {deadLetter.length > 0 && (
+                          <span className="ml-1 rounded-full bg-destructive/20 px-1.5 py-0.5 text-[10px] text-destructive">{deadLetter.length}</span>
+                        )}
+                      </TabsTrigger>
+                    </TabsList>
+                  </Tabs>
                 </CardHeader>
-                <CardContent>
-                  {historyLoading && history.length === 0 ? (
-                    <div className="space-y-2">
-                      {[0, 1, 2].map((i) => (
-                        <Skeleton key={i} className="h-10 w-full rounded-lg" />
-                      ))}
-                    </div>
-                  ) : history.length === 0 ? (
-                    <EmptyState
-                      icon={Clock}
-                      title="No invocations yet"
-                      description="This webhook hasn't received any requests."
-                      className="py-6"
-                    />
-                  ) : (
-                    <div className="space-y-2">
-                      {history.map((inv) => (
-                        <div
-                          key={inv.id}
-                          className="rounded-xl border border-border/60 bg-background/40 px-3 py-2.5"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                              <span>{formatDate(inv.received_at)}</span>
-                              <span className="text-border">·</span>
-                              <span>{inv.source_ip}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Badge variant={inv.signature_verified ? "default" : "destructive"} className="text-[10px]">
-                                {inv.signature_verified ? (
-                                  <span className="flex items-center gap-1">
-                                    <Shield className="h-3 w-3" /> Verified
-                                  </span>
-                                ) : (
-                                  <span className="flex items-center gap-1">
-                                    <AlertTriangle className="h-3 w-3" /> Unverified
-                                  </span>
-                                )}
+                <CardContent className="pt-3">
+                  {/* ── Overview tab ── */}
+                  {detailTab === "overview" && (
+                    <div className="space-y-3">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-lg border border-border/60 bg-background/40 p-3">
+                          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                            <Shield className="h-3 w-3" />
+                            Signature Verification
+                          </div>
+                          <div className="mt-1 text-sm font-medium text-foreground">
+                            {selectedWebhook.provider === "generic" ? "HMAC-SHA256" : `${selectedWebhook.provider} native`}
+                          </div>
+                        </div>
+                        <div className="rounded-lg border border-border/60 bg-background/40 p-3">
+                          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                            <Key className="h-3 w-3" />
+                            Active Keys
+                          </div>
+                          <div className="mt-1 text-sm font-medium text-foreground">{selectedWebhook.active_keys}</div>
+                        </div>
+                      </div>
+
+                      {latestInvocation && (
+                        <div className="rounded-lg border border-border/60 bg-background/40 p-3">
+                          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                            <Zap className="h-3 w-3" />
+                            Latest Invocation
+                          </div>
+                          <div className="mt-1 space-y-1">
+                            <div className="flex items-center gap-2 text-xs">
+                              <span className="font-medium text-foreground">{formatDate(latestInvocation.received_at)}</span>
+                              <Badge variant={latestInvocation.signature_verified ? "default" : "destructive"} className="text-[10px]">
+                                {latestInvocation.signature_verified ? "Verified" : "Unverified"}
                               </Badge>
                               <Badge variant="secondary" className="text-[10px]">
-                                {inv.matched_triggers} trigger{inv.matched_triggers === 1 ? "" : "s"}
+                                {latestInvocation.matched_triggers} trigger{latestInvocation.matched_triggers === 1 ? "" : "s"}
                               </Badge>
                             </div>
+                            <div className="text-[11px] text-muted-foreground">
+                              From {latestInvocation.source_ip} · Status: {latestInvocation.status}
+                            </div>
                           </div>
-                          <div className="mt-1.5 flex items-center justify-between">
-                            <span className="text-[11px] font-medium text-foreground">Status: {inv.status}</span>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 gap-1 text-[10px] text-muted-foreground"
-                              onClick={() => setExpandedPayloadId(expandedPayloadId === inv.id ? null : inv.id)}
-                            >
-                              {expandedPayloadId === inv.id ? (
-                                <>
-                                  <ChevronUp className="h-3 w-3" /> Hide
-                                </>
-                              ) : (
-                                <>
-                                  <ChevronDown className="h-3 w-3" /> Payload
-                                </>
-                              )}
-                            </Button>
-                          </div>
-                          {expandedPayloadId === inv.id && (
-                            <pre className="mt-2 max-h-40 overflow-auto rounded-lg border border-border/60 bg-background/80 p-2 text-[11px] text-muted-foreground">
-                              {JSON.stringify(inv, null, 2)}
-                            </pre>
-                          )}
                         </div>
-                      ))}
+                      )}
                     </div>
+                  )}
+
+                  {/* ── History tab ── */}
+                  {detailTab === "history" && (
+                    <>
+                      {historyLoading && history.length === 0 ? (
+                        <div className="space-y-2">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-10 w-full rounded-lg" />)}</div>
+                      ) : history.length === 0 ? (
+                        <EmptyState icon={Clock} title="No invocations yet" description="This webhook hasn't received any requests." className="py-6" />
+                      ) : (
+                        <ScrollArea className="max-h-80">
+                          <div className="space-y-2">
+                            {history.map((inv) => (
+                              <div key={inv.id} className="rounded-xl border border-border/60 bg-background/40 px-3 py-2.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                                    <span>{formatDate(inv.received_at)}</span>
+                                    <span className="text-border">·</span>
+                                    <span>{inv.source_ip}</span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Badge variant={inv.signature_verified ? "default" : "destructive"} className="text-[10px]">
+                                      {inv.signature_verified ? <span className="flex items-center gap-1"><Shield className="h-3 w-3" /> Verified</span> : <span className="flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> Unverified</span>}
+                                    </Badge>
+                                    <Badge variant="secondary" className="text-[10px]">{inv.matched_triggers} trigger{inv.matched_triggers === 1 ? "" : "s"}</Badge>
+                                  </div>
+                                </div>
+                                <div className="mt-1.5 flex items-center justify-between">
+                                  <span className="text-[11px] font-medium text-foreground">Status: {inv.status}</span>
+                                  <Button variant="ghost" size="sm" className="h-6 gap-1 text-[10px] text-muted-foreground" onClick={() => setExpandedPayloadId(expandedPayloadId === inv.id ? null : inv.id)}>
+                                    {expandedPayloadId === inv.id ? <><ChevronUp className="h-3 w-3" /> Hide</> : <><ChevronDown className="h-3 w-3" /> Details</>}
+                                  </Button>
+                                </div>
+                                {expandedPayloadId === inv.id && (
+                                  <pre className="mt-2 max-h-40 overflow-auto rounded-lg border border-border/60 bg-background/80 p-2 text-[11px] text-muted-foreground">
+                                    {JSON.stringify(inv, null, 2)}
+                                  </pre>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </ScrollArea>
+                      )}
+                    </>
+                  )}
+
+                  {/* ── Dead Letter tab ── */}
+                  {detailTab === "dead-letter" && (
+                    <>
+                      {deadLetterLoading && deadLetter.length === 0 ? (
+                        <div className="space-y-2">{[0, 1].map((i) => <Skeleton key={i} className="h-16 w-full rounded-lg" />)}</div>
+                      ) : deadLetter.length === 0 ? (
+                        <EmptyState icon={Skull} title="No dead-letter items" description="All executions have been processed successfully." className="py-6" />
+                      ) : (
+                        <ScrollArea className="max-h-80">
+                          <div className="space-y-2">
+                            {deadLetter.map((exec) => (
+                              <div key={exec.id} className="rounded-xl border border-destructive/20 bg-destructive/5 px-3 py-2.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2 text-[11px]">
+                                    <span className="text-muted-foreground">{formatDate(exec.executed_at)}</span>
+                                    <Badge variant="destructive" className="text-[10px]">{exec.status}</Badge>
+                                    <span className="text-muted-foreground">{exec.attempt_count} attempt{exec.attempt_count === 1 ? "" : "s"}</span>
+                                  </div>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-7 gap-1 text-[10px]"
+                                    onClick={() => handleReplay(exec.id)}
+                                    disabled={replayingId === exec.id}
+                                  >
+                                    <SkipForward className="h-3 w-3" />
+                                    {replayingId === exec.id ? "Replaying..." : "Replay"}
+                                  </Button>
+                                </div>
+                                {exec.error_message && (
+                                  <div className="mt-1.5 text-[11px] text-destructive">{exec.error_message}</div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </ScrollArea>
+                      )}
+                    </>
                   )}
                 </CardContent>
               </Card>
@@ -553,7 +791,7 @@ export function WebhookManager() {
             <EmptyState
               icon={Webhook}
               title="Select a webhook"
-              description="Choose a webhook from the list to view details and history, or create a new one."
+              description="Choose a webhook from the list to view details, history, and dead-letter queue."
               action={canMutate ? { label: "Create Webhook", onClick: handleCreateNew } : undefined}
             />
           </div>
@@ -574,41 +812,22 @@ export function WebhookManager() {
 }
 
 function Label({ htmlFor, children }: { htmlFor: string; children: React.ReactNode }) {
-  return (
-    <label htmlFor={htmlFor} className="text-sm font-medium text-foreground">
-      {children}
-    </label>
-  );
+  return <label htmlFor={htmlFor} className="text-sm font-medium text-foreground">{children}</label>;
 }
 
 function CopyButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout>>();
-
-  useEffect(() => {
-    return () => { clearTimeout(timerRef.current); };
-  }, []);
-
+  useEffect(() => { return () => { clearTimeout(timerRef.current); }; }, []);
   const handleCopy = useCallback(async () => {
     await navigator.clipboard.writeText(value);
     setCopied(true);
     clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => setCopied(false), 1500);
   }, [value]);
-
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="h-7 w-7 text-muted-foreground hover:text-foreground transition-transform duration-150 active:scale-90"
-      onClick={handleCopy}
-      aria-label={copied ? "Copied" : "Copy to clipboard"}
-    >
-      {copied ? (
-        <Check className="h-3.5 w-3.5 text-emerald-400" />
-      ) : (
-        <Copy className="h-3.5 w-3.5" />
-      )}
+    <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground transition-transform duration-150 active:scale-90" onClick={handleCopy} aria-label={copied ? "Copied" : "Copy to clipboard"}>
+      {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
     </Button>
   );
 }

@@ -186,6 +186,7 @@ Current responsibilities include:
 - namespace-aware authorization
 - CRUD endpoints for agents, workflows, policies, approvals, MCP connections, and observability resources
 - invoke routing to runtime sandboxes
+- webhook dispatch with claim-based dedup (atomic compare-and-set on trigger_executions)
 - workflow trigger endpoints
 - runtime metadata and validation endpoints used by the UI
 - managed sign-in and local-auth flows in current deployments
@@ -277,10 +278,12 @@ The `AIAgent` contract now includes connection-oriented MCP metadata, and the UI
 `AgentWorkflow` still defines DAG-style execution, but the current operational model is:
 
 1. the workflow exists as a CRD object and user-facing definition
-2. the operator or gateway triggers execution
+2. the operator or gateway triggers execution (for webhooks, the gateway creates a trigger_execution record and the operator claims it atomically before dispatching)
 3. a worker Job performs the orchestration work
 4. step-level detail is persisted as artifacts and logs
 5. summary state is projected back into workflow status and the UI
+
+For webhook-triggered workflows, the dispatch uses a claim-based model: the operator claims a pending execution record via the gateway's HTTP API before dispatching, ensuring idempotent handling even with multiple operator replicas.
 
 ## 9. Observability Architecture
 

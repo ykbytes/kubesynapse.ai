@@ -22,6 +22,9 @@ spec:
         - name: Enabled
           type: boolean
           jsonPath: .spec.enabled
+        - name: Provider
+          type: string
+          jsonPath: .spec.provider
         - name: RateLimit
           type: integer
           jsonPath: .spec.rateLimit
@@ -43,6 +46,19 @@ spec:
                 secretRef:
                   type: string
                   description: "K8s Secret reference (namespace/name#key)"
+                additionalSecrets:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  description: "Additional secrets for key rotation — key-id → K8s Secret reference (namespace/name#key)"
+                provider:
+                  type: string
+                  default: generic
+                  enum: [generic, github, slack, stripe, pagerduty, grafana]
+                  description: "Webhook provider for automatic signature verification"
+                apiKeyEnabled:
+                  type: boolean
+                  default: false
+                  description: "Allow X-API-Key header authentication"
                 ipAllowlist:
                   type: array
                   items:
@@ -53,11 +69,27 @@ spec:
                   default: 60
                   minimum: 1
                   description: "Maximum invocations per minute"
+                maxConcurrent:
+                  type: integer
+                  default: 0
+                  minimum: 0
+                  description: "Maximum concurrent invocations (0 = unlimited)"
                 maxPayloadBytes:
                   type: integer
                   default: 1048576
                   minimum: 1
+                  maximum: 16777216
                   description: "Maximum payload size in bytes"
+                responseTimeoutSeconds:
+                  type: integer
+                  default: 30
+                  minimum: 1
+                  maximum: 300
+                  description: "Timeout for webhook response"
+                payloadSchema:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                  description: "JSON Schema for payload validation"
                 enabled:
                   type: boolean
                   default: true
@@ -74,6 +106,22 @@ spec:
                 invocationCount:
                   type: integer
                   minimum: 0
+                failureCount:
+                  type: integer
+                  minimum: 0
+                lastInvocation:
+                  type: string
+                  format: date-time
+                lastFailure:
+                  type: string
+                  format: date-time
+                lastFailureReason:
+                  type: string
+                activeKeys:
+                  type: array
+                  items:
+                    type: string
+                  description: "Currently active key IDs for rotation tracking"
                 conditions:
                   type: array
                   items:

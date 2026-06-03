@@ -422,7 +422,7 @@ Read [`cli/README.md`](cli/README.md) for the full command surface.
 | Execution Observatory & run intelligence | [`docs/observability-explained.md`](docs/observability-explained.md) |
 | Configuration reference | [`docs/configuration-reference.md`](docs/configuration-reference.md) |
 | Getting started guide | [`docs/getting-started.md`](docs/getting-started.md) |
-| Installation & operations | [`INSTALL.md`](INSTALL.md) |
+| Installation & operations | [`docs/operator-guide.md`](docs/operator-guide.md) |
 | Helm chart guide | [`charts/kubesynapse/README.md`](charts/kubesynapse/README.md) |
 | Deployment guide | [`deploy/README.md`](deploy/README.md) |
 | API reference | [`docs/api-reference.md`](docs/api-reference.md) |

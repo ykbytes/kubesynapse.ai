@@ -1303,6 +1303,8 @@ export interface ExecutionListResponse {
 
 /* ── Webhook & Trigger types ── */
 
+export type WebhookProvider = "generic" | "github" | "slack" | "stripe" | "pagerduty" | "grafana";
+
 export interface WebhookReceiverInfo {
   id: number;
   namespace: string;
@@ -1312,6 +1314,11 @@ export interface WebhookReceiverInfo {
   rate_limit: number;
   max_payload_bytes: number;
   enabled: boolean;
+  provider: WebhookProvider;
+  api_key_enabled: boolean;
+  failure_count: number;
+  last_failure: string | null;
+  active_keys: number;
   created_at: string;
   updated_at: string;
 }
@@ -1326,6 +1333,8 @@ export interface WebhookInvocationInfo {
   signature_verified: boolean;
   status: string;
   matched_triggers: number;
+  provider?: string;
+  event_type?: string;
 }
 
 export interface WorkflowTriggerInfo {
@@ -1336,12 +1345,19 @@ export interface WorkflowTriggerInfo {
   source_ref: string;
   event_filter: Record<string, unknown>;
   workflow_ref: Record<string, string>;
+  agent_ref: Record<string, string>;
+  target_kind: string;
   payload_mapping: Record<string, string>;
   max_retries: number;
   backoff_seconds: number;
   enabled: boolean;
   execution_count: number;
+  dead_letter_count: number;
   last_triggered: string | null;
+  notifications: {
+    on_success?: string[];
+    on_failure?: string[];
+  };
 }
 
 export interface TriggerExecutionInfo {
@@ -1353,6 +1369,10 @@ export interface TriggerExecutionInfo {
   status: string;
   workflow_run_id: string | null;
   error_message: string | null;
+  attempt_count: number;
+  target_kind?: string;
+  agent_name?: string;
+  agent_namespace?: string;
 }
 
 /* ── Live Agent Activity Stream types ── */
