@@ -14,7 +14,10 @@ import {
   ShieldCheck,
   AlertTriangle,
   GitBranch,
+  FileText,
+  Wrench,
 } from "lucide-react";
+import { resolveToolMeta } from "@/lib/tool-utils";
 
 /* ── Runtime icon mapping ── */
 
@@ -320,7 +323,51 @@ export function AgentNode({ data, selected }: NodeProps<AgentStepNode>) {
           )}
         </div>
 
-        {/* Loop progress bar */}
+        {/* Execution summary strip */}
+        {data.stepState && (data.stepState.toolCallCount ?? 0) > 0 && (
+          <div className="flex items-center gap-2 text-[9px] text-muted-foreground border-t border-border/20 pt-1.5 mt-1">
+            <span className="flex items-center gap-0.5">
+              <Wrench className="h-2.5 w-2.5" />
+              {data.stepState.toolCallCount} tool{data.stepState.toolCallCount !== 1 ? "s" : ""}
+            </span>
+            {(data.stepState.artifactCount ?? 0) > 0 && (
+              <span className="flex items-center gap-0.5">
+                <FileText className="h-2.5 w-2.5" />
+                {data.stepState.artifactCount} file{data.stepState.artifactCount !== 1 ? "s" : ""}
+              </span>
+            )}
+            {data.stepState.latencyMs != null && (
+              <span className="font-mono tabular-nums">
+                {data.stepState.latencyMs < 1000
+                  ? `${data.stepState.latencyMs}ms`
+                  : `${(data.stepState.latencyMs / 1000).toFixed(1)}s`}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Dominant signal */}
+        {data.stepState?.warnings && data.stepState.warnings.length > 0 && (
+          <div className="mt-1">
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 text-[9px] text-amber-400 font-medium">
+              <AlertTriangle className="h-2.5 w-2.5" /> {data.stepState.warnings.length} warning{data.stepState.warnings.length !== 1 ? "s" : ""}
+            </span>
+          </div>
+        )}
+
+        {/* Current activity preview (when running) */}
+        {status === "running" && data.stepState?.toolCalls && data.stepState.toolCalls.length > 0 && (
+          <div className="flex items-center gap-1.5 text-[9px] text-primary/80 border-t border-border/20 pt-1 mt-1">
+            <LoaderCircle className="h-2.5 w-2.5 animate-spin shrink-0" />
+            <span className="truncate">
+              {(() => {
+                const last = data.stepState!.toolCalls![data.stepState!.toolCalls!.length - 1];
+                const meta = resolveToolMeta(last.tool);
+                return meta.label;
+              })()}
+            </span>
+          </div>
+        )}
         <LoopProgressBar data={data} />
         {/* Plan progress bar */}
         <PlanProgressBar data={data} />

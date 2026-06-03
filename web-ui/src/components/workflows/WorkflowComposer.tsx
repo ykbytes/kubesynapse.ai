@@ -47,6 +47,7 @@ import { WorkspaceFileBrowser } from "../workflows/WorkspaceFileBrowser";
 import { LiveActivityStream, useWorkflowActivities } from "../intelligence/LiveActivityStream";
 import { toast } from "sonner";
 import { AlertCircle, MousePointerClick } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 /* ── Static styles ── */
@@ -123,6 +124,22 @@ function ComposerCanvas({
     error: liveError,
     reconnect: liveReconnect,
   } = useWorkflowActivities(token, namespace, workflow?.name ?? null);
+
+  // Live summary stats
+  const { activeStepName, toolActivityCount, warningCount, errorCount } = useMemo(() => {
+    let activeStep = "";
+    let tools = 0;
+    let warnings = 0;
+    let errors = 0;
+    for (const a of activities) {
+      if (a.step) activeStep = a.step;
+      if (a.type === "warning") warnings += 1;
+      if (a.type === "error") errors += 1;
+      const d = a.details;
+      if (d.tool || d.tool_name) tools += 1;
+    }
+    return { activeStepName: activeStep, toolActivityCount: tools, warningCount: warnings, errorCount: errors };
+  }, [activities]);
 
   // Sync step states from workflow polling to node data
   useEffect(() => {
@@ -711,7 +728,29 @@ function ComposerCanvas({
 
         {/* Live Activity Panel */}
         {!livePanelCollapsed && workflow?.name && (
-          <div className="w-80 border-l bg-background shrink-0 flex flex-col">
+          <div className="w-96 border-l bg-background shrink-0 flex flex-col">
+            {/* Live run summary */}
+            <div className="px-3 py-2 border-b shrink-0 bg-muted/20">
+              <div className="flex items-center gap-2 text-[10px]">
+                <div className={cn(
+                  "h-1.5 w-1.5 rounded-full shrink-0",
+                  isActive ? "bg-emerald-500 animate-pulse" : isConnected ? "bg-sky-500" : "bg-red-500",
+                )} />
+                <span className="font-semibold text-foreground">{workflow.name}</span>
+                {livePhase && (
+                  <Badge variant="outline" className="text-[9px] h-4 px-1">{livePhase}</Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-2 mt-1 text-[9px] text-muted-foreground">
+                {isActive && activeStepName && (
+                  <span>Current: {activeStepName}</span>
+                )}
+                <span>{activities.length} events</span>
+                {toolActivityCount > 0 && <span>{toolActivityCount} tools</span>}
+                {warningCount > 0 && <span className="text-amber-400">{warningCount} warnings</span>}
+                {errorCount > 0 && <span className="text-red-400">{errorCount} errors</span>}
+              </div>
+            </div>
             <LiveActivityStream
               workflowName={workflow.name}
               activities={activities}

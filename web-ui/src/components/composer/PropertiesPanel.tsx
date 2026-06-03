@@ -59,6 +59,8 @@ import {
   Zap,
   Package,
   Trash2,
+  Sparkles,
+  BarChart3,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
@@ -70,6 +72,12 @@ import {
   availablePlaceholders,
 } from "@/lib/template-utils";
 import { getRuntimeSignal } from "@/lib/agentSignals";
+import {
+  groupToolCalls,
+  toolCallPreview,
+  dominantStatus,
+  type ToolCallGroup,
+} from "@/lib/tool-utils";
 
 interface PropertiesPanelProps {
   selectedNode: ComposerNode | null;
@@ -949,94 +957,124 @@ function PlanChecklist({ planProgress }: { planProgress: { items: { text: string
 
 /* ── Tool call timeline ── */
 function ToolCallTimeline({ toolCalls }: { toolCalls: { tool?: string | null; status?: string | null; inputPreview?: string | null; preview?: string | null }[] }) {
-  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
+  const [expandedCall, setExpandedCall] = useState<number | null>(null);
+
+  const groups = groupToolCalls(toolCalls);
+
+  if (groups.length === 0) return null;
 
   return (
-    <div className="relative pl-4">
-      {/* Timeline line */}
-      <div className="absolute left-[5px] top-1 bottom-1 w-px bg-border/50" />
+    <div className="space-y-1">
+      {groups.map((group) => {
+        const meta = group.meta;
+        const Icon = meta.icon;
+        const isExpanded = expandedGroup === group.tool;
+        const calls = toolCalls.filter((tc) => (tc.tool ?? "").toLowerCase() === group.tool.toLowerCase());
 
-      <div className="space-y-1">
-        {toolCalls.map((tc, i) => {
-          const isCompleted = tc.status === "completed";
-          const isError = tc.status === "error";
-          const isRunning = tc.status === "running";
-          const isExpanded = expandedIdx === i;
-
-          return (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, x: 12 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: i * 0.04, duration: 0.25 }}
-              className="relative"
+        return (
+          <div key={group.tool} className="rounded-md border border-border/30 bg-background/40 overflow-hidden">
+            {/* Group header */}
+            <button
+              type="button"
+              onClick={() => setExpandedGroup(isExpanded ? null : group.tool)}
+              className="flex items-center gap-2 w-full px-2 py-1.5 text-left cursor-pointer hover:bg-accent/40 transition-colors"
             >
-              {/* Timeline dot */}
-              <div className={cn(
-                "absolute -left-4 top-1.5 h-2.5 w-2.5 rounded-full border-2 border-background z-[1]",
-                isCompleted ? "bg-emerald-500" : isError ? "bg-red-500" : isRunning ? "bg-amber-500" : "bg-muted-foreground/40",
-              )}>
-                {isRunning && (
-                  <span className="absolute inset-0 rounded-full bg-amber-500 animate-ping opacity-50" />
-                )}
+              <Icon className={cn("h-3 w-3 shrink-0", meta.color)} />
+              <span className="text-[10px] font-medium flex-1 truncate">{meta.label}</span>
+              {group.count > 1 && (
+                <span className="text-[9px] font-mono text-muted-foreground/60 tabular-nums">x{group.count}</span>
+              )}
+              <StatusDot status={dominantStatus(group.statuses)} />
+              <ChevronRight className={cn("h-2.5 w-2.5 text-muted-foreground/40 shrink-0 transition-transform", isExpanded && "rotate-90")} />
+            </button>
+
+            {/* Group preview */}
+            {!isExpanded && group.inputPreviews.length > 0 && (
+              <div className="px-2 pb-1.5">
+                <span className="text-[9px] text-muted-foreground/60 truncate block">
+                  {toolCallPreview(group.tool, group.inputPreviews[0])}
+                </span>
               </div>
+            )}
 
-              {/* Tool call card */}
-              <button
-                type="button"
-                onClick={() => setExpandedIdx(isExpanded ? null : i)}
-                className={cn(
-                  "w-full text-left rounded-md border p-1.5 transition-colors cursor-pointer",
-                  isExpanded ? "bg-card border-border" : "bg-transparent border-transparent hover:bg-card/50 hover:border-border/40",
-                )}
-              >
-                <div className="flex items-center gap-1.5">
-                  {isCompleted && <CheckCircle2 className="h-2.5 w-2.5 text-emerald-400 shrink-0" />}
-                  {isError && <XCircle className="h-2.5 w-2.5 text-red-400 shrink-0" />}
-                  {isRunning && <LoaderCircle className="h-2.5 w-2.5 text-amber-400 animate-spin shrink-0" />}
-                  {!isCompleted && !isError && !isRunning && <Circle className="h-2.5 w-2.5 text-muted-foreground/40 shrink-0" />}
-                  <span className="text-[10px] font-mono font-medium truncate flex-1">
-                    {tc.tool ?? "unknown"}
-                  </span>
-                  {(tc.inputPreview || tc.preview) && (
-                    <ChevronRight className={cn("h-2.5 w-2.5 text-muted-foreground/40 shrink-0 transition-transform", isExpanded && "rotate-90")} />
-                  )}
-                </div>
-              </button>
-
-              {/* Expanded details */}
-              <AnimatePresence>
-                {isExpanded && (tc.inputPreview || tc.preview) && (
-                  <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: "auto", opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="overflow-hidden"
-                  >
-                    <div className="ml-0 mt-0.5 space-y-1">
-                      {tc.inputPreview && (
-                        <div className="rounded border bg-muted/20 p-1.5">
-                          <div className="text-[8px] uppercase tracking-wider text-muted-foreground/50 mb-0.5">Input</div>
-                          <pre className="text-[9px] font-mono text-muted-foreground whitespace-pre-wrap break-words max-h-16 overflow-auto">{tc.inputPreview}</pre>
+            {/* Expanded individual calls */}
+            <AnimatePresence>
+              {isExpanded && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="overflow-hidden"
+                >
+                  <div className="border-t border-border/20 divide-y divide-border/10">
+                    {calls.map((tc, ci) => {
+                      const isCallExpanded = expandedCall === ci;
+                      return (
+                        <div key={ci}>
+                          <button
+                            type="button"
+                            onClick={() => setExpandedCall(isCallExpanded ? null : ci)}
+                            className="flex items-center gap-2 w-full px-3 py-1 text-left cursor-pointer hover:bg-accent/30 transition-colors"
+                          >
+                            <StatusDot status={tc.status ?? "unknown"} />
+                            <span className="text-[9px] font-mono text-muted-foreground truncate flex-1">
+                              #{ci + 1}
+                            </span>
+                            <span className="text-[9px] text-muted-foreground/60 truncate max-w-[120px]">
+                              {toolCallPreview(tc.tool, tc.inputPreview)}
+                            </span>
+                          </button>
+                          <AnimatePresence>
+                            {isCallExpanded && (tc.inputPreview || tc.preview) && (
+                              <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: "auto", opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.15 }}
+                                className="overflow-hidden"
+                              >
+                                <div className="px-3 pb-1.5 space-y-1">
+                                  {tc.inputPreview && (
+                                    <div className="rounded border bg-muted/20 p-1.5">
+                                      <div className="text-[8px] uppercase tracking-wider text-muted-foreground/50 mb-0.5">Input</div>
+                                      <pre className="text-[9px] font-mono text-muted-foreground whitespace-pre-wrap break-words max-h-16 overflow-auto">{tc.inputPreview}</pre>
+                                    </div>
+                                  )}
+                                  {tc.preview && (
+                                    <div className="rounded border bg-muted/20 p-1.5">
+                                      <div className="text-[8px] uppercase tracking-wider text-muted-foreground/50 mb-0.5">Output</div>
+                                      <pre className="text-[9px] font-mono text-muted-foreground whitespace-pre-wrap break-words max-h-16 overflow-auto">{tc.preview}</pre>
+                                    </div>
+                                  )}
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
                         </div>
-                      )}
-                      {tc.preview && (
-                        <div className="rounded border bg-muted/20 p-1.5">
-                          <div className="text-[8px] uppercase tracking-wider text-muted-foreground/50 mb-0.5">Output</div>
-                          <pre className="text-[9px] font-mono text-muted-foreground whitespace-pre-wrap break-words max-h-16 overflow-auto">{tc.preview}</pre>
-                        </div>
-                      )}
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </motion.div>
-          );
-        })}
-      </div>
+                      );
+                    })}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        );
+      })}
     </div>
   );
+}
+
+function StatusDot({ status }: { status: string }) {
+  const cls = status === "completed" || status === "success"
+    ? "bg-emerald-500"
+    : status === "error" || status === "failed"
+      ? "bg-red-500"
+      : status === "running"
+        ? "bg-amber-500"
+        : "bg-muted-foreground/40";
+  return <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", cls)} />;
 }
 
 /* ── Artifacts list ── */
@@ -1115,7 +1153,239 @@ function ArtifactsList({ artifacts }: { artifacts: { path?: string | null; name?
   );
 }
 
-function ExecutionTab({ data }: { data: AgentStepNodeData }) {
+/* ── Overview Tab ── */
+
+function OverviewTab({ data }: { data: AgentStepNodeData }) {
+  const rawState = data.stepState;
+  const isRunning = rawState?.status === "running";
+  const elapsed = useElapsedTimer(rawState?.startedAt, isRunning);
+
+  if (!rawState?.status) {
+    return (
+      <div className="flex flex-col items-center justify-center py-10 text-center text-muted-foreground/60">
+        <motion.div
+          initial={{ scale: 0.8, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ type: "spring", stiffness: 300, damping: 25 }}
+        >
+          <Activity className="h-6 w-6 mb-3 mx-auto" />
+        </motion.div>
+        <p className="text-[10px]">No execution data yet.</p>
+        <p className="text-[10px] mt-0.5">Run the workflow to see live step progress.</p>
+      </div>
+    );
+  }
+
+  const state = rawState;
+
+  const statusConfig: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
+    completed: {
+      label: "Completed",
+      color: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
+      icon: <CheckCircle2 className="h-4 w-4 text-emerald-400" />,
+    },
+    running: {
+      label: "Running",
+      color: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+      icon: <LoaderCircle className="h-4 w-4 text-amber-400 animate-spin" />,
+    },
+    failed: {
+      label: "Failed",
+      color: "text-red-400 bg-red-500/10 border-red-500/20",
+      icon: <XCircle className="h-4 w-4 text-red-400" />,
+    },
+    waiting_approval: {
+      label: "Waiting Approval",
+      color: "text-orange-400 bg-orange-500/10 border-orange-500/20",
+      icon: <UserCheck className="h-4 w-4 text-orange-400" />,
+    },
+    queued: {
+      label: "Queued",
+      color: "text-muted-foreground bg-muted/50 border-border/40",
+      icon: <Clock className="h-4 w-4 text-muted-foreground" />,
+    },
+  };
+  const sc = statusConfig[state.status] ?? {
+    label: state.status,
+    color: "text-muted-foreground bg-muted/50 border-border/40",
+    icon: <Circle className="h-4 w-4 text-muted-foreground" />,
+  };
+
+  const toolGroups = groupToolCalls(state.toolCalls);
+  const totalTools = state.toolCallCount ?? toolGroups.reduce((s, g) => s + g.count, 0);
+  const totalArtifacts = state.artifactCount ?? state.artifacts?.length ?? 0;
+  const warningCount = state.warnings?.length ?? 0;
+  const hasErrors = !!state.error || !!state.failureClass;
+  const hasVerify = !!state.verificationResult;
+  const hasReview = !!state.reviewResult;
+
+  function suggestedAction(): { action: string; reason: string } | null {
+    if (state.status === "failed") return { action: "Inspect error and tool activity", reason: state.error ? state.error.slice(0, 120) : "Step failed" };
+    if (state.status === "waiting_approval") return { action: "Review output and approve or deny", reason: "Step is blocked on human decision" };
+    if (state.status === "running") return { action: "Step is in progress", reason: `Elapsed: ${elapsed}` };
+    if (hasVerify && !state.verificationResult!.passed) return { action: "Verification failed — review activity", reason: state.verificationResult!.criteria ?? "Verification criteria not met" };
+    if (hasReview && !state.reviewResult!.approved) return { action: "Review was rejected — check feedback", reason: "Step output did not pass review" };
+    if (warningCount > 0) return { action: `${warningCount} warning${warningCount > 1 ? "s" : ""} to review`, reason: "Open Activity tab for details" };
+    if (state.status === "completed") return { action: "Step completed successfully", reason: `${totalTools} tool calls, ${totalArtifacts} artifacts in ${state.latencyMs != null ? `${(state.latencyMs / 1000).toFixed(1)}s` : "—"}` };
+    return null;
+  }
+  const action = suggestedAction();
+
+  return (
+    <div className="p-2.5 space-y-3">
+      {/* Status hero */}
+      <div className={cn("rounded-xl border p-3 space-y-2", sc.color.split(" ").slice(1).join(" "))}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            {sc.icon}
+            <span className="text-xs font-semibold">{sc.label}</span>
+          </div>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {state.latencyMs != null
+              ? state.latencyMs < 1000 ? `${state.latencyMs}ms` : `${(state.latencyMs / 1000).toFixed(1)}s`
+              : elapsed}
+          </span>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {totalTools > 0 && <MetricChip icon={Wrench} label={`${totalTools} tool${totalTools !== 1 ? "s" : ""}`} />}
+          {totalArtifacts > 0 && <MetricChip icon={FileText} label={`${totalArtifacts} file${totalArtifacts !== 1 ? "s" : ""}`} />}
+          {warningCount > 0 && <MetricChip icon={AlertTriangle} label={`${warningCount} warning${warningCount !== 1 ? "s" : ""}`} tone="warning" />}
+          {hasErrors && <MetricChip icon={XCircle} label="Has errors" tone="error" />}
+          {hasVerify && (
+            <MetricChip
+              icon={ShieldCheck}
+              label={state.verificationResult!.passed ? "Verified" : "Verify failed"}
+              tone={state.verificationResult!.passed ? "success" : "error"}
+            />
+          )}
+          {hasReview && (
+            <MetricChip
+              icon={ShieldCheck}
+              label={state.reviewResult!.approved ? "Approved" : "Rejected"}
+              tone={state.reviewResult!.approved ? "success" : "warning"}
+            />
+          )}
+          {state.attempts != null && state.attempts > 1 && (
+            <MetricChip icon={Repeat} label={`Attempt ${state.attempts}`} tone="warning" />
+          )}
+          {state.approvalWaitMs != null && (
+            <MetricChip icon={UserCheck} label={`Wait ${(state.approvalWaitMs / 1000).toFixed(0)}s`} tone="warning" />
+          )}
+        </div>
+      </div>
+
+      {/* What happened */}
+      {state.responsePreview && (
+        <div className="rounded-lg border border-border/40 bg-background/60 p-2.5">
+          <div className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60 mb-1">What happened</div>
+          <p className="text-[10px] leading-relaxed text-muted-foreground line-clamp-3">
+            {state.responsePreview}
+          </p>
+        </div>
+      )}
+
+      {/* Suggested next action */}
+      {action && (
+        <div className="flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 p-2.5">
+          <Sparkles className="h-3.5 w-3.5 mt-0.5 text-primary shrink-0" />
+          <div>
+            <div className="text-[10px] font-medium text-foreground">{action.action}</div>
+            <div className="text-[9px] text-muted-foreground mt-0.5">{action.reason}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Tool mix summary */}
+      {toolGroups.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60">Tool activity</div>
+          {toolGroups.slice(0, 6).map((group) => (
+            <ToolMixRow key={group.tool} group={group} />
+          ))}
+          {toolGroups.length > 6 && (
+            <div className="text-[9px] text-muted-foreground/60 text-center">
+              +{toolGroups.length - 6} more tool types
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Important outputs */}
+      {state.verificationResult && (
+        <div className={cn(
+          "rounded-lg border p-2.5",
+          state.verificationResult.passed
+            ? "border-emerald-500/20 bg-emerald-500/5"
+            : "border-red-500/20 bg-red-500/5",
+        )}>
+          <div className="flex items-center gap-1.5 text-[10px] font-medium">
+            <ShieldCheck className={cn("h-3 w-3", state.verificationResult.passed ? "text-emerald-400" : "text-red-400")} />
+            <span>Verification: {state.verificationResult.passed ? "PASSED" : "FAILED"}</span>
+          </div>
+          {state.verificationResult.criteria && (
+            <div className="text-[9px] text-muted-foreground mt-1">{state.verificationResult.criteria}</div>
+          )}
+        </div>
+      )}
+
+      {state.reviewResult && (
+        <div className={cn(
+          "rounded-lg border p-2.5",
+          state.reviewResult.approved
+            ? "border-emerald-500/20 bg-emerald-500/5"
+            : "border-amber-500/20 bg-amber-500/5",
+        )}>
+          <div className="flex items-center gap-1.5 text-[10px] font-medium">
+            <ShieldCheck className={cn("h-3 w-3", state.reviewResult.approved ? "text-emerald-400" : "text-amber-400")} />
+            <span>Review: {state.reviewResult.verdict ?? (state.reviewResult.approved ? "APPROVED" : "REJECTED")}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MetricChip({ icon: Icon, label, tone }: { icon: React.ComponentType<{ className?: string }>; label: string; tone?: "success" | "warning" | "error" }) {
+  const toneStyles = {
+    success: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
+    warning: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+    error: "text-red-400 bg-red-500/10 border-red-500/20",
+  };
+  const cls = tone ? toneStyles[tone] : "text-muted-foreground bg-muted/30 border-border/40";
+  return (
+    <span className={cn("inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-medium leading-none", cls)}>
+      <Icon className="h-2.5 w-2.5" />
+      {label}
+    </span>
+  );
+}
+
+function ToolMixRow({ group }: { group: ToolCallGroup }) {
+  const meta = group.meta;
+  const Icon = meta.icon;
+  const status = dominantStatus(group.statuses);
+  const statusColors: Record<string, string> = {
+    completed: "text-emerald-400",
+    error: "text-red-400",
+    failed: "text-red-400",
+    running: "text-amber-400",
+  };
+
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-border/30 bg-background/40 px-2 py-1.5">
+      <Icon className={cn("h-3 w-3 shrink-0", meta.color)} />
+      <span className="text-[10px] font-medium flex-1 truncate">{meta.label}</span>
+      {group.count > 1 && (
+        <span className="text-[9px] font-mono text-muted-foreground/60 tabular-nums">x{group.count}</span>
+      )}
+      <span className={cn("text-[9px] font-medium", statusColors[status] ?? "text-muted-foreground")}>
+        {status}
+      </span>
+    </div>
+  );
+}
+
+function ActivityTab({ data }: { data: AgentStepNodeData }) {
   const state = data.stepState;
   const isRunning = state?.status === "running";
   const elapsed = useElapsedTimer(state?.startedAt, isRunning);
@@ -1400,9 +1670,9 @@ function ExecutionTab({ data }: { data: AgentStepNodeData }) {
   );
 }
 
-/* ── Connections Tab ── */
+/* ── Dependencies Tab (renamed from Connections) ── */
 
-function ConnectionsTab({
+function DependenciesTab({
   node,
   edges,
   nodes,
@@ -1530,9 +1800,9 @@ export function PropertiesPanel({
 
   const d = selectedNode.data as AgentStepNodeData;
 
-  /* Auto-switch to Execution tab when step starts running or fails */
+  /* Auto-switch to Overview tab when step starts running or fails */
   const stepStatus = d.stepState?.status;
-  const [activeTab, setActiveTab] = useState(() => (shouldPreferExecutionTab(stepStatus) ? "execution" : "config"));
+  const [activeTab, setActiveTab] = useState(() => (shouldPreferExecutionTab(stepStatus) ? "overview" : "config"));
   const prevStatusRef = useRef<string | undefined>(undefined);
   const nodeId = selectedNode.id;
   const prevNodeRef = useRef(nodeId);
@@ -1541,14 +1811,14 @@ export function PropertiesPanel({
     if (prevNodeRef.current !== nodeId) {
       prevNodeRef.current = nodeId;
       prevStatusRef.current = undefined;
-      setActiveTab(shouldPreferExecutionTab(stepStatus) ? "execution" : "config");
+      setActiveTab(shouldPreferExecutionTab(stepStatus) ? "overview" : "config");
       return;
     }
 
     const prev = prevStatusRef.current;
     prevStatusRef.current = stepStatus ?? undefined;
     if (activeTab === "config" && stepStatus && shouldAutoOpenExecutionTab(stepStatus) && prev !== stepStatus) {
-      setActiveTab("execution");
+      setActiveTab("overview");
     }
   }, [nodeId, stepStatus, activeTab]);
 
@@ -1599,29 +1869,35 @@ export function PropertiesPanel({
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
         <TabsList className="bg-secondary/30 mx-2 mt-2 rounded-lg p-0.5 h-auto shrink-0">
-          <TabsTrigger value="config" className="text-[10px] px-2 py-1 gap-1 cursor-pointer">
-            <Settings className="h-3 w-3" /> Config
-          </TabsTrigger>
-          <TabsTrigger value="execution" className="text-[10px] px-2 py-1 gap-1 cursor-pointer relative">
-            <Activity className="h-3 w-3" /> Execution
+          <TabsTrigger value="overview" className="text-[10px] px-2 py-1 gap-1 cursor-pointer relative">
+            <BarChart3 className="h-3 w-3" /> Overview
             {showExecutionDot && (
               <span className={cn("absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full animate-pulse", executionDotClass)} />
             )}
           </TabsTrigger>
-          <TabsTrigger value="connections" className="text-[10px] px-2 py-1 gap-1 cursor-pointer">
-            <GitBranch className="h-3 w-3" /> Links
+          <TabsTrigger value="activity" className="text-[10px] px-2 py-1 gap-1 cursor-pointer">
+            <Activity className="h-3 w-3" /> Activity
+          </TabsTrigger>
+          <TabsTrigger value="config" className="text-[10px] px-2 py-1 gap-1 cursor-pointer">
+            <Settings className="h-3 w-3" /> Config
+          </TabsTrigger>
+          <TabsTrigger value="dependencies" className="text-[10px] px-2 py-1 gap-1 cursor-pointer">
+            <GitBranch className="h-3 w-3" /> Dependencies
           </TabsTrigger>
         </TabsList>
 
         <ScrollArea className="flex-1 min-h-0">
+          <TabsContent value="overview" className="mt-0">
+            <OverviewTab data={d} />
+          </TabsContent>
+          <TabsContent value="activity" className="mt-0">
+            <ActivityTab data={d} />
+          </TabsContent>
           <TabsContent value="config" className="mt-0">
             <ConfigTab node={selectedNode} data={d} agents={agents} edges={edges} onNodeDataChange={onNodeDataChange} />
           </TabsContent>
-          <TabsContent value="execution" className="mt-0">
-            <ExecutionTab data={d} />
-          </TabsContent>
-          <TabsContent value="connections" className="mt-0">
-            <ConnectionsTab node={selectedNode} edges={edges} nodes={nodes} onSelectNode={onSelectNode} />
+          <TabsContent value="dependencies" className="mt-0">
+            <DependenciesTab node={selectedNode} edges={edges} nodes={nodes} onSelectNode={onSelectNode} />
           </TabsContent>
         </ScrollArea>
       </Tabs>
