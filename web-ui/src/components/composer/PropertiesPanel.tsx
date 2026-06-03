@@ -76,6 +76,7 @@ import {
   groupToolCalls,
   toolCallPreview,
   dominantStatus,
+  formatToolDuration,
   type ToolCallGroup,
 } from "@/lib/tool-utils";
 
@@ -956,7 +957,7 @@ function PlanChecklist({ planProgress }: { planProgress: { items: { text: string
 }
 
 /* ── Tool call timeline ── */
-function ToolCallTimeline({ toolCalls }: { toolCalls: { tool?: string | null; status?: string | null; inputPreview?: string | null; preview?: string | null }[] }) {
+function ToolCallTimeline({ toolCalls }: { toolCalls: any[] }) {
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
   const [expandedCall, setExpandedCall] = useState<number | null>(null);
 
@@ -1019,15 +1020,27 @@ function ToolCallTimeline({ toolCalls }: { toolCalls: { tool?: string | null; st
                             className="flex items-center gap-2 w-full px-3 py-1 text-left cursor-pointer hover:bg-accent/30 transition-colors"
                           >
                             <StatusDot status={tc.status ?? "unknown"} />
-                            <span className="text-[9px] font-mono text-muted-foreground truncate flex-1">
+                            <span className="text-[9px] font-mono text-muted-foreground/60 tabular-nums shrink-0">
                               #{ci + 1}
                             </span>
-                            <span className="text-[9px] text-muted-foreground/60 truncate max-w-[120px]">
-                              {toolCallPreview(tc.tool, tc.inputPreview)}
+                            {tc.durationMs != null && (
+                              <span className="text-[9px] font-mono text-muted-foreground/60 tabular-nums shrink-0">
+                                {formatToolDuration(tc.durationMs as number)}
+                              </span>
+                            )}
+                            <span className="text-[9px] text-muted-foreground truncate flex-1">
+                              {toolCallPreview(tc.tool, tc.inputPreview, {
+                                query: tc.query as string | undefined,
+                                path: tc.path as string | undefined,
+                                paths: tc.paths as string[] | undefined,
+                              })}
                             </span>
+                            {(tc.inputPreview || tc.preview || tc.outputPreview || tc.durationMs != null) && (
+                              <ChevronRight className={cn("h-2.5 w-2.5 text-muted-foreground/40 shrink-0 transition-transform", isCallExpanded && "rotate-90")} />
+                            )}
                           </button>
                           <AnimatePresence>
-                            {isCallExpanded && (tc.inputPreview || tc.preview) && (
+                            {isCallExpanded && (tc.inputPreview || tc.preview || tc.outputPreview || tc.error) && (
                               <motion.div
                                 initial={{ height: 0, opacity: 0 }}
                                 animate={{ height: "auto", opacity: 1 }}
@@ -1036,6 +1049,17 @@ function ToolCallTimeline({ toolCalls }: { toolCalls: { tool?: string | null; st
                                 className="overflow-hidden"
                               >
                                 <div className="px-3 pb-1.5 space-y-1">
+                                  {tc.durationMs != null && (
+                                    <div className="text-[9px] font-mono text-muted-foreground/60">
+                                      Duration: {formatToolDuration(tc.durationMs as number)}
+                                    </div>
+                                  )}
+                                  {tc.outputPreview && (
+                                    <div className="rounded border bg-emerald-500/5 border-emerald-500/20 p-1.5">
+                                      <div className="text-[8px] uppercase tracking-wider text-muted-foreground/50 mb-0.5">Output</div>
+                                      <pre className="text-[9px] font-mono text-muted-foreground whitespace-pre-wrap break-words max-h-16 overflow-auto">{tc.outputPreview}</pre>
+                                    </div>
+                                  )}
                                   {tc.inputPreview && (
                                     <div className="rounded border bg-muted/20 p-1.5">
                                       <div className="text-[8px] uppercase tracking-wider text-muted-foreground/50 mb-0.5">Input</div>
@@ -1044,8 +1068,14 @@ function ToolCallTimeline({ toolCalls }: { toolCalls: { tool?: string | null; st
                                   )}
                                   {tc.preview && (
                                     <div className="rounded border bg-muted/20 p-1.5">
-                                      <div className="text-[8px] uppercase tracking-wider text-muted-foreground/50 mb-0.5">Output</div>
+                                      <div className="text-[8px] uppercase tracking-wider text-muted-foreground/50 mb-0.5">Preview</div>
                                       <pre className="text-[9px] font-mono text-muted-foreground whitespace-pre-wrap break-words max-h-16 overflow-auto">{tc.preview}</pre>
+                                    </div>
+                                  )}
+                                  {tc.error && (
+                                    <div className="rounded border border-red-500/20 bg-red-500/5 p-1.5">
+                                      <div className="text-[8px] uppercase tracking-wider text-red-400/80 mb-0.5">Error</div>
+                                      <pre className="text-[9px] font-mono text-red-300 whitespace-pre-wrap break-words max-h-16 overflow-auto">{tc.error}</pre>
                                     </div>
                                   )}
                                 </div>
@@ -1375,8 +1405,21 @@ function ToolMixRow({ group }: { group: ToolCallGroup }) {
     <div className="flex items-center gap-2 rounded-md border border-border/30 bg-background/40 px-2 py-1.5">
       <Icon className={cn("h-3 w-3 shrink-0", meta.color)} />
       <span className="text-[10px] font-medium flex-1 truncate">{meta.label}</span>
+      {group.avgDurationMs > 0 && (
+        <span className="text-[9px] font-mono text-muted-foreground/60 tabular-nums">
+          {formatToolDuration(group.avgDurationMs)}
+        </span>
+      )}
       {group.count > 1 && (
         <span className="text-[9px] font-mono text-muted-foreground/60 tabular-nums">x{group.count}</span>
+      )}
+      {(group.paths.length > 0 || group.errors.length > 0) && (
+        <span className={cn(
+          "text-[9px] font-medium",
+          group.errors.length > 0 ? "text-red-400" : "text-emerald-400",
+        )}>
+          {group.errors.length > 0 ? `${group.errors.length} err` : `${group.paths.length} file${group.paths.length !== 1 ? "s" : ""}`}
+        </span>
       )}
       <span className={cn("text-[9px] font-medium", statusColors[status] ?? "text-muted-foreground")}>
         {status}

@@ -897,7 +897,11 @@ def summarize_step_artifacts(artifacts: Any, *, limit: int = 8) -> list[dict[str
             value = artifact.get(field)
             if value not in (None, "", [], {}):
                 summary[field] = value
-        if not summary:
+        # Preserve preview if available
+        preview_val = artifact.get("preview") or artifact.get("content") or artifact.get("output")
+        if preview_val not in (None, "", [], {}):
+            summary["preview"] = summarize_preview_text(str(preview_val), limit=200)
+        elif not summary:
             preview = summarize_preview_text(json.dumps(artifact, sort_keys=True, default=str), limit=200)
             if preview:
                 summary["preview"] = preview
@@ -923,6 +927,47 @@ def summarize_step_tool_calls(tool_calls: Any, *, limit: int = 8) -> list[dict[s
             summary["status"] = status_name
         if input_preview:
             summary["inputPreview"] = input_preview
+
+        # Preserve duration
+        duration = tool_call.get("duration_ms") or tool_call.get("duration")
+        if duration is not None:
+            try:
+                summary["durationMs"] = int(float(str(duration)))
+            except (ValueError, TypeError):
+                pass
+
+        # Preserve output/result preview
+        output_val = tool_call.get("output") or tool_call.get("result") or tool_call.get("response")
+        if output_val not in (None, "", [], {}):
+            summary["outputPreview"] = summarize_preview_text(str(output_val), limit=200)
+
+        # Preserve file paths for file operations
+        for path_field in ("path", "paths", "files"):
+            path_val = tool_call.get(path_field)
+            if path_val not in (None, "", [], {}):
+                if isinstance(path_val, list):
+                    cleaned = [p for p in path_val if isinstance(p, str) and p.strip()]
+                    if cleaned:
+                        summary["paths"] = cleaned[:5]
+                elif isinstance(path_val, str) and path_val.strip():
+                    summary["path"] = path_val.strip()
+                break
+
+        # Preserve error
+        error_val = tool_call.get("error") or tool_call.get("error_message") or ""
+        if error_val and isinstance(error_val, str) and error_val.strip():
+            summary["error"] = error_val.strip()[:500]
+
+        # Derive query field from search tool inputs
+        if not input_preview and not summary.get("query"):
+            raw_input = tool_call.get("input") or tool_call.get("args") or {}
+            if isinstance(raw_input, dict):
+                for qkey in ("query", "pattern", "search", "text"):
+                    qval = raw_input.get(qkey)
+                    if qval and isinstance(qval, str) and qval.strip():
+                        summary["query"] = qval.strip()[:200]
+                        break
+
         if not summary:
             preview = summarize_preview_text(json.dumps(tool_call, sort_keys=True, default=str), limit=200)
             if preview:

@@ -925,6 +925,8 @@ export interface WorkflowStepArtifactSummary {
   status?: string | null;
   type?: string | null;
   preview?: string | null;
+  /** Preview of artifact content (from backend output/content field) */
+  content?: string | null;
 }
 
 export interface WorkflowStepToolCallSummary {
@@ -932,6 +934,18 @@ export interface WorkflowStepToolCallSummary {
   status?: string | null;
   inputPreview?: string | null;
   preview?: string | null;
+  /** Duration in milliseconds */
+  durationMs?: number | null;
+  /** Preview of tool output/result */
+  outputPreview?: string | null;
+  /** Single file path (for file operations) */
+  path?: string | null;
+  /** Multiple file paths (for batch operations) */
+  paths?: string[] | null;
+  /** Error message if tool call failed */
+  error?: string | null;
+  /** Extracted search query (for search tools) */
+  query?: string | null;
 }
 
 export interface WorkflowStepState {
