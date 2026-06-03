@@ -180,12 +180,13 @@ function activitySummary(event: string, details: Record<string, unknown>): strin
 
 function activityPills(activity: AgentActivity): string[] {
   const pills: string[] = [];
+  if (activity.tool) pills.push(`tool: ${activity.tool}`);
+  if (activity.durationMs != null) {
+    pills.push(activity.durationMs < 1000 ? `${activity.durationMs}ms` : `${(activity.durationMs / 1000).toFixed(1)}s`);
+  }
   const d = activity.details;
-  if (d.tool || d.tool_name) pills.push(`tool: ${(d.tool || d.tool_name) as string}`);
   if (d.path || d.name) pills.push(`file: ${(d.path || d.name) as string}`);
-  if (d.latencyMs != null) pills.push(`${(d.latencyMs as number) < 1000 ? `${d.latencyMs}ms` : `${((d.latencyMs as number) / 1000).toFixed(1)}s`}`);
   if (d.status) pills.push(d.status as string);
-  if (d.agentRef || d.agent) pills.push(`agent: ${(d.agentRef || d.agent) as string}`);
   return pills.slice(0, 3);
 }
 
@@ -432,7 +433,7 @@ export function LiveActivityStream({
             const isExpanded = expandedIds.has(activity.id);
             const hasDetails = Object.keys(activity.details).length > 0;
             const pills = activityPills(activity);
-            const summary = activitySummary(activity.event, activity.details);
+            const summary = activity.summary || activitySummary(activity.event, activity.details);
 
             return (
               <div
@@ -448,7 +449,7 @@ export function LiveActivityStream({
                     <Icon className={cn("h-3.5 w-3.5 shrink-0", cfg.color)} />
                     <div className={cn(
                       "h-full w-px min-h-[8px]",
-                      cfg.severity >= 2 ? "bg-red-500/30" : cfg.severity >= 1 ? "bg-amber-500/20" : "bg-border/30",
+                      activity.severity === "error" ? "bg-red-500/30" : activity.severity === "warning" ? "bg-amber-500/20" : "bg-border/30",
                     )} />
                   </div>
                   <div className="flex-1 min-w-0">

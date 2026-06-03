@@ -1363,11 +1363,15 @@ export interface AgentActivity {
   id: string;
   timestamp: string;
   type: AgentActivityType;
+  severity?: string;
   event: string;
   agentRef: string;
   step: string;
   runId: string;
   message: string;
+  summary?: string;
+  tool?: string | null;
+  durationMs?: number | null;
   details: Record<string, unknown>;
   source: string;
 }

@@ -815,22 +815,44 @@ def _parse_journal_line(line: str) -> dict[str, Any] | None:
 
         # Map journal event types to UI activity types
         activity_type = "system"
-        if ("step" in event_type and "started" in event_type) or ("step" in event_type and ("completed" in event_type or "failed" in event_type)):
+        severity = "info"
+        event_lower = event_type.lower()
+        if ("step" in event_lower and "started" in event_lower) or ("step" in event_lower and ("completed" in event_lower or "failed" in event_lower)):
             activity_type = "operation"
-        elif "loop" in event_type:
+        elif "loop" in event_lower:
             activity_type = "reasoning"
-        elif "verify" in event_type:
+        elif "verify" in event_lower:
             activity_type = "operation"
-        elif "approval" in event_type:
+        elif "approval" in event_lower:
             activity_type = "system"
-        elif "invoke" in event_type or "runtime" in event_type:
+        elif "invoke" in event_lower or "runtime" in event_lower:
             activity_type = "operation"
-        elif "a2a" in event_type:
+        elif "a2a" in event_lower:
             activity_type = "a2a"
-        elif "plan" in event_type:
+        elif "plan" in event_lower:
             activity_type = "reasoning"
-        elif "handoff" in event_type:
+        elif "handoff" in event_lower:
             activity_type = "a2a"
+        elif "artifact" in event_lower:
+            activity_type = "file"
+        elif "tool" in event_lower:
+            activity_type = "operation"
+        elif "decision" in event_lower or "branch" in event_lower:
+            activity_type = "reasoning"
+        elif "error" in event_lower:
+            activity_type = "error"
+
+        # Determine severity from event type or payload
+        if "failed" in event_lower or "error" in event_lower:
+            severity = "error"
+        elif "warning" in event_lower:
+            severity = "warning"
+        elif "completed" in event_lower or "success" in event_lower:
+            severity = "success"
+        elif "started" in event_lower or "pending" in event_lower:
+            severity = "info"
+        elif "approval" in event_lower:
+            severity = "warning"
 
         payload = record.get("payload")
         if not isinstance(payload, dict):
@@ -840,15 +862,35 @@ def _parse_journal_line(line: str) -> dict[str, Any] | None:
                 if key not in {"timestamp", "event", "kind", "resource", "payload"}
             }
 
+        # Extract tool information from payload
+        tool_name = str(payload.get("tool_name") or payload.get("tool") or "").strip()
+        duration = payload.get("duration_ms") or payload.get("durationMs") or payload.get("latencyMs")
+
+        # Build summary (short message suitable for compact display)
+        step = payload.get("step") or payload.get("stepName") or ""
+        if "artifact" in event_lower and step:
+            path = payload.get("path") or payload.get("name") or ""
+            summary_msg = f"Artifact: {path}" if path else f"Artifact: {step}"
+        elif tool_name and "tool" in event_lower:
+            summary_msg = f"Tool: {tool_name}"
+        elif "decision" in event_lower:
+            summary_msg = f"Decision: {step}"
+        else:
+            summary_msg = ""
+
         return {
             "id": hashlib.sha256(line.encode()).hexdigest()[:16],
             "timestamp": record.get("timestamp") or datetime.now(UTC).isoformat(),
             "type": activity_type,
+            "severity": severity,
             "event": event_type,
             "agentRef": payload.get("agentRef") or payload.get("agent") or record.get("agentRef") or "",
-            "step": payload.get("step") or payload.get("stepName") or "",
+            "step": step,
             "runId": payload.get("runId") or record.get("runId") or "",
             "message": _activity_message(event_type, payload),
+            "summary": summary_msg,
+            "tool": tool_name if tool_name else None,
+            "durationMs": duration,
             "details": payload,
             "source": "journal",
         }
@@ -903,6 +945,7 @@ def _status_step_state_activities(status: dict[str, Any], run_id: str) -> list[d
             "status": status_name,
             "latencyMs": state.get("latencyMs"),
             "toolCallCount": state.get("toolCallCount"),
+            "artifactCount": state.get("artifactCount"),
             "warnings": state.get("warnings") or [],
             "error": state.get("error"),
             "responsePreview": state.get("responsePreview"),
@@ -930,9 +973,29 @@ def _activity_message(event_type: str, payload: dict[str, Any]) -> str:
     if event_type == "workflow.step.started":
         return f"Step '{step}' started"
     if event_type == "workflow.step.completed":
-        return f"Step '{step}' completed"
+        tc = payload.get("toolCallCount")
+        ac = payload.get("artifactCount")
+        parts = []
+        if tc is not None:
+            parts.append(f"{tc} tool calls")
+        if ac is not None:
+            parts.append(f"{ac} artifacts")
+        suffix = f" ({', '.join(parts)})" if parts else ""
+        return f"Step '{step}' completed{suffix}"
     if event_type == "workflow.step.failed":
-        return f"Step '{step}' failed: {payload.get('error', '')}"
+        err = (payload.get("error") or "")[:120]
+        return f"Step '{step}' failed: {err}" if err else f"Step '{step}' failed"
+    if event_type == "workflow.step.updated":
+        status = payload.get("status", "")
+        tc = payload.get("toolCallCount")
+        ac = payload.get("artifactCount")
+        parts = []
+        if tc is not None:
+            parts.append(f"{tc} tools")
+        if ac is not None:
+            parts.append(f"{ac} files")
+        suffix = f" ({', '.join(parts)})" if parts else ""
+        return f"Step '{step}' {status}{suffix}"
     if event_type == "workflow.loop.iteration.completed":
         completed = payload.get("completedItems", 0)
         return f"Loop iteration completed ({completed} items done)"
@@ -941,9 +1004,24 @@ def _activity_message(event_type: str, payload: dict[str, Any]) -> str:
     if event_type == "workflow.step.verify.started":
         return f"Verifying step '{step}'"
     if event_type == "workflow.step.verify.completed":
-        return f"Verification for '{step}': {payload.get('result', 'done')}"
+        result = payload.get("result", "done")
+        passed = payload.get("passed")
+        if passed is not None:
+            return f"Verification for '{step}': {'PASSED' if passed else 'FAILED'}"
+        return f"Verification for '{step}': {result}"
     if "approval" in event_type:
-        return f"Approval event: {event_type}"
+        return f"Approval: {payload.get('status', event_type)} for '{step}'"
+    if "artifact" in event_type:
+        path = payload.get("path") or payload.get("name") or ""
+        return f"Artifact: {path}" if path else f"Artifact in '{step}'"
+    if "tool" in event_type:
+        tool = payload.get("tool_name") or payload.get("tool") or ""
+        return f"Tool: {tool}" if tool else f"Tool call in '{step}'"
+    if "handoff" in event_type:
+        target = payload.get("target_agent") or payload.get("target") or ""
+        return f"Handoff to {target}" if target else f"Agent handoff in '{step}'"
+    if "decision" in event_type or "branch" in event_type:
+        return f"Decision in '{step}'"
     return event_type.replace(".", " ").replace("_", " ").title()
 
 
