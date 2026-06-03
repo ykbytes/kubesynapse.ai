@@ -111,6 +111,7 @@ function ComposerCanvas({
   const [paletteCollapsed, setPaletteCollapsed] = useState(false);
   const [propertiesCollapsed, setPropertiesCollapsed] = useState(false);
   const [runHistoryCollapsed, setRunHistoryCollapsed] = useState(true);
+  const [runHistoryExpanded, setRunHistoryExpanded] = useState(false);
   const [filesCollapsed, setFilesCollapsed] = useState(true);
   const [livePanelCollapsed, setLivePanelCollapsed] = useState(true);
   const [layoutDirection, setLayoutDirection] = useState<LayoutDirection>(() => getCurrentDirection());
@@ -764,20 +765,31 @@ function ComposerCanvas({
         )}
       </div>
 
+      {/* Bottom panels — Files above Runs */}
       {!isNew && (
-        <RunHistoryPanel
-          workflowName={wfName}
-          collapsed={runHistoryCollapsed}
-          onToggle={() => setRunHistoryCollapsed((p) => !p)}
-        />
-      )}
+        <div className="border-t border-border/40 bg-background/60 shrink-0 max-h-[45vh] overflow-hidden flex flex-col">
+          {/* Workspace File Browser */}
+          {selectedNode?.data && "agentRef" in (selectedNode.data as object) && (
+            <div className={cn("shrink-0", filesCollapsed ? "" : "flex-1 min-h-0 overflow-hidden border-b border-border/20")}>
+              <WorkspaceFileBrowser
+                agentName={String((selectedNode.data as Record<string, unknown>).agentRef ?? "")}
+                collapsed={filesCollapsed}
+                onToggle={() => setFilesCollapsed((p) => !p)}
+              />
+            </div>
+          )}
 
-      {!isNew && selectedNode?.data && "agentRef" in (selectedNode.data as object) && (
-        <WorkspaceFileBrowser
-          agentName={String((selectedNode.data as Record<string, unknown>).agentRef ?? "")}
-          collapsed={filesCollapsed}
-          onToggle={() => setFilesCollapsed((p) => !p)}
-        />
+          {/* Run History */}
+          <div className={cn("shrink-0", runHistoryCollapsed ? "" : "flex-1 min-h-0 overflow-hidden")}>
+            <RunHistoryPanel
+              workflowName={wfName}
+              collapsed={runHistoryCollapsed}
+              onToggle={() => setRunHistoryCollapsed((p) => !p)}
+              expanded={runHistoryExpanded}
+              onExpandedChange={setRunHistoryExpanded}
+            />
+          </div>
+        </div>
       )}
     </div>
   );

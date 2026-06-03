@@ -112,43 +112,43 @@ function getStepStatusBadge(status?: string | null): { label: string; className:
     case "completed":
       return {
         label: "Completed",
-        className: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
+        className: "text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
         icon: <CheckCircle2 className="h-2.5 w-2.5" />,
       };
     case "running":
       return {
         label: "Running",
-        className: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+        className: "text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/20",
         icon: <LoaderCircle className="h-2.5 w-2.5 animate-spin" />,
       };
     case "failed":
       return {
         label: "Failed",
-        className: "text-red-400 bg-red-500/10 border-red-500/20",
+        className: "text-red-600 dark:text-red-400 bg-red-500/10 border-red-500/20",
         icon: <XCircle className="h-2.5 w-2.5" />,
       };
     case "denied":
       return {
         label: "Denied",
-        className: "text-red-400 bg-red-500/10 border-red-500/20",
+        className: "text-red-600 dark:text-red-400 bg-red-500/10 border-red-500/20",
         icon: <AlertTriangle className="h-2.5 w-2.5" />,
       };
     case "waiting_approval":
       return {
         label: "Waiting Approval",
-        className: "text-orange-400 bg-orange-500/10 border-orange-500/20",
+        className: "text-orange-600 dark:text-orange-400 bg-orange-500/10 border-orange-500/20",
         icon: <UserCheck className="h-2.5 w-2.5" />,
       };
     case "continued":
       return {
         label: "Continued",
-        className: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+        className: "text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/20",
         icon: <AlertTriangle className="h-2.5 w-2.5" />,
       };
     case "cancelled":
       return {
         label: "Cancelled",
-        className: "text-orange-400 bg-orange-500/10 border-orange-500/20",
+        className: "text-orange-600 dark:text-orange-400 bg-orange-500/10 border-orange-500/20",
         icon: <XCircle className="h-2.5 w-2.5" />,
       };
     case "skipped":
@@ -229,7 +229,7 @@ function ConfigTab({
         const expr = match.replace(/^\{\{\s*/, "").replace(/\s*\}\}$/, "");
         const isInvalid = invalidResults.some((r) => r.expression === expr);
         const cls = isInvalid
-          ? "bg-red-500/20 text-red-400 rounded px-0.5"
+          ? "bg-red-500/20 text-red-600 dark:text-red-400 rounded px-0.5"
           : "bg-primary/15 text-primary rounded px-0.5";
         return `<span class="${cls}">${match}</span>`;
       },
@@ -394,7 +394,7 @@ function ConfigTab({
         {invalidResults.length > 0 && (
           <div className="space-y-0.5">
             {invalidResults.map((r, i) => (
-              <div key={i} className="flex items-start gap-1 text-[9px] text-amber-400">
+              <div key={i} className="flex items-start gap-1 text-[9px] text-amber-600 dark:text-amber-400">
                 <AlertTriangle className="h-3 w-3 shrink-0 mt-px" />
                 <span>
                   <code className="font-mono bg-amber-500/10 rounded px-0.5">{`{{${r.expression}}}`}</code>{" "}
@@ -733,43 +733,43 @@ function useElapsedTimer(startedAt?: string | null, isRunning?: boolean): string
 function StatusIndicator({ status }: { status: string }) {
   const config: Record<string, { icon: React.ReactNode; ring: string; bg: string; label: string }> = {
     running: {
-      icon: <LoaderCircle className="h-5 w-5 text-amber-400 animate-spin" />,
+      icon: <LoaderCircle className="h-5 w-5 text-amber-600 dark:text-amber-400 animate-spin" />,
       ring: "ring-amber-500/30",
       bg: "bg-amber-500/10",
       label: "Running",
     },
     completed: {
-      icon: <CheckCircle2 className="h-5 w-5 text-emerald-400" style={{ animation: "task-check-pop 0.4s ease-out both" }} />,
+      icon: <CheckCircle2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" style={{ animation: "task-check-pop 0.4s ease-out both" }} />,
       ring: "ring-emerald-500/30",
       bg: "bg-emerald-500/10",
       label: "Completed",
     },
     failed: {
-      icon: <XCircle className="h-5 w-5 text-red-400" />,
+      icon: <XCircle className="h-5 w-5 text-red-600 dark:text-red-400" />,
       ring: "ring-red-500/30",
       bg: "bg-red-500/10",
       label: "Failed",
     },
     denied: {
-      icon: <AlertTriangle className="h-5 w-5 text-red-400" />,
+      icon: <AlertTriangle className="h-5 w-5 text-red-600 dark:text-red-400" />,
       ring: "ring-red-500/30",
       bg: "bg-red-500/10",
       label: "Denied",
     },
     waiting_approval: {
-      icon: <UserCheck className="h-5 w-5 text-orange-400" />,
+      icon: <UserCheck className="h-5 w-5 text-orange-600 dark:text-orange-400" />,
       ring: "ring-orange-500/30",
       bg: "bg-orange-500/10",
       label: "Waiting Approval",
     },
     continued: {
-      icon: <AlertTriangle className="h-5 w-5 text-amber-400" />,
+      icon: <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400" />,
       ring: "ring-amber-500/30",
       bg: "bg-amber-500/10",
       label: "Continued",
     },
     cancelled: {
-      icon: <XCircle className="h-5 w-5 text-orange-400" />,
+      icon: <XCircle className="h-5 w-5 text-orange-600 dark:text-orange-400" />,
       ring: "ring-orange-500/30",
       bg: "bg-orange-500/10",
       label: "Cancelled",
@@ -875,9 +875,9 @@ function TimingBar({ state, elapsed }: { state: { status: string; startedAt?: st
         </div>
         <div className="flex items-center gap-1.5">
           {state.attempts != null && state.attempts > 1 && (
-            <span className="text-[9px] text-amber-400 font-medium">attempt {state.attempts}</span>
+            <span className="text-[9px] text-amber-600 dark:text-amber-400 font-medium">attempt {state.attempts}</span>
           )}
-          <span className={cn("font-mono font-semibold tabular-nums", isRunning ? "text-amber-400" : isDone ? "text-emerald-400" : isFailed ? "text-red-400" : isTerminal ? "text-orange-400" : "text-muted-foreground")}>
+          <span className={cn("font-mono font-semibold tabular-nums", isRunning ? "text-amber-600 dark:text-amber-400" : isDone ? "text-emerald-600 dark:text-emerald-400" : isFailed ? "text-red-600 dark:text-red-400" : isTerminal ? "text-orange-600 dark:text-orange-400" : "text-muted-foreground")}>
             {state.latencyMs != null && !isRunning
               ? state.latencyMs < 1000 ? `${state.latencyMs}ms` : `${(state.latencyMs / 1000).toFixed(1)}s`
               : elapsed}
@@ -887,7 +887,7 @@ function TimingBar({ state, elapsed }: { state: { status: string; startedAt?: st
 
       {/* Approval wait segment */}
       {state.approvalWaitMs != null && (
-        <div className="flex items-center gap-1 text-[9px] text-orange-400">
+        <div className="flex items-center gap-1 text-[9px] text-orange-600 dark:text-orange-400">
           <UserCheck className="h-2.5 w-2.5 shrink-0" />
           <span>Approval wait: <span className="font-mono">{(state.approvalWaitMs / 1000).toFixed(1)}s</span></span>
         </div>
@@ -934,11 +934,11 @@ function PlanChecklist({ planProgress }: { planProgress: { items: { text: string
             >
               {item.done ? (
                 <CheckCircle2
-                  className="h-3 w-3 shrink-0 mt-px text-emerald-400"
+                  className="h-3 w-3 shrink-0 mt-px text-emerald-600 dark:text-emerald-400"
                   style={{ animation: "task-check-pop 0.3s ease-out both" }}
                 />
               ) : isActive ? (
-                <LoaderCircle className="h-3 w-3 shrink-0 mt-px text-sky-400 animate-spin" />
+                <LoaderCircle className="h-3 w-3 shrink-0 mt-px text-sky-600 dark:text-sky-400 animate-spin" />
               ) : (
                 <Circle className="h-3 w-3 shrink-0 mt-px text-muted-foreground/30" />
               )}
@@ -1074,7 +1074,7 @@ function ToolCallTimeline({ toolCalls }: { toolCalls: any[] }) {
                                   )}
                                   {tc.error && (
                                     <div className="rounded border border-red-500/20 bg-red-500/5 p-1.5">
-                                      <div className="text-[8px] uppercase tracking-wider text-red-400/80 mb-0.5">Error</div>
+                                      <div className="text-[8px] uppercase tracking-wider text-red-600 dark:text-red-400/80 mb-0.5">Error</div>
                                       <pre className="text-[9px] font-mono text-red-300 whitespace-pre-wrap break-words max-h-16 overflow-auto">{tc.error}</pre>
                                     </div>
                                   )}
@@ -1113,9 +1113,9 @@ function ArtifactsList({ artifacts }: { artifacts: { path?: string | null; name?
 
   function typeIcon(type?: string | null, path?: string | null) {
     const ext = path?.split(".").pop()?.toLowerCase();
-    if (type === "code" || ext === "ts" || ext === "tsx" || ext === "py" || ext === "js") return <FileText className="h-3 w-3 text-sky-400" />;
-    if (type === "report" || ext === "md") return <FileText className="h-3 w-3 text-violet-400" />;
-    if (ext === "json" || ext === "yaml" || ext === "yml") return <FileText className="h-3 w-3 text-amber-400" />;
+    if (type === "code" || ext === "ts" || ext === "tsx" || ext === "py" || ext === "js") return <FileText className="h-3 w-3 text-sky-600 dark:text-sky-400" />;
+    if (type === "report" || ext === "md") return <FileText className="h-3 w-3 text-violet-600 dark:text-violet-400" />;
+    if (ext === "json" || ext === "yaml" || ext === "yml") return <FileText className="h-3 w-3 text-amber-600 dark:text-amber-400" />;
     return <Package className="h-3 w-3 text-muted-foreground" />;
   }
 
@@ -1145,7 +1145,7 @@ function ArtifactsList({ artifacts }: { artifacts: { path?: string | null; name?
                 {a.status && (
                   <span className={cn(
                     "text-[8px] uppercase tracking-wider font-semibold px-1 py-0.5 rounded",
-                    a.status === "created" ? "text-emerald-400 bg-emerald-500/10" : "text-muted-foreground bg-muted/50",
+                    a.status === "created" ? "text-emerald-600 dark:text-emerald-400 bg-emerald-500/10" : "text-muted-foreground bg-muted/50",
                   )}>
                     {a.status}
                   </span>
@@ -1211,23 +1211,23 @@ function OverviewTab({ data }: { data: AgentStepNodeData }) {
   const statusConfig: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
     completed: {
       label: "Completed",
-      color: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
-      icon: <CheckCircle2 className="h-4 w-4 text-emerald-400" />,
+      color: "text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
+      icon: <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />,
     },
     running: {
       label: "Running",
-      color: "text-amber-400 bg-amber-500/10 border-amber-500/20",
-      icon: <LoaderCircle className="h-4 w-4 text-amber-400 animate-spin" />,
+      color: "text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/20",
+      icon: <LoaderCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 animate-spin" />,
     },
     failed: {
       label: "Failed",
-      color: "text-red-400 bg-red-500/10 border-red-500/20",
-      icon: <XCircle className="h-4 w-4 text-red-400" />,
+      color: "text-red-600 dark:text-red-400 bg-red-500/10 border-red-500/20",
+      icon: <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />,
     },
     waiting_approval: {
       label: "Waiting Approval",
-      color: "text-orange-400 bg-orange-500/10 border-orange-500/20",
-      icon: <UserCheck className="h-4 w-4 text-orange-400" />,
+      color: "text-orange-600 dark:text-orange-400 bg-orange-500/10 border-orange-500/20",
+      icon: <UserCheck className="h-4 w-4 text-orange-600 dark:text-orange-400" />,
     },
     queued: {
       label: "Queued",
@@ -1349,7 +1349,7 @@ function OverviewTab({ data }: { data: AgentStepNodeData }) {
             : "border-red-500/20 bg-red-500/5",
         )}>
           <div className="flex items-center gap-1.5 text-[10px] font-medium">
-            <ShieldCheck className={cn("h-3 w-3", state.verificationResult.passed ? "text-emerald-400" : "text-red-400")} />
+            <ShieldCheck className={cn("h-3 w-3", state.verificationResult.passed ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400")} />
             <span>Verification: {state.verificationResult.passed ? "PASSED" : "FAILED"}</span>
           </div>
           {state.verificationResult.criteria && (
@@ -1366,7 +1366,7 @@ function OverviewTab({ data }: { data: AgentStepNodeData }) {
             : "border-amber-500/20 bg-amber-500/5",
         )}>
           <div className="flex items-center gap-1.5 text-[10px] font-medium">
-            <ShieldCheck className={cn("h-3 w-3", state.reviewResult.approved ? "text-emerald-400" : "text-amber-400")} />
+            <ShieldCheck className={cn("h-3 w-3", state.reviewResult.approved ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400")} />
             <span>Review: {state.reviewResult.verdict ?? (state.reviewResult.approved ? "APPROVED" : "REJECTED")}</span>
           </div>
         </div>
@@ -1377,9 +1377,9 @@ function OverviewTab({ data }: { data: AgentStepNodeData }) {
 
 function MetricChip({ icon: Icon, label, tone }: { icon: React.ComponentType<{ className?: string }>; label: string; tone?: "success" | "warning" | "error" }) {
   const toneStyles = {
-    success: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
-    warning: "text-amber-400 bg-amber-500/10 border-amber-500/20",
-    error: "text-red-400 bg-red-500/10 border-red-500/20",
+    success: "text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
+    warning: "text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/20",
+    error: "text-red-600 dark:text-red-400 bg-red-500/10 border-red-500/20",
   };
   const cls = tone ? toneStyles[tone] : "text-muted-foreground bg-muted/30 border-border/40";
   return (
@@ -1395,10 +1395,10 @@ function ToolMixRow({ group }: { group: ToolCallGroup }) {
   const Icon = meta.icon;
   const status = dominantStatus(group.statuses);
   const statusColors: Record<string, string> = {
-    completed: "text-emerald-400",
-    error: "text-red-400",
-    failed: "text-red-400",
-    running: "text-amber-400",
+    completed: "text-emerald-600 dark:text-emerald-400",
+    error: "text-red-600 dark:text-red-400",
+    failed: "text-red-600 dark:text-red-400",
+    running: "text-amber-600 dark:text-amber-400",
   };
 
   return (
@@ -1416,7 +1416,7 @@ function ToolMixRow({ group }: { group: ToolCallGroup }) {
       {(group.paths.length > 0 || group.errors.length > 0) && (
         <span className={cn(
           "text-[9px] font-medium",
-          group.errors.length > 0 ? "text-red-400" : "text-emerald-400",
+          group.errors.length > 0 ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400",
         )}>
           {group.errors.length > 0 ? `${group.errors.length} err` : `${group.paths.length} file${group.paths.length !== 1 ? "s" : ""}`}
         </span>
@@ -1484,7 +1484,7 @@ function ActivityTab({ data }: { data: AgentStepNodeData }) {
           animate={{ opacity: 1, y: 0 }}
           className="flex items-center gap-1.5 text-[9px]"
         >
-          <span className="rounded-full border border-red-500/20 bg-red-500/10 px-1.5 py-0.5 font-mono text-red-400">
+          <span className="rounded-full border border-red-500/20 bg-red-500/10 px-1.5 py-0.5 font-mono text-red-600 dark:text-red-400">
             {state.failureClass}
           </span>
         </motion.div>
@@ -1586,7 +1586,7 @@ function ActivityTab({ data }: { data: AgentStepNodeData }) {
                 {state.loopProgress!.checklistItems.map((ci, i) => (
                   <div key={i} className="flex items-center gap-1.5 text-[9px]">
                     {ci.done ? (
-                      <CheckCircle2 className="h-2.5 w-2.5 text-emerald-400 shrink-0" />
+                      <CheckCircle2 className="h-2.5 w-2.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                     ) : (
                       <Circle className="h-2.5 w-2.5 text-muted-foreground/30 shrink-0" />
                     )}
@@ -1596,7 +1596,7 @@ function ActivityTab({ data }: { data: AgentStepNodeData }) {
               </div>
             )}
             {state.loopProgress!.circuitBreakerState && (
-              <div className="text-[9px] text-amber-400 flex items-center gap-1 mt-1">
+              <div className="text-[9px] text-amber-600 dark:text-amber-400 flex items-center gap-1 mt-1">
                 <Zap className="h-2.5 w-2.5 shrink-0" />
                 Circuit breaker: {state.loopProgress!.circuitBreakerState.state} ({state.loopProgress!.circuitBreakerState.consecutiveNoProgress}/{state.loopProgress!.circuitBreakerState.threshold})
               </div>
@@ -1654,7 +1654,7 @@ function ActivityTab({ data }: { data: AgentStepNodeData }) {
         <ExecSection icon={AlertTriangle} label="Warnings" count={state.warnings!.length} defaultOpen tone="border-amber-500/30">
           <div className="space-y-0.5">
             {state.warnings!.map((w, i) => (
-              <div key={i} className="flex items-start gap-1 text-[9px] text-amber-400">
+              <div key={i} className="flex items-start gap-1 text-[9px] text-amber-600 dark:text-amber-400">
                 <AlertTriangle className="h-2.5 w-2.5 shrink-0 mt-px" />
                 <span className="break-words">{w}</span>
               </div>
@@ -1670,7 +1670,7 @@ function ActivityTab({ data }: { data: AgentStepNodeData }) {
             {state.iterationFailures!.map((f, i) => (
               <div key={i} className="text-[9px] border-b border-red-500/10 pb-1 last:border-0">
                 <span className="text-muted-foreground">#{f.iteration}</span>
-                {f.failureClass && <span className="ml-1 text-red-400">({f.failureClass})</span>}
+                {f.failureClass && <span className="ml-1 text-red-600 dark:text-red-400">({f.failureClass})</span>}
                 <span className="ml-1 text-red-300 break-words">{f.error}</span>
               </div>
             ))}

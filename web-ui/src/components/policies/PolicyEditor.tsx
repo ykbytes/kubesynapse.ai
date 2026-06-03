@@ -684,7 +684,7 @@ function PolicySidebar({
   }, [policies, searchQuery]);
 
   return (
-    <div className="w-56 shrink-0 border-r border-border/40 flex flex-col h-full bg-background">
+    <div className="w-64 shrink-0 border-r border-border/40 flex flex-col h-full bg-background">
       <div className="p-3 border-b border-border/40 space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
@@ -739,7 +739,7 @@ function PolicySidebar({
                       "h-2 w-2 shrink-0 rounded-full",
                       hasGuardrails ? "bg-emerald-500" : hasHitl ? "bg-amber-500" : "bg-muted-foreground/30",
                     )} />
-                    <span className="truncate text-xs font-medium text-foreground">{p.name}</span>
+                    <span className="break-words line-clamp-2 text-xs font-medium text-foreground">{p.name}</span>
                   </div>
                   <div className="flex items-center gap-2 mt-1 pl-4 text-[10px] text-muted-foreground">
                     {p.allowed_models.length > 0 && (
@@ -976,7 +976,7 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
   // ── Empty state: no policy selected ────────────────────────────────────
   if (!selectedPolicy && !isCreateMode) {
     return (
-      <div className="flex flex-1 h-full overflow-hidden rounded-lg border border-border/40 bg-background">
+    <div className="flex flex-1 min-w-0 h-full overflow-hidden rounded-lg border border-border/40 bg-background">
         <PolicySidebar
           policies={ws.policies}
           selectedName={selectedPolicyName}
@@ -1004,7 +1004,7 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
 
   // ── Main render ────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-1 h-full overflow-hidden rounded-lg border border-border/40 bg-background">
+    <div className="flex flex-1 min-w-0 h-full overflow-hidden rounded-lg border border-border/40 bg-background">
       <PolicySidebar
         policies={ws.policies}
         selectedName={selectedPolicyName}
@@ -1025,7 +1025,7 @@ export function PolicyEditor({ selectedPolicyName }: PolicyEditorProps) {
               <h2 className="text-sm font-semibold text-foreground">New Policy</h2>
             ) : (
               <div className="flex items-center gap-2">
-                <h2 className="text-sm font-semibold text-foreground truncate">{form.name}</h2>
+                <h2 className="text-sm font-semibold text-foreground break-words line-clamp-1">{form.name}</h2>
                 <Badge
                   variant="outline"
                   className={cn(

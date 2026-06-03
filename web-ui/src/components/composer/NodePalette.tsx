@@ -62,7 +62,7 @@ export function NodePalette({ agents, collapsed, onToggleCollapse, onAddAgent }:
     <div
       className={cn(
         "border-r bg-muted/20 flex flex-col overflow-hidden shrink-0 transition-[width] duration-200 ease-out",
-        collapsed ? "w-10" : "w-52",
+        collapsed ? "w-10" : "w-64",
       )}
     >
       {/* Collapsed strip */}
@@ -144,18 +144,18 @@ export function NodePalette({ agents, collapsed, onToggleCollapse, onAddAgent }:
                         key={a.name}
                         draggable
                         onDragStart={(e) => onDragStart(e, a.name)}
-                        className="flex items-center gap-1.5 rounded-lg border border-transparent bg-card/60 px-2 py-1.5 text-xs cursor-grab active:cursor-grabbing hover:bg-accent hover:border-border transition-colors group"
+                        className="flex items-start gap-2 rounded-lg border border-transparent bg-card/60 px-2.5 py-2 text-xs cursor-grab active:cursor-grabbing hover:bg-accent hover:border-border transition-colors group"
                         title={`Drag or click + to add "${a.name}" as a step`}
                         aria-label={`${a.name} — drag or click to add step`}
                       >
-                        <GripVertical className="h-3 w-3 text-muted-foreground/30 group-hover:text-muted-foreground/60 shrink-0" />
+                        <GripVertical className="mt-0.5 h-3 w-3 text-muted-foreground/30 group-hover:text-muted-foreground/60 shrink-0" />
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-start gap-1">
                             {statusDot(a.status)}
-                            <span className="truncate font-medium">{a.name}</span>
+                            <span className="break-words font-medium leading-tight line-clamp-2">{a.name}</span>
                           </div>
                           {a.model && (
-                            <div className="text-[9px] text-muted-foreground/60 font-mono truncate ml-3">
+                            <div className="ml-3 mt-0.5 break-words text-[9px] text-muted-foreground/60 font-mono leading-tight line-clamp-2">
                               {a.model}
                             </div>
                           )}
@@ -164,7 +164,7 @@ export function NodePalette({ agents, collapsed, onToggleCollapse, onAddAgent }:
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                            className="mt-0.5 h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
                             onClick={(e) => {
                               e.stopPropagation();
                               onAddAgent(a.name);

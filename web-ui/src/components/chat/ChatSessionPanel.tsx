@@ -90,7 +90,7 @@ const SessionItem = memo(function SessionItem({
             />
           ) : (
             <>
-              <div className="truncate text-xs font-medium text-foreground">{session.title}</div>
+              <div className="break-words line-clamp-2 text-xs font-medium text-foreground">{session.title}</div>
               <div className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground/75">
                 <Clock className="h-2.5 w-2.5" />
                 {formatRelativeTime(session.updated_at)}
@@ -167,7 +167,7 @@ export const ChatSessionPanel = memo(function ChatSessionPanel({
   }, [search, sessions]);
 
   return (
-    <div className="flex h-[20rem] w-full shrink-0 flex-col overflow-hidden rounded-none border border-border/70 bg-card/55 shadow-[0_18px_48px_-28px_rgba(15,23,42,0.45)] lg:h-full lg:w-[14rem] xl:w-[15.5rem]">
+    <div className="flex h-[20rem] w-full shrink-0 flex-col overflow-hidden rounded-none border border-border/70 bg-card/55 shadow-[0_18px_48px_-28px_rgba(15,23,42,0.45)] lg:h-full lg:w-60 xl:w-64">
       <div className="border-b border-border px-2 py-1.5">
         <div className="flex items-center justify-between gap-1.5">
           <span className="text-[10px] font-semibold uppercase tracking-wider text-foreground/75">Sessions</span>

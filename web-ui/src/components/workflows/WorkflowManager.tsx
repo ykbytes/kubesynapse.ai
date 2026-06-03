@@ -594,7 +594,7 @@ export function WorkflowManager({
           )}
 
           {/* Form + Sidebar */}
-          <div className="grid gap-6 xl:grid-cols-[1fr_20rem]">
+          <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
             <div className="rounded-2xl border border-border/70 bg-card/55 p-5">
               <WorkflowDefinitionForm
                 name={name}

@@ -240,7 +240,7 @@ export function WebhookManager() {
   const canSubmit = Boolean(formName.trim()) && Boolean(formSecretRef.trim());
 
   return (
-    <div className="grid h-full gap-4 lg:grid-cols-[18rem_1fr]">
+    <div className="grid h-full gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
       {/* Left column: list */}
       <div className="flex min-h-0 flex-col gap-3">
         <div className="flex items-center gap-2">

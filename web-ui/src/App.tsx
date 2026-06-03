@@ -421,7 +421,7 @@ function AppLayout() {
         <div
           className={`hidden shrink-0 overflow-hidden transition-[width] duration-200 ease-productive md:flex ${ws.sidebarCollapsed
             ? "md:w-12"
-            : "md:w-[clamp(10.5rem,14vw,13rem)] xl:w-[clamp(11rem,15vw,14rem)]"}`}
+            : "md:w-[clamp(13rem,18vw,16rem)] xl:w-[clamp(14rem,19vw,18rem)]"}`}
         >
           <SidebarShell>
             <AppSidebar

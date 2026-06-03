@@ -343,12 +343,12 @@ const SidebarItem = memo(function SidebarItem({
       onKeyDown={(e) => { if (e.key === "Enter") onSelect(item.id); }}
       tabIndex={0}
       style={{ animationDelay: `${index * 30}ms` }}
-      className={cn(
-        "group flex w-full cursor-pointer items-start gap-1.5 rounded-lg border px-1.5 py-1 text-left",
-        "transition-all duration-150 ease-productive hover:border-sidebar-border/65 hover:bg-sidebar-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-        "animate-slide-up opacity-0 [animation-fill-mode:forwards]",
-        isSelected ? "border-sidebar-border bg-sidebar-accent/82 shadow-sm" : "border-transparent",
-      )}
+        className={cn(
+          "group flex w-full cursor-pointer items-start gap-2 rounded-lg border px-2 py-1.5 text-left",
+          "transition-all duration-150 ease-productive hover:border-sidebar-border/65 hover:bg-sidebar-accent/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+          "animate-slide-up opacity-0 [animation-fill-mode:forwards]",
+          isSelected ? "border-sidebar-border bg-sidebar-accent/82 shadow-sm" : "border-transparent",
+        )}
     >
       {runtimeSignal ? (
         <span className={cn("mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border shadow-inner", runtimeSignal.tone)} aria-hidden="true">
@@ -360,16 +360,16 @@ const SidebarItem = memo(function SidebarItem({
       <span className="sr-only">Status: {item.status}</span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-1">
-          <p className="min-w-0 flex-1 truncate text-[11px] font-medium leading-tight text-sidebar-foreground">{item.title}</p>
+          <p className="min-w-0 flex-1 break-words text-[11px] font-medium leading-tight text-sidebar-foreground line-clamp-2">{item.title}</p>
           {runtimeSignal ? <span className={cn("inline-flex h-1.5 w-1.5 shrink-0 rounded-full", statusDotClasses(item.status))} aria-hidden="true" /> : null}
         </div>
-        <p className="truncate text-[10px] leading-tight text-muted-foreground">{item.subtitle}</p>
-        {secondaryMeta ? <p className="truncate text-[9px] font-medium uppercase tracking-[0.1em] text-muted-foreground/75">{secondaryMeta}</p> : null}
+        <p className="mt-0.5 break-words text-[10px] leading-tight text-muted-foreground line-clamp-2">{item.subtitle}</p>
+        {secondaryMeta ? <p className="mt-0.5 break-words text-[9px] font-medium uppercase tracking-[0.08em] text-muted-foreground/75 line-clamp-2">{secondaryMeta}</p> : null}
       </div>
       {hasActions && (
         <div
           className={cn(
-            "flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100",
+            "flex shrink-0 self-start items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100",
             isSelected && "opacity-100",
           )}
         >
