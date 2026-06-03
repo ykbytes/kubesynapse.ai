@@ -32,7 +32,7 @@ COPY --from=builder /root/.local/lib/python3.12/site-packages /usr/local/lib/pyt
 COPY --from=builder /root/.local/bin /usr/local/bin/
 
 COPY main.py hitl.py config.py tracing.py utils.py prompts.py models.py session.py skills.py opencode_client.py analysis.py invoke.py supervisor.py workspace.py sanitize_secrets.py runtime_events.py ./
-COPY providers.py config_generator.py ./
+COPY providers.py ./
 COPY memory/ ./memory/
 
 RUN adduser -D -u 1000 opencodeuser \
