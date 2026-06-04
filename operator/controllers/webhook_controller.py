@@ -692,7 +692,7 @@ def _start_nats_subscriber() -> None:
         if loop.is_running():
             asyncio.create_task(_listen())
         else:
-            loop.run_until_complete(_listen())
+            loop.create_task(_listen())
     except Exception:
         pass
 

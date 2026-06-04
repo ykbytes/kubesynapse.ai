@@ -242,7 +242,7 @@ export interface AgentInfo {
   runtime_kind?: RuntimeKind;
 }
 
-export type WorkspaceView = "agents" | "chat" | "workflows" | "catalog" | "composer" | "policies" | "intelligence" | "settings" | "admin" | "docs" | "webhooks";
+export type WorkspaceView = "agents" | "chat" | "workflows" | "catalog" | "composer" | "policies" | "intelligence" | "settings" | "admin" | "docs" | "webhooks" | "incidents";
 
 /* ── LLM Provider types ── */
 
@@ -1402,4 +1402,40 @@ export interface ActivityStreamState {
   isActive: boolean;
   phase: string;
   error: string | null;
+}
+
+/* ── Incident Management types ── */
+
+export interface IncidentInfo {
+  id: number;
+  namespace: string;
+  name: string;
+  title: string;
+  description: string;
+  severity: "critical" | "warning" | "info";
+  source: "alertmanager" | "manual" | "k8s-event" | "webhook";
+  status: "firing" | "acknowledged" | "diagnosing" | "remediated" | "resolved" | "closed" | "escalated";
+  labels: Record<string, string>;
+  annotations: Record<string, string>;
+  assigned_agent: string | null;
+  escalation_timeout_minutes: number;
+  escalated: boolean;
+  auto_acknowledge: boolean;
+  acknowledged_at: string | null;
+  resolved_at: string | null;
+  closed_at: string | null;
+  escalated_at: string | null;
+  alertmanager_fingerprint: string | null;
+  workflow_ref_name: string | null;
+  workflow_ref_namespace: string | null;
+  workflow_run_id: string | null;
+  timeline: Array<{ timestamp: string; event: string; message: string }>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IncidentTimelineEvent {
+  timestamp: string;
+  event: string;
+  message: string;
 }

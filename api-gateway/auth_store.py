@@ -1229,8 +1229,311 @@ class TriggerExecutionRow(Base):
         }
 
 
+# ---------------------------------------------------------------------------
+# Incident lifecycle
+# ---------------------------------------------------------------------------
+
+_INCIDENT_TRANSITIONS: dict[str, list[str]] = {
+    "firing": ["acknowledged", "resolved", "closed", "escalated"],
+    "acknowledged": ["diagnosing", "remediated", "resolved", "closed", "escalated"],
+    "diagnosing": ["remediated", "resolved", "closed", "escalated"],
+    "remediated": ["resolved", "closed", "escalated"],
+    "resolved": ["closed"],
+    "closed": [],
+    "escalated": ["acknowledged", "diagnosing", "remediated", "resolved", "closed"],
+}
+
+_INCIDENT_VALID_STATUSES = set(_INCIDENT_TRANSITIONS.keys())
+
+
+class IncidentRow(Base):
+    __tablename__ = "incidents"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    namespace = Column(String(128), nullable=False, default="default", index=True)
+    name = Column(String(128), nullable=False, index=True)
+    title = Column(String(512), nullable=False)
+    description = Column(String(4096), nullable=True, default="")
+    severity = Column(String(16), nullable=False, default="warning")
+    source = Column(String(32), nullable=False, default="manual")
+    status = Column(String(32), nullable=False, default="firing", index=True)
+    labels = Column(JSON, nullable=True, default=dict)
+    annotations = Column(JSON, nullable=True, default=dict)
+    assigned_agent = Column(String(128), nullable=True)
+    escalation_timeout_minutes = Column(Integer, nullable=False, default=15)
+    escalated = Column(Boolean, nullable=False, default=False)
+    auto_acknowledge = Column(Boolean, nullable=False, default=True)
+    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+    escalated_at = Column(DateTime(timezone=True), nullable=True)
+    alertmanager_fingerprint = Column(String(128), nullable=True, index=True)
+    workflow_ref_name = Column(String(128), nullable=True)
+    workflow_ref_namespace = Column(String(128), nullable=True)
+    workflow_run_id = Column(String(128), nullable=True)
+    timeline = Column(JSON, nullable=True, default=list)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+    __table_args__ = (
+        Index("ix_incidents_status_severity", "status", "severity"),
+        UniqueConstraint("namespace", "name", name="uq_incident_namespace_name"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "namespace": self.namespace,
+            "name": self.name,
+            "title": self.title,
+            "description": self.description or "",
+            "severity": self.severity,
+            "source": self.source,
+            "status": self.status,
+            "labels": self.labels or {},
+            "annotations": self.annotations or {},
+            "assigned_agent": self.assigned_agent,
+            "escalation_timeout_minutes": self.escalation_timeout_minutes,
+            "escalated": self.escalated,
+            "auto_acknowledge": self.auto_acknowledge,
+            "acknowledged_at": ensure_utc(self.acknowledged_at).isoformat() if self.acknowledged_at else None,
+            "resolved_at": ensure_utc(self.resolved_at).isoformat() if self.resolved_at else None,
+            "closed_at": ensure_utc(self.closed_at).isoformat() if self.closed_at else None,
+            "escalated_at": ensure_utc(self.escalated_at).isoformat() if self.escalated_at else None,
+            "alertmanager_fingerprint": self.alertmanager_fingerprint,
+            "workflow_ref_name": self.workflow_ref_name,
+            "workflow_ref_namespace": self.workflow_ref_namespace,
+            "workflow_run_id": self.workflow_run_id,
+            "timeline": self.timeline or [],
+            "created_at": ensure_utc(self.created_at).isoformat() if self.created_at else None,
+            "updated_at": ensure_utc(self.updated_at).isoformat() if self.updated_at else None,
+        }
+
+
+def _validate_incident_transition(current: str, target: str) -> str:
+    """Validate and return the target status, raising ValueError if invalid."""
+    normalized = target.strip().lower()
+    allowed = _INCIDENT_TRANSITIONS.get(current, [])
+    if normalized not in allowed:
+        raise ValueError(
+            f"Invalid incident status transition from '{current}' to '{normalized}'. "
+            f"Allowed transitions: {allowed}"
+        )
+    return normalized
+
+
+def create_incident(
+    namespace: str,
+    name: str,
+    title: str,
+    severity: str = "warning",
+    source: str = "manual",
+    description: str = "",
+    labels: dict[str, str] | None = None,
+    annotations: dict[str, str] | None = None,
+    assigned_agent: str | None = None,
+    escalation_timeout_minutes: int = 15,
+    auto_acknowledge: bool = True,
+    alertmanager_fingerprint: str | None = None,
+    workflow_ref_name: str | None = None,
+    workflow_ref_namespace: str | None = None,
+) -> dict[str, Any]:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    if not normalized_name:
+        raise ValueError("Incident name is required")
+    severity = str(severity or "warning").strip().lower()
+    if severity not in ("critical", "warning", "info"):
+        severity = "warning"
+
+    # Check for existing incident by (namespace, name)
+    with db_session() as session:
+        existing = (
+            session.query(IncidentRow)
+            .filter(
+                IncidentRow.namespace == normalized_ns,
+                IncidentRow.name == normalized_name,
+            )
+            .first()
+        )
+        if existing:
+            return existing.to_dict()
+
+        now = utc_now()
+        timeline_entry = {
+            "timestamp": now.isoformat(),
+            "event": "firing",
+            "message": f"Incident created via {source}",
+        }
+
+        row = IncidentRow(
+            namespace=normalized_ns,
+            name=normalized_name,
+            title=str(title or "").strip(),
+            description=str(description or "").strip(),
+            severity=severity,
+            source=str(source or "manual").strip().lower(),
+            status="firing",
+            labels=labels or {},
+            annotations=annotations or {},
+            assigned_agent=assigned_agent,
+            escalation_timeout_minutes=max(1, int(escalation_timeout_minutes)),
+            auto_acknowledge=bool(auto_acknowledge),
+            alertmanager_fingerprint=alertmanager_fingerprint,
+            workflow_ref_name=workflow_ref_name,
+            workflow_ref_namespace=workflow_ref_namespace,
+            timeline=[timeline_entry],
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(row)
+        session.flush()
+        return row.to_dict()
+
+
+def update_incident_status(
+    namespace: str,
+    name: str,
+    status: str,
+    message: str = "",
+    workflow_run_id: str | None = None,
+) -> dict[str, Any]:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    if not normalized_name:
+        raise ValueError("Incident name is required")
+
+    with db_session() as session:
+        row = (
+            session.query(IncidentRow)
+            .filter(
+                IncidentRow.namespace == normalized_ns,
+                IncidentRow.name == normalized_name,
+            )
+            .first()
+        )
+        if not row:
+            raise ValueError(f"Incident '{normalized_ns}/{normalized_name}' not found")
+
+        target = _validate_incident_transition(row.status, status)
+        now = utc_now()
+        timeline_event = {
+            "timestamp": now.isoformat(),
+            "event": target,
+            "message": str(message or f"Status changed to {target}"),
+        }
+
+        current_timeline = list(row.timeline or [])
+        current_timeline.append(timeline_event)
+
+        update_fields: dict[str, Any] = {
+            "status": target,
+            "updated_at": now,
+            "timeline": current_timeline,
+        }
+
+        if target == "acknowledged":
+            update_fields["acknowledged_at"] = now
+        elif target == "resolved":
+            update_fields["resolved_at"] = now
+        elif target == "closed":
+            update_fields["closed_at"] = now
+        elif target == "escalated":
+            update_fields["escalated"] = True
+            update_fields["escalated_at"] = now
+
+        if workflow_run_id:
+            update_fields["workflow_run_id"] = workflow_run_id
+
+        for key, value in update_fields.items():
+            setattr(row, key, value)
+
+        session.flush()
+        return row.to_dict()
+
+
+def list_incidents(
+    namespace: str | None = None,
+    status: str | None = None,
+    severity: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    with db_session() as session:
+        query = session.query(IncidentRow)
+        if namespace:
+            normalized_ns = str(namespace).strip() or "default"
+            query = query.filter(IncidentRow.namespace == normalized_ns)
+        if status:
+            query = query.filter(IncidentRow.status == str(status).strip().lower())
+        if severity:
+            query = query.filter(IncidentRow.severity == str(severity).strip().lower())
+        rows = (
+            query.order_by(IncidentRow.created_at.desc())
+            .limit(max(1, int(limit)))
+            .offset(max(0, int(offset)))
+            .all()
+        )
+        return [row.to_dict() for row in rows]
+
+
+def get_incident(namespace: str, name: str) -> dict[str, Any]:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    with db_session() as session:
+        row = (
+            session.query(IncidentRow)
+            .filter(
+                IncidentRow.namespace == normalized_ns,
+                IncidentRow.name == normalized_name,
+            )
+            .first()
+        )
+        if not row:
+            raise ValueError(f"Incident '{normalized_ns}/{normalized_name}' not found")
+        return row.to_dict()
+
+
+def get_incident_by_fingerprint(fingerprint: str) -> dict[str, Any] | None:
+    with db_session() as session:
+        row = (
+            session.query(IncidentRow)
+            .filter(IncidentRow.alertmanager_fingerprint == str(fingerprint).strip())
+            .order_by(IncidentRow.created_at.desc())
+            .first()
+        )
+        return row.to_dict() if row else None
+
+
+def add_incident_timeline_event(namespace: str, name: str, event: str, message: str) -> dict[str, Any]:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    with db_session() as session:
+        row = (
+            session.query(IncidentRow)
+            .filter(
+                IncidentRow.namespace == normalized_ns,
+                IncidentRow.name == normalized_name,
+            )
+            .first()
+        )
+        if not row:
+            raise ValueError(f"Incident '{normalized_ns}/{normalized_name}' not found")
+        now = utc_now()
+        current_timeline = list(row.timeline or [])
+        current_timeline.append({
+            "timestamp": now.isoformat(),
+            "event": event,
+            "message": message,
+        })
+        row.timeline = current_timeline
+        row.updated_at = now
+        session.flush()
+        return row.to_dict()
+
+
 # Schema version tracking for migration integrity checks
-_SCHEMA_VERSION = 1  # Increment when schema changes require migration
+_SCHEMA_VERSION = 2  # Increment when schema changes require migration
 
 
 class SchemaVersion(Base):
@@ -1373,6 +1676,14 @@ def _ensure_webhook_trigger_tables() -> None:
                 logger.info("Added webhook_name column to trigger_executions")
 
 
+def _ensure_incident_table() -> None:
+    with ENGINE.begin() as connection:
+        inspector = inspect(connection)
+        if "incidents" not in inspector.get_table_names():
+            Base.metadata.create_all(bind=ENGINE, tables=[IncidentRow.__table__])
+            logger.info("Created incidents table")
+
+
 def init_database() -> None:
     # Preferred: Alembic migrations (production-ready, versioned schema changes)
     try:
@@ -1386,6 +1697,7 @@ def init_database() -> None:
     _ensure_workflow_run_archive_columns()
     _ensure_password_reset_token_table()
     _ensure_webhook_trigger_tables()
+    _ensure_incident_table()
     _verify_schema_version()
 
 

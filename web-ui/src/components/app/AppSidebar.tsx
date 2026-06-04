@@ -1,4 +1,4 @@
-import { Blocks, BookOpen, Bot, GitBranch, Inbox, MessageSquare, Package, PanelLeft, PanelLeftClose, Play, Plus, Radar, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Trash2, Webhook } from "lucide-react";
+import { Bell, Blocks, BookOpen, Bot, GitBranch, Inbox, MessageSquare, Package, PanelLeft, PanelLeftClose, Play, Plus, Radar, RefreshCw, Search, Settings, ShieldAlert, ShieldCheck, Trash2, Webhook } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentVisualSignals } from "@/lib/agentSignals";
 import { cn } from "@/lib/utils";
@@ -51,6 +51,7 @@ const VIEW_META: Record<WorkspaceView, { label: string; icon: typeof Bot }> = {
   admin: { label: "Admin", icon: ShieldCheck },
   docs: { label: "Documentation", icon: BookOpen },
   webhooks: { label: "Webhooks", icon: Webhook },
+  incidents: { label: "Incidents", icon: Bell },
 };
 
 function statusDotClasses(status: string): string {

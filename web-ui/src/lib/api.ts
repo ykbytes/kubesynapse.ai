@@ -97,6 +97,7 @@ import type {
   WebhookInvocationInfo,
   WorkflowTriggerInfo,
   TriggerExecutionInfo,
+  IncidentInfo,
 } from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() ?? "";
@@ -5018,6 +5019,99 @@ export async function replayDeadLetter(token: string, namespace: string, executi
     const text = await response.text();
     throw new ApiError(response.status, "Failed to replay execution", text);
   }
+}
+
+// ── Incident API ──────────────────────────────────────────────────────────
+
+function parseIncidentPayload(payload: unknown, label = "IncidentInfo"): IncidentInfo {
+  const record = expectRecord(payload, label);
+  return {
+    id: readNumber(record, "id", label),
+    namespace: readOptionalString(record, "namespace", label) ?? "default",
+    name: readString(record, "name", label),
+    title: readString(record, "title", label),
+    description: readOptionalString(record, "description", label) ?? "",
+    severity: (readOptionalString(record, "severity", label) ?? "warning") as IncidentInfo["severity"],
+    source: (readOptionalString(record, "source", label) ?? "manual") as IncidentInfo["source"],
+    status: (readOptionalString(record, "status", label) ?? "firing") as IncidentInfo["status"],
+    labels: (record.labels as Record<string, string>) ?? {},
+    annotations: (record.annotations as Record<string, string>) ?? {},
+    assigned_agent: readOptionalString(record, "assigned_agent", label) ?? null,
+    escalation_timeout_minutes: readOptionalNumber(record, "escalation_timeout_minutes", label) ?? 15,
+    escalated: readOptionalBoolean(record, "escalated", label) ?? false,
+    auto_acknowledge: readOptionalBoolean(record, "auto_acknowledge", label) ?? true,
+    acknowledged_at: readOptionalString(record, "acknowledged_at", label) ?? null,
+    resolved_at: readOptionalString(record, "resolved_at", label) ?? null,
+    closed_at: readOptionalString(record, "closed_at", label) ?? null,
+    escalated_at: readOptionalString(record, "escalated_at", label) ?? null,
+    alertmanager_fingerprint: readOptionalString(record, "alertmanager_fingerprint", label) ?? null,
+    workflow_ref_name: readOptionalString(record, "workflow_ref_name", label) ?? null,
+    workflow_ref_namespace: readOptionalString(record, "workflow_ref_namespace", label) ?? null,
+    workflow_run_id: readOptionalString(record, "workflow_run_id", label) ?? null,
+    timeline: Array.isArray(record.timeline) ? record.timeline.map((t: unknown, i: number) => {
+      const te = expectRecord(t, `timeline[${i}]`);
+      return { timestamp: readString(te, "timestamp", `timeline[${i}]`), event: readString(te, "event", `timeline[${i}]`), message: readString(te, "message", `timeline[${i}]`) };
+    }) : [],
+    created_at: readString(record, "created_at", label),
+    updated_at: readString(record, "updated_at", label),
+  };
+}
+
+export async function listIncidents(token: string, namespace: string, params?: { status?: string; severity?: string; limit?: number; offset?: number }): Promise<{ incidents: IncidentInfo[]; total: number }> {
+  let url = buildUrl("/api/v1/incidents", namespace);
+  if (params?.status) url += `&status=${encodeURIComponent(params.status)}`;
+  if (params?.severity) url += `&severity=${encodeURIComponent(params.severity)}`;
+  if (params?.limit) url += `&limit=${params.limit}`;
+  if (params?.offset) url += `&offset=${params.offset}`;
+  const response = await fetchAuthenticated(url, token);
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "listIncidents");
+    const items = record.incidents;
+    return {
+      incidents: Array.isArray(items) ? items.map((item: unknown, i: number) => parseIncidentPayload(item, `IncidentInfo[${i}]`)) : [],
+      total: readOptionalNumber(record, "total", "listIncidents") ?? 0,
+    };
+  });
+}
+
+export async function getIncident(token: string, namespace: string, name: string): Promise<IncidentInfo> {
+  const response = await fetchAuthenticated(buildUrl(`/api/v1/incidents/${encodeURIComponent(name)}`, namespace), token);
+  return parseJsonResponse(response, (p) => parseIncidentPayload(p, "IncidentInfo"));
+}
+
+export async function createIncident(token: string, namespace: string, body: Partial<IncidentInfo> & { name: string; title: string }): Promise<IncidentInfo> {
+  const response = await fetchAuthenticated(buildUrl("/api/v1/incidents", namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(response, (p) => parseIncidentPayload(p, "IncidentInfo"));
+}
+
+export async function updateIncidentStatus(token: string, namespace: string, name: string, body: { status?: string; message?: string; workflow_run_id?: string }): Promise<IncidentInfo> {
+  const response = await fetchAuthenticated(buildUrl(`/api/v1/incidents/${encodeURIComponent(name)}`, namespace), token, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(response, (p) => parseIncidentPayload(p, "IncidentInfo"));
+}
+
+export async function escalateIncident(token: string, namespace: string, name: string, message?: string): Promise<IncidentInfo> {
+  const response = await fetchAuthenticated(buildUrl(`/api/v1/incidents/${encodeURIComponent(name)}/escalate`, namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: message ?? "Manual escalation" }),
+  });
+  return parseJsonResponse(response, (p) => parseIncidentPayload(p, "IncidentInfo"));
+}
+
+export async function getIncidentTimeline(token: string, namespace: string, name: string): Promise<{ timeline: Array<{ timestamp: string; event: string; message: string }> }> {
+  const response = await fetchAuthenticated(buildUrl(`/api/v1/incidents/${encodeURIComponent(name)}/timeline`, namespace), token);
+  return parseJsonResponse(response, (p) => {
+    const record = expectRecord(p, "IncidentTimeline");
+    return { timeline: Array.isArray(record.timeline) ? record.timeline : [] };
+  });
 }
 
 // ── Agent API ─────────────────────────────────────────────────────────────

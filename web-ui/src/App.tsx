@@ -39,6 +39,7 @@ const WorkflowManager = lazy(() => import("./components/workflows/WorkflowManage
 const IntelligencePanel = lazy(() => import("./components/intelligence/IntelligencePanel").then((m) => ({ default: m.IntelligencePanel })));
 const DocumentationPanel = lazy(() => import("./components/docs/DocumentationPanel").then((m) => ({ default: m.DocumentationPanel })));
 const EventTriggersPanel = lazy(() => import("./components/workflows/EventTriggersPanel").then((m) => ({ default: m.EventTriggersPanel })));
+const IncidentsPanel = lazy(() => import("./components/incidents/IncidentsPanel").then((m) => ({ default: m.IncidentsPanel })));
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/shared/EmptyState";
@@ -796,6 +797,12 @@ function AppLayout() {
             <ContentShell>
               <Suspense fallback={<div className="h-screen" />}>
                 <EventTriggersPanel />
+              </Suspense>
+            </ContentShell>
+          ) : ws.activeView === "incidents" ? (
+            <ContentShell>
+              <Suspense fallback={<div className="h-screen" />}>
+                <IncidentsPanel token={conn.token} namespace={conn.namespace} />
               </Suspense>
             </ContentShell>
           ) : null}

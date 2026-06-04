@@ -28,6 +28,7 @@ from routers.llm import router as llm_router
 from routers.observability import router as observability_router
 from routers.webhooks import router as webhooks_router
 from routers.workflows import router as workflows_router
+from routers.incidents import router as incidents_router
 
 # Create the FastAPI application
 app = FastAPI(
@@ -97,6 +98,7 @@ app.include_router(chat_router, prefix="/api/v1")
 app.include_router(llm_router, prefix="/api/v1")
 app.include_router(observability_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
+app.include_router(incidents_router, prefix="/api/v1")
 app.include_router(a2a_router)  # A2A uses /a2a prefix (defined in router itself)
 
 # Include traces router (pre-existing modular router)

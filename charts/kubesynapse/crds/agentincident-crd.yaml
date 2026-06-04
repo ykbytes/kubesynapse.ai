@@ -1,0 +1,144 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agentincidents.kubesynapse.ai
+  labels:
+    kubesynapse.ai/crd: "true"
+spec:
+  group: kubesynapse.ai
+  names:
+    kind: AgentIncident
+    listKind: AgentIncidentList
+    plural: agentincidents
+    singular: agentincident
+    shortNames:
+      - ainc
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Severity
+          type: string
+          jsonPath: .spec.severity
+        - name: Status
+          type: string
+          jsonPath: .spec.status
+        - name: Source
+          type: string
+          jsonPath: .spec.source
+        - name: Agent
+          type: string
+          jsonPath: .spec.assignedAgent
+        - name: Escalated
+          type: boolean
+          jsonPath: .spec.escalated
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [title, severity]
+              properties:
+                title:
+                  type: string
+                  description: Human-readable incident title
+                description:
+                  type: string
+                  description: Detailed incident description
+                severity:
+                  type: string
+                  enum: [critical, warning, info]
+                  description: Incident severity level
+                source:
+                  type: string
+                  enum: [alertmanager, manual, k8s-event, webhook]
+                  description: How this incident was created
+                  default: manual
+                status:
+                  type: string
+                  enum: [firing, acknowledged, diagnosing, remediating, resolved, closed, escalated]
+                  description: Current incident status (state machine)
+                  default: firing
+                labels:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: Key-value labels for filtering and correlation
+                  default: {}
+                annotations:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: Key-value annotations for rich metadata
+                  default: {}
+                assignedAgent:
+                  type: string
+                  description: AIAgent name to auto-trigger for diagnosis/remediation
+                escalationTimeout:
+                  type: string
+                  pattern: '^[0-9]+(m|h)$'
+                  description: Duration before auto-escalation (e.g. 15m, 2h). Default 15m for critical, 30m for warning, 1h for info.
+                  default: 15m
+                escalated:
+                  type: boolean
+                  description: Whether this incident has been escalated
+                  default: false
+                autoAcknowledge:
+                  type: boolean
+                  description: Whether to auto-acknowledge on creation
+                  default: true
+                workflowRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                      description: AgentWorkflow name to trigger for diagnosis/remediation
+                    namespace:
+                      type: string
+                      description: Workflow namespace (defaults to incident namespace)
+                acknowledgedAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+                resolvedAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+                closedAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+                escalatedAt:
+                  type: string
+                  format: date-time
+                  nullable: true
+            status:
+              type: object
+              properties:
+                timeline:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      timestamp:
+                        type: string
+                        format: date-time
+                      event:
+                        type: string
+                      message:
+                        type: string
+                workflowRunId:
+                  type: string
+                  description: ID of the triggered workflow run
+                observedGeneration:
+                  type: integer
+                  description: Last observed generation of the spec
