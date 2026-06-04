@@ -70,6 +70,13 @@ def _get_db_engine():
     return _db_engine
 
 
+def _db_is_postgres() -> bool:
+    engine = _get_db_engine()
+    if engine is None:
+        return False
+    return engine.dialect.name == "postgresql"
+
+
 def _query(sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Execute a raw SQL query and return rows as dicts."""
     engine = _get_db_engine()
@@ -84,6 +91,25 @@ def _query(sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any
 # ---------------------------------------------------------------------------
 # Anomaly detection queries
 # ---------------------------------------------------------------------------
+
+def _fc(expr: str) -> str:
+    """Portable CAST to FLOAT — works on PostgreSQL and SQLite."""
+    return f"CAST({expr} AS FLOAT)"
+
+
+def _agg_distinct(expr: str, alias: str) -> str:
+    """Portable aggregate of distinct values."""
+    if _db_is_postgres():
+        return f"ARRAY_AGG(DISTINCT {expr}) AS {alias}"
+    return f"GROUP_CONCAT(DISTINCT {expr}) AS {alias}"
+
+
+def _median_expr(expr: str, order_expr: str) -> str:
+    """Portable median expression for anomaly detection (approximate on SQLite)."""
+    if _db_is_postgres():
+        return f"PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY {order_expr})"
+    return f"AVG({expr})"
+
 
 def _check_high_failure_rate() -> list[dict[str, Any]]:
     """Find runs where >30% of steps failed in the recent window."""
@@ -111,7 +137,7 @@ def _check_high_failure_rate() -> list[dict[str, Any]]:
 def _check_error_spikes() -> list[dict[str, Any]]:
     """Find agents with >=3 errors in the recent window."""
     cutoff = (datetime.now(UTC) - timedelta(minutes=ANOMALY_WINDOW_MINUTES)).isoformat()
-    sql = """
+    sql = f"""
         SELECT
             re.namespace,
             re.agent_name,
@@ -119,7 +145,7 @@ def _check_error_spikes() -> list[dict[str, Any]]:
             COUNT(*) AS error_count,
             MIN(re.created_at) AS first_error,
             MAX(re.created_at) AS last_error,
-            ARRAY_AGG(DISTINCT re.execution_id) AS affected_executions
+            {_agg_distinct('re.execution_id', 'affected_executions')}
         FROM runtime_run_events re
         WHERE re.created_at >= :cutoff
           AND re.severity = 'error'
@@ -168,7 +194,7 @@ def _check_cost_outliers() -> list[dict[str, Any]]:
 def _check_token_spikes() -> list[dict[str, Any]]:
     """Find runs where tokens >3x the agent's rolling average."""
     cutoff = (datetime.now(UTC) - timedelta(minutes=ANOMALY_WINDOW_MINUTES * 4)).isoformat()
-    sql = """
+    sql = f"""
         WITH agent_avg AS (
             SELECT
                 namespace,
@@ -186,14 +212,14 @@ def _check_token_spikes() -> list[dict[str, Any]]:
             we.id AS execution_id,
             we.total_tokens,
             aa.avg_tokens,
-            ROUND(we.total_tokens::FLOAT / NULLIF(aa.avg_tokens, 0), 2) AS token_multiplier,
+            ROUND({_fc('we.total_tokens')} / NULLIF(aa.avg_tokens, 0), 2) AS token_multiplier,
             we.started_at
         FROM workflow_executions we
         JOIN agent_avg aa ON we.namespace = aa.namespace AND we.agent_name = aa.agent_name
         WHERE we.started_at >= :cutoff
           AND we.total_tokens IS NOT NULL
           AND we.total_tokens > 0
-          AND we.total_tokens::FLOAT / NULLIF(aa.avg_tokens, 0) >= :multiplier
+          AND {_fc('we.total_tokens')} / NULLIF(aa.avg_tokens, 0) >= :multiplier
         ORDER BY token_multiplier DESC
         LIMIT 20
     """
@@ -203,12 +229,13 @@ def _check_token_spikes() -> list[dict[str, Any]]:
 def _check_stuck_runs() -> list[dict[str, Any]]:
     """Find runs that have been running >2x typical duration."""
     cutoff = (datetime.now(UTC) - timedelta(minutes=60)).isoformat()
-    sql = """
+    median_expr = _median_expr("duration_ms", "duration_ms")
+    sql = f"""
         WITH typical_duration AS (
             SELECT
                 namespace,
                 workflow_name,
-                PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_ms) AS median_ms
+                {median_expr} AS median_ms
             FROM workflow_executions
             WHERE status = 'completed'
               AND duration_ms IS NOT NULL
@@ -221,7 +248,7 @@ def _check_stuck_runs() -> list[dict[str, Any]]:
             we.id AS execution_id,
             we.duration_ms AS current_duration,
             td.median_ms,
-            ROUND(we.duration_ms::FLOAT / NULLIF(td.median_ms, 0), 2) AS duration_multiplier,
+            ROUND({_fc('we.duration_ms')} / NULLIF(td.median_ms, 0), 2) AS duration_multiplier,
             we.started_at
         FROM workflow_executions we
         JOIN typical_duration td ON we.namespace = td.namespace AND we.workflow_name = td.workflow_name
@@ -229,7 +256,7 @@ def _check_stuck_runs() -> list[dict[str, Any]]:
           AND we.started_at >= :cutoff
           AND we.duration_ms IS NOT NULL
           AND we.duration_ms > 0
-          AND we.duration_ms::FLOAT / NULLIF(td.median_ms, 0) >= :multiplier
+          AND {_fc('we.duration_ms')} / NULLIF(td.median_ms, 0) >= :multiplier
         ORDER BY duration_multiplier DESC
         LIMIT 20
     """

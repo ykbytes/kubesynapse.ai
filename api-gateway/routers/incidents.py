@@ -13,6 +13,7 @@ from auth_store import (
     get_incident_by_fingerprint,
     list_incidents,
     update_incident_status,
+    upsert_incident,
 )
 
 router = APIRouter(tags=["incidents"])
@@ -87,6 +88,39 @@ async def api_create_incident(
             assigned_agent=body.get("assigned_agent"),
             escalation_timeout_minutes=body.get("escalation_timeout_minutes", 15),
             auto_acknowledge=body.get("auto_acknowledge", True),
+            workflow_ref_name=body.get("workflow_ref", {}).get("name") if body.get("workflow_ref") else None,
+            workflow_ref_namespace=body.get("workflow_ref", {}).get("namespace") if body.get("workflow_ref") else None,
+        )
+        return _incident_to_response(inc)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.put("/incidents/{name}")
+async def api_upsert_incident(
+    name: str,
+    body: dict[str, Any] = Body(...),
+    namespace: str | None = Query(None),
+) -> dict[str, Any]:
+    """Create or update an incident by name — idempotent upsert."""
+    ns = _ns(body.get("namespace") or namespace)
+    if not name.strip():
+        raise HTTPException(status_code=400, detail="Field 'name' is required")
+
+    try:
+        inc = upsert_incident(
+            namespace=ns,
+            name=name.strip(),
+            title=body.get("title", name),
+            severity=body.get("severity", "warning"),
+            source=body.get("source", "manual"),
+            description=body.get("description", ""),
+            labels=body.get("labels"),
+            annotations=body.get("annotations"),
+            assigned_agent=body.get("assigned_agent"),
+            escalation_timeout_minutes=body.get("escalation_timeout_minutes", 15),
+            auto_acknowledge=body.get("auto_acknowledge", True),
+            alertmanager_fingerprint=body.get("alertmanager_fingerprint"),
             workflow_ref_name=body.get("workflow_ref", {}).get("name") if body.get("workflow_ref") else None,
             workflow_ref_namespace=body.get("workflow_ref", {}).get("namespace") if body.get("workflow_ref") else None,
         )

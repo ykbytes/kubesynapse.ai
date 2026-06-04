@@ -91,6 +91,12 @@ async def legacy_api_redirect(request: Request, call_next):
 
 # Mount all routers under /api/v1 prefix (except A2A which stays at /a2a)
 app.include_router(admin_router, prefix="/api/v1")
+
+# Root-level health endpoint (no auth) for operator runtime health checks
+@app.get("/health")
+async def _root_health() -> dict:
+    return {"status": "healthy", "service": "kubesynapse-api-gateway"}
+
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(agents_router, prefix="/api/v1")
 app.include_router(workflows_router, prefix="/api/v1")

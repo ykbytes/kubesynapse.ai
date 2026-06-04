@@ -58,23 +58,54 @@ def _gateway_url(path: str) -> str:
 
 
 def _call_gateway(method: str, path: str, json_body: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Call the gateway API and return the JSON response or None on failure."""
-    try:
-        url = _gateway_url(path)
-        if method == "GET":
-            resp = requests.get(url, headers=_gateway_headers(), timeout=10)
-        elif method == "POST":
-            resp = requests.post(url, headers=_gateway_headers(), json=json_body, timeout=10)
-        elif method == "PATCH":
-            resp = requests.patch(url, headers=_gateway_headers(), json=json_body, timeout=10)
-        else:
-            logger.warning("Unsupported HTTP method: %s", method)
+    """Call the gateway API and return the JSON response or None on failure.
+
+    Retries transient errors (5xx, connection errors) with exponential backoff.
+    Permanent errors (4xx) are not retried.
+    """
+    import time as _time
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            url = _gateway_url(path)
+            if method == "GET":
+                resp = requests.get(url, headers=_gateway_headers(), timeout=10)
+            elif method == "PUT":
+                resp = requests.put(url, headers=_gateway_headers(), json=json_body, timeout=10)
+            elif method == "POST":
+                resp = requests.post(url, headers=_gateway_headers(), json=json_body, timeout=10)
+            elif method == "PATCH":
+                resp = requests.patch(url, headers=_gateway_headers(), json=json_body, timeout=10)
+            else:
+                logger.warning("Unsupported HTTP method: %s", method)
+                return None
+            resp.raise_for_status()
+            return resp.json()
+        except requests.HTTPError as e:
+            if e.response is not None and 400 <= e.response.status_code < 500 and e.response.status_code != 429:
+                logger.warning("Gateway API permanent error: %s %s — %s", method, path, e)
+                return None
+            if attempt < max_retries - 1:
+                backoff = 2 ** attempt
+                logger.warning(
+                    "Gateway API transient error: %s %s — retrying in %ds (%d/%d)",
+                    method, path, backoff, attempt + 1, max_retries,
+                )
+                _time.sleep(backoff)
+                continue
+            logger.warning("Gateway API call failed after %d retries: %s %s — %s", max_retries, method, path, e)
             return None
-        resp.raise_for_status()
-        return resp.json()
-    except requests.RequestException as e:
-        logger.warning("Gateway API call failed: %s %s — %s", method, path, e)
-        return None
+        except (requests.ConnectionError, requests.Timeout) as e:
+            if attempt < max_retries - 1:
+                backoff = 2 ** attempt
+                logger.warning(
+                    "Gateway API network error: %s %s — retrying in %ds (%d/%d)",
+                    method, path, backoff, attempt + 1, max_retries,
+                )
+                _time.sleep(backoff)
+                continue
+            logger.warning("Gateway API network error after %d retries: %s %s — %s", max_retries, method, path, e)
+            return None
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +160,11 @@ def _schedule_escalation_timer(namespace: str, name: str, severity: str) -> None
 
 
 def _sync_incident_to_gateway(incident_spec: dict[str, Any], namespace: str, name: str) -> dict[str, Any] | None:
-    """Create or update the incident in the gateway's PostgreSQL."""
+    """Create or update the incident in the gateway's PostgreSQL.
+
+    Uses ``PUT`` for idempotent upsert so that concurrent create+update
+    Kopf event handling does not produce duplicate gateway rows.
+    """
     severity = incident_spec.get("severity", "warning")
     timeout_minutes = incident_spec.get("escalation_timeout_minutes", SEVERITY_ESCALATION_MINUTES.get(severity, 30))
     workflow_ref = incident_spec.get("workflowRef", {})
@@ -148,7 +183,7 @@ def _sync_incident_to_gateway(incident_spec: dict[str, Any], namespace: str, nam
         "workflow_ref": {"name": workflow_ref.get("name"), "namespace": workflow_ref.get("namespace")} if workflow_ref else None,
     }
 
-    return _call_gateway("POST", f"/api/v1/incidents?namespace={namespace}", body)
+    return _call_gateway("PUT", f"/api/v1/incidents/{name}?namespace={namespace}", body)
 
 
 def _sync_incident_status_to_crd(body: dict[str, Any], namespace: str, name: str) -> None:

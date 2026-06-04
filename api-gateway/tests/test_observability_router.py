@@ -41,8 +41,8 @@ def test_observability_overview_uses_shared_observation_constants(client, auth_h
         def list_namespaced_pod(self, **_kwargs):
             return SimpleNamespace(items=[])
 
-    with patch("routers.observability.k8s_client.CustomObjectsApi", _FakeCustomObjectsApi), patch(
-        "routers.observability.k8s_client.CoreV1Api", _FakeCoreV1Api
+    with patch("kubernetes.client.CustomObjectsApi", _FakeCustomObjectsApi), patch(
+        "kubernetes.client.CoreV1Api", _FakeCoreV1Api
     ):
         response = client.get("/api/v1/observability/overview?namespace=default", headers=auth_headers)
 

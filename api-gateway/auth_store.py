@@ -1391,6 +1391,89 @@ def create_incident(
         return row.to_dict()
 
 
+def upsert_incident(
+    namespace: str,
+    name: str,
+    title: str,
+    severity: str = "warning",
+    source: str = "manual",
+    description: str = "",
+    labels: dict[str, str] | None = None,
+    annotations: dict[str, str] | None = None,
+    assigned_agent: str | None = None,
+    escalation_timeout_minutes: int = 15,
+    auto_acknowledge: bool = True,
+    alertmanager_fingerprint: str | None = None,
+    workflow_ref_name: str | None = None,
+    workflow_ref_namespace: str | None = None,
+) -> dict[str, Any]:
+    """Upsert an incident by (namespace, name) — idempotent for concurrent calls."""
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    if not normalized_name:
+        raise ValueError("Incident name is required")
+    severity = str(severity or "warning").strip().lower()
+    if severity not in ("critical", "warning", "info"):
+        severity = "warning"
+
+    with db_session() as session:
+        existing = (
+            session.query(IncidentRow)
+            .filter(
+                IncidentRow.namespace == normalized_ns,
+                IncidentRow.name == normalized_name,
+            )
+            .with_for_update(skip_locked=True)
+            .first()
+        )
+        if existing:
+            now = utc_now()
+            existing.title = str(title or "").strip() or existing.title
+            existing.description = str(description or "").strip()
+            existing.severity = severity
+            existing.source = str(source or "manual").strip().lower()
+            existing.labels = labels or existing.labels
+            existing.annotations = annotations or existing.annotations
+            existing.assigned_agent = assigned_agent or existing.assigned_agent
+            existing.escalation_timeout_minutes = max(1, int(escalation_timeout_minutes))
+            existing.alertmanager_fingerprint = alertmanager_fingerprint or existing.alertmanager_fingerprint
+            existing.workflow_ref_name = workflow_ref_name or existing.workflow_ref_name
+            existing.workflow_ref_namespace = workflow_ref_namespace or existing.workflow_ref_namespace
+            existing.updated_at = now
+            session.flush()
+            return existing.to_dict()
+
+        now = utc_now()
+        timeline_entry = {
+            "timestamp": now.isoformat(),
+            "event": "firing",
+            "message": f"Incident created via {source}",
+        }
+        row = IncidentRow(
+            namespace=normalized_ns,
+            name=normalized_name,
+            title=str(title or "").strip(),
+            description=str(description or "").strip(),
+            severity=severity,
+            source=str(source or "manual").strip().lower(),
+            status="firing",
+            labels=labels or {},
+            annotations=annotations or {},
+            assigned_agent=assigned_agent,
+            escalation_timeout_minutes=max(1, int(escalation_timeout_minutes)),
+            auto_acknowledge=bool(auto_acknowledge),
+            alertmanager_fingerprint=alertmanager_fingerprint,
+            workflow_ref_name=workflow_ref_name,
+            workflow_ref_namespace=workflow_ref_namespace,
+            timeline=[timeline_entry],
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(row)
+        session.flush()
+        return row.to_dict()
+
+
 def update_incident_status(
     namespace: str,
     name: str,
@@ -1595,7 +1678,10 @@ def _verify_schema_version() -> None:
 def _ensure_intelligence_namespace_columns() -> None:
     with ENGINE.begin() as connection:
         inspector = inspect(connection)
+        existing_tables = set(inspector.get_table_names())
         for table_name in _INTELLIGENCE_NAMESPACE_TABLES:
+            if table_name not in existing_tables:
+                continue
             columns = {column["name"] for column in inspector.get_columns(table_name)}
             if "namespace" not in columns:
                 connection.execute(
@@ -1688,7 +1774,7 @@ def init_database() -> None:
     # Preferred: Alembic migrations (production-ready, versioned schema changes)
     try:
         from migration_runner import run_migrations
-        run_migrations()
+        run_migrations(base=Base, engine=ENGINE)
     except ImportError:
         # Fallback: create_all() for environments without Alembic installed
         Base.metadata.create_all(bind=ENGINE)

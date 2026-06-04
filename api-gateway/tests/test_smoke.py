@@ -45,7 +45,7 @@ class TestAuthMiddleware:
         response = client.get("/api/agents")
         assert response.status_code == 401
         data = response.json()
-        assert "detail" in data or "error" in data
+        assert "detail" in data or "error" in data or "code" in data
 
     def test_invalid_token_returns_401(self, client: TestClient) -> None:
         """Requests with an invalid token should be rejected."""

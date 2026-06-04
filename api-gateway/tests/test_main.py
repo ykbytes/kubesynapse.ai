@@ -3628,7 +3628,7 @@ class WebhookTriggerApiTests(unittest.TestCase):
         self.addCleanup(lambda: sys.modules.pop(self.webhooks_router.__name__, None))
 
         self.recent_patcher = patch.object(self.webhooks_router, "count_recent_webhook_invocations", lambda *_args, **_kwargs: 0)
-        self.signature_patcher = patch.object(self.webhooks_router, "verify_webhook_signature", lambda *_args, **_kwargs: True)
+        self.signature_patcher = patch.object(self.webhooks_router, "verify_provider_signature", lambda *_args, **_kwargs: True)
         self.timestamp_patcher = patch.object(self.webhooks_router, "verify_webhook_timestamp", lambda *_args, **_kwargs: None)
         self.rate_limit_patcher = patch.object(self.webhooks_router, "check_webhook_rate_limit", lambda *_args, **_kwargs: None)
         self.secret_patcher = patch.object(self.webhooks_router, "_resolve_webhook_secret", lambda *_args, **_kwargs: "secret")
@@ -3824,11 +3824,19 @@ class WebhookTriggerApiTests(unittest.TestCase):
                 name="incident-alerts",
                 raw_request=raw_request,
                 namespace="default",
-                x_KUBESYNAPSE_signature="sha256=test",
-                x_KUBESYNAPSE_timestamp="1710000000",
+                dry_run=False,
+                x_kubesynapse_signature="sha256=test",
+                x_kubesynapse_timestamp="1710000000",
+                x_kubesynapse_key_id=None,
+                x_api_key=None,
+                x_hub_signature_256=None,
+                x_slack_signature=None,
+                x_slack_request_timestamp=None,
+                stripe_signature=None,
+                x_pd_signature=None,
             )
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 202)
         invoke_payload = json.loads(response.body.decode("utf-8"))
         self.assertEqual(invoke_payload["matched_triggers"], 1)
 
@@ -3841,7 +3849,7 @@ class WebhookTriggerApiTests(unittest.TestCase):
         execution = history[0]
         self.assertEqual(execution.trigger_name, "incident-alert-trigger")
         self.assertEqual(execution.webhook_name, "incident-alerts")
-        self.assertEqual(execution.status, "dispatched")
+        self.assertEqual(execution.status, "pending")
         self.assertEqual(execution.namespace, "default")
 
         webhook_history = self.webhooks_router.get_webhook_history(
