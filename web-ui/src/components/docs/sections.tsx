@@ -51,16 +51,17 @@ function GettingStartedSection() {
         <DocsTable
           headers={["Requirement", "Version", "Notes"]}
           rows={[
-            ["Kubernetes", "1.25+", "Any CNCF-certified distribution (EKS, GKE, AKS, Kind, k3s)."],
-            ["Helm", "3.12+", "Required for chart installation and upgrades."],
-            ["kubectl", "1.25+", "Must be configured to target your cluster."],
-            ["LLM API Key", "—", "OpenAI, Anthropic, or another LiteLLM-compatible provider."],
+            ["Kubernetes", "1.25+ (recommended)", "Any CNCF-certified distribution (EKS, GKE, AKS, Kind, k3s). The chart does not pin a kubeVersion constraint, so older versions may work but are untested."],
+            ["Helm", "3.12+ (recommended)", "Required for chart installation and upgrades."],
+            ["kubectl", "1.25+ (recommended)", "Must be configured to target your cluster."],
+            ["LLM API Key", "—", "OpenAI, Anthropic, OpenRouter, Mistral, OpenCode, or OpenCode Go — any LiteLLM-compatible provider. Wire multiple keys via <code>platformSecrets.native</code> in <code>values.yaml</code>."],
             ["Container Runtime", "—", "Docker or Podman for local image builds."],
           ]}
         />
         <Callout variant="info" title="Resource Recommendations">
           For production deployments, allocate at least 4 vCPU and 8 GiB RAM for the control plane namespace. Each agent
-          runtime requests 500m CPU and 512Mi RAM by default.
+          runtime requests 100m CPU and 256Mi RAM by default (configurable via the <code>AGENT_CPU_REQUEST</code> and
+          <code>AGENT_MEMORY_REQUEST</code> env vars on the operator).
         </Callout>
       </div>
 
@@ -145,8 +146,10 @@ kubectl port-forward svc/kubesynapse-web-ui 3000:80 -n kubesynapse`} lang="bash"
               title: "Log in",
               children: (
                 <p>
-                  The first bootstrap creates an admin user. Follow the on-screen instructions to set a password, or
-                  configure OIDC/SAML in the settings page.
+                  The first install seeds an admin user from the <code>AUTH_BOOTSTRAP_ADMIN_USERNAME</code> and
+                  <code>AUTH_BOOTSTRAP_ADMIN_PASSWORD</code> values. Sign in at the login page; configure OIDC or
+                  SAML by setting <code>platformSecrets.native.oidcProvidersJson</code> /
+                  <code>samlProvidersJson</code> and re-installing or upgrading.
                 </p>
               ),
             },
@@ -230,7 +233,7 @@ function ArchitectureSection() {
       <QuickRefCard
         title="Architecture Quick Reference"
         items={[
-          { label: "Control Plane", value: "12 CRDs + Operator + Gateway" },
+          { label: "Control Plane", value: "13 CRDs + Operator + Gateway" },
           { label: "Execution Plane", value: "StatefulSets + Jobs + MCP" },
           { label: "Model Path", value: "Runtime -> LiteLLM" },
           { label: "Operator", value: "Kopf-based Python controller" },
@@ -240,12 +243,49 @@ function ArchitectureSection() {
       <div id="arch-overview">
         <SectionHeading icon={Layers}>System Overview</SectionHeading>
         <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
-          kubesynapse separates the <strong>control plane</strong> (12 CRDs, operator, gateway) from the{" "}
+          kubesynapse separates the <strong>control plane</strong> (13 CRDs, operator, gateway) from the{" "}
           <strong>execution plane</strong> (per-agent runtimes, worker Jobs, and MCP access). The gateway owns auth,
           CRUD, durable memory, and trace APIs, while the runtime makes the primary LiteLLM model calls.
         </p>
         <MermaidDiagram chart={architectureOverviewChart} />
       </div>
+      <div id="arch-tenant">
+        <SectionHeading icon={Layers}>Multi-Tenancy — AgentTenant</SectionHeading>
+        <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
+          <code>AgentTenant</code> is a cluster-scoped CRD that carves out a namespace, resource
+          quota, model allow-list, and admin roster for a team. The operator and gateway both
+          enforce tenant boundaries — agents outside a tenant cannot reference its policies,
+          and the operator caps concurrent workflow steps at <code>resourceQuota.maxParallelSteps</code>,
+          throttling (not refusing) the worker pool when the cap is reached.
+        </p>
+        <DocsTable headers={["Field", "Type", "Description"]} rows={[
+          ["tenantName", "string (required)", "Human-readable name (e.g. <code>data-science-team</code>)"],
+          ["namespace", "string (required)", "Kubernetes namespace that this tenant owns"],
+          ["resourceQuota.maxCPU / maxMemory / maxPods / maxGPU", "string / string / integer / string", "Hard caps applied to the tenant's namespace"],
+          ["resourceQuota.maxParallelSteps", "integer (min: 1, default: 4)", "Maximum parallel workflow steps per execution for this tenant"],
+          ["allowedModels", "string[]", "LLM model identifiers this tenant may use (e.g. <code>gpt-4o</code>, <code>claude-3-5-sonnet</code>)"],
+          ["adminUsers", "string[]", "OIDC usernames or groups who can manage agents in this tenant"],
+        ]} />
+        <CodeBlock code={`apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentTenant
+metadata:
+  name: data-science-team
+spec:
+  tenantName: Data Science
+  namespace: ds-team
+  resourceQuota:
+    maxCPU: "16"
+    maxMemory: "32Gi"
+    maxPods: 50
+    maxGPU: "2"
+    maxParallelSteps: 8
+  allowedModels:
+    - gpt-4o
+    - claude-3-5-sonnet-20241022
+  adminUsers:
+    - ds-admins@example.com`} lang="yaml" />
+      </div>
+
       <div id="arch-control">
         <SectionHeading icon={FileCode}>Control Plane — CRDs</SectionHeading>
         <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
@@ -264,8 +304,9 @@ function ArchitectureSection() {
             ["ObservationPolicy", "Namespaced", "Declares how collected telemetry is evaluated."],
             ["ObservationReport", "Namespaced", "Stores the resulting health or anomaly output."],
             ["McpConnection", "Namespaced", "Defines a connection to an MCP server (transport, auth, capabilities)."],
-            ["WebhookReceiver", "Namespaced", "Receives external webhook events with signature verification and IP filtering."],
-            ["WorkflowTrigger", "Namespaced", "Triggers workflows based on webhook events or schedule criteria."],
+            ["WebhookReceiver", "Namespaced", "Receives external webhook events with signature verification, IP filtering, and provider-specific adapters."],
+            ["WorkflowTrigger", "Namespaced", "Triggers workflows or agents based on webhook events, AgentEvents, or schedule criteria."],
+            ["AgentIncident", "Namespaced", "Actionable alert managed by the operator; integrates with Alertmanager and auto-triggers remediation workflows."],
           ]}
         />
         <MermaidDiagram
@@ -289,7 +330,7 @@ function ArchitectureSection() {
           Each agent runs as an isolated singleton StatefulSet backed by the <strong>OpenCode</strong> runtime
           with session persistence and checkpoint recovery. Additional runtimes (Pi, Mistral Vibe) are available in
           alpha but not recommended for production. Workflow runs use short-lived Jobs whose detailed evidence lives in
-          artifacts and logs. MCP access can come from 10 bundled tool sidecars, a separate collector sidecar, or
+          artifacts and logs. MCP access can come from 10 bundled tool sidecars plus a separate collector sidecar, or
           shared MCP hub connections.
         </p>
         <MermaidDiagram
@@ -374,7 +415,16 @@ function AgentsSection() {
           headers={["Field", "Type", "Description"]}
           rows={[
             ["runtime.kind", "opencode | pi | mistral-vibe", "Runtime engine selector. opencode is the production runtime (pi and mistral-vibe are alpha)."],
-            ["runtime.opencode.configFiles", "object", "Inline ConfigMap-style files injected into the OpenCode runtime (max 64 files, 256 KB total)."],
+            ["runtime.opencode.configFiles", "object", "Inline ConfigMap-style files injected into the OpenCode runtime (max 64 files, ~64 KB per file, ~256 KB total; paths ≤ 256 chars)."],
+            ["runtime.pi.provider", "string", "Pi runtime: provider override (e.g., <code>anthropic</code>, <code>openai</code>)."],
+            ["runtime.pi.model", "string", "Pi runtime: model override (e.g., <code>claude-3-sonnet</code>)."],
+            ["runtime.pi.thinkingLevel", "low | medium | high", "Pi runtime: chain-of-thought depth."],
+            ["runtime.pi.noTools", "boolean", "Pi runtime: disable all tool calls (pure chat)."],
+            ["runtime.pi.tools", "string[]", "Pi runtime: allow-list of tool names."],
+            ["runtime.pi.noSession", "boolean", "Pi runtime: skip session persistence."],
+            ["runtime.pi.permissionLevel", "ask | allow | deny", "Pi runtime: default permission ceiling for tool calls."],
+            ["runtime.mistralVibe.model", "string", "Mistral Vibe runtime: model override."],
+            ["runtime.mistralVibe.noSession", "boolean", "Mistral Vibe runtime: skip session persistence."],
           ]}
         />
 
@@ -385,7 +435,7 @@ function AgentsSection() {
             ["gitConfig.repoUrl", "string", "Yes*", "Git repository URL for autonomous file operations."],
             ["gitConfig.defaultBranch", "string", "No", "Default branch name (e.g., main)."],
             ["gitConfig.branch", "string", "No", "Specific branch to work on."],
-            ["gitConfig.pushPolicy", "after-each-commit | end-of-session | on-approval | never", "No", "When to push changes. Default: on-approval."],
+            ["gitConfig.pushPolicy", "after-each-commit | end-of-session | on-approval | never", "No", "When to push changes. The CRD does not set a default — the web-UI form initializes new agents to <code>on-approval</code>."],
             ["gitConfig.authMethod", "token | basic | ssh", "Yes*", "Authentication method."],
             ["gitConfig.credentialSecretRef", "string", "Yes*", "K8s Secret holding the credential."],
             ["githubConfig.credentialSecretRef", "string", "Yes*", "Secret for GitHub API access (GitHub MCP)."],
@@ -399,8 +449,10 @@ function AgentsSection() {
         <DocsTable
           headers={["Field", "Type", "Description"]}
           rows={[
-            ["mcpConnections[].connectionId", "string", "Reference to a saved McpConnection CR."],
+            ["mcpConnections[].connectionId", "string", "Opaque identifier of a saved <code>McpConnection</code> (matches the gateway DB row)."],
             ["mcpConnections[].name", "string", "Display name for this connection."],
+            ["mcpConnections[].slug", "string", "URL-safe slug used as the gateway-side routing key."],
+            ["mcpConnections[].serverId", "string", "Registry server ID or name (remote transport)."],
             ["mcpConnections[].transport", "remote | hub | sidecar", "Connection transport type."],
             ["mcpConnections[].source", "string", "Origin of the connection definition."],
             ["mcpServers", "string[]", "Legacy MCP server name references."],
@@ -425,7 +477,7 @@ function AgentsSection() {
         <DocsTable
           headers={["Field", "Type", "Description"]}
           rows={[
-            ["skills.files", "object (string → string)", "Map of relative .md file paths to content. Max 24 files, 16 KB each, 64 KB total."],
+            ["skills.files", "object (string → string)", "Map of relative .md file paths to content. Max 24 files, 16 KB each, 64 KB total; paths ≤ 256 chars."],
             ["skills.configMapRef", "string", "Reference to a ConfigMap containing skill files."],
           ]}
         />
@@ -594,7 +646,7 @@ function ChatSessionsSection() {
       <QuickRefCard title="Chat Reference" items={[
         { label: "History API", value: "GET /api/v1/chat-sessions" },
         { label: "Streaming Invoke", value: "POST /api/v1/agents/{name}/invoke/stream" },
-        { label: "Storage", value: "PostgreSQL + runtime thread state" },
+        { label: "Storage", value: "PostgreSQL (default) or SQLite (local dev fallback at <code>$TMP/kubesynapse-gateway.db</code>)" },
       ]} />
       <div id="chat-basics">
         <SectionHeading icon={MessageSquare}>Chat Session Basics</SectionHeading>
@@ -603,23 +655,40 @@ function ChatSessionsSection() {
           while chat-session history is stored by the gateway and listed per <code>agent_name</code> and namespace.
         </p>
         <CodeBlock code={`# List sessions for one agent
-curl "http://localhost:8080/api/v1/chat-sessions?agent_name=my-agent&namespace=default" \
+curl "http://localhost:8080/api/v1/chat-sessions?agent_name=my-agent&namespace=default" \\
   -H "Authorization: Bearer $TOKEN"
 
-# Replace the full stored message list for a session
-curl -X PUT http://localhost:8080/api/v1/chat-sessions/session-123/messages \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"messages":[{"message_id":"msg-1","role":"user","content":"Explain Kubernetes controllers","status":"complete"}]}'
-
-# Stream a live invoke
-curl -N -X POST http://localhost:8080/api/v1/agents/my-agent/invoke/stream \
+# Create a session
+curl -X POST "http://localhost:8080/api/v1/chat-sessions?namespace=default" \\
   -H "Authorization: Bearer $TOKEN" \\
   -H "Content-Type: application/json" \\
-  -d '{"message":"Explain Kubernetes controllers"}'`} lang="bash" />
+  -d '{"agent_name": "my-agent", "title": "Incident triage"}'
+
+# Replace the full stored message list for a session
+curl -X PUT http://localhost:8080/api/v1/chat-sessions/session-123/messages \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"messages":[{"message_id":"msg-1","role":"user","content":"Explain Kubernetes controllers","status":"complete"}]}'
+
+# Patch a session (rename title)
+curl -X PATCH "http://localhost:8080/api/v1/chat-sessions/session-123" \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"title": "Renamed session"}'
+
+# Delete a session
+curl -X DELETE "http://localhost:8080/api/v1/chat-sessions/session-123" \\
+  -H "Authorization: Bearer $TOKEN"
+
+# Stream a live invoke
+curl -N -X POST http://localhost:8080/api/v1/agents/my-agent/invoke/stream \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"prompt":"Explain Kubernetes controllers"}'`} lang="bash" />
         <Callout variant="info" title="Persistence semantics">
-          Saving chat messages replaces the stored message array for that session. Session saves can also
-          auto-promote a durable memory summary, while the runtime continues to manage its own thread state.
+          Saving chat messages replaces the stored message array for that session. Memory auto-promotion happens
+          from runtime invoke outcomes (workflow step results, HITL responses), not from this endpoint —
+          the runtime continues to manage its own thread state independently.
         </Callout>
       </div>
     </div>
@@ -654,11 +723,13 @@ function MemorySection() {
         </p>
         <DocsTable headers={["Mechanism", "Detail"]} rows={[
           ["Auto-promotion threshold", "Score >= 4.0 triggers automatic promotion. Records below this can be manually promoted."],
-          ["Fallback retrieval", "When no promoted records exist, the gateway falls back to records with score >= 3.5 (max 8)."],
-          ["Ranking formula", "token_overlap * 3.0 + procedural_type_bonus + recency_bonus + stored_score"],
+          ["Fallback retrieval", "When no promoted records exist, the gateway falls back to records with score >= 3.5 (up to 20, or up to the caller's <code>limit</code> parameter — default 8)."],
+          ["Ranking formula", "token_overlap * 3.0 + procedural_type_bonus (2.0 for procedural, 0.5 for other kinds) + recency_bonus + stored_score"],
           ["SHA-256 dedup", "New memory content is hashed and checked against existing records to avoid duplicates."],
-          ["Injection format", 'Memory is prepended to the system prompt: "You have persistent memory from prior conversations... [{topic}] {content[:280]}"'],
-          ["Memory types", "procedural, episodic, TASK_SUMMARY, DECISION, ERROR_PATTERN, CODEBASE_INSIGHT, HANDOFF, USER_PREFERENCE"],
+          ["Injection format", 'Memory is prepended to the system prompt as a 3-part block: a header line ("You have persistent memory from prior conversations…"), a bullet "- [{topic}] {content[:280]}" per record, and a footer line. The runtime context window also has 5 retention tiers: EPHEMERAL, SESSION, WORKSPACE, LONG_TERM, PERMANENT (LONG_TERM and PERMANENT go to Qdrant semantic store; SESSION and WORKSPACE go to JSONL).'],
+          ["Memory types", "Two kind values: <code>procedural</code> (recurring how-to patterns) and <code>episodic</code> (time-bounded events). Each record also carries a free-form <code>topic</code> string — common values are <code>response-summary</code>, <code>assistant-summary</code>, <code>repo-convention</code>, <code>workflow-outcome</code>, <code>workflow-success</code>, <code>workflow-failure</code>, <code>tool-usage</code>; default is <code>note</code>."],
+          ["Retention", "Records are stored in PostgreSQL <code>memory_records</code>. The operator-driven GC enforces the configured retention policy."],
+          ["Default policy", "Gateway normalizes missing fields: <code>maxInjectedMemories=8</code>, <code>maxInjectedChars=2400</code>, <code>autoPromote=true</code> (CRD default is <code>false</code> — gateway overrides to true at the API boundary)."],
         ]} />
       </div>
 
@@ -695,7 +766,7 @@ function WorkflowsSection() {
         { label: "CRD Kind", value: "AgentWorkflow" },
         { label: "Max Steps", value: "100" },
         { label: "Parallelism", value: "DAG wave-based" },
-        { label: "Phases", value: "pending → queued → running → completed/failed" },
+        { label: "Phases", value: "pending → queued → running → (waiting-approval) → completed / failed / cancelled" },
       ]} />
       <div id="wf-overview">
         <SectionHeading icon={ListOrdered}>Workflow Overview</SectionHeading>
@@ -727,6 +798,7 @@ function WorkflowsSection() {
           ["dependsOn", "string[]", "Step names that must complete before this step can start"],
           ["requireApproval", "boolean", "Pause for HITL approval via AgentApproval CR before execution"],
           ["verify", "string", "Verification prompt; step fails if the verification response is not PASS"],
+          ["reviewCriteria", "string", "Required for <code>type: review</code> steps — criteria the reviewer checks"],
           ["execution.timeoutSeconds", "integer", "Per-step deadline (min: 1)"],
           ["execution.maxAttempts", "integer", "Retry limit (min: 1)"],
           ["execution.backoffSeconds", "integer", "Delay between retries (min: 0)"],
@@ -757,7 +829,7 @@ function WorkflowsSection() {
       <div id="wf-conditional">
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Conditional Branching</h3>
         <DocsTable headers={["Field", "Type", "Description"]} rows={[
-          ["conditionExpr", "string", "Expression: contains / equals / not_equals / matches / and / or / not against dependency output paths"],
+          ["conditionExpr", "string", "Safe condition expression against dependency output paths. Operators: <code>contains</code>, <code>equals</code>, <code>not_equals</code>, <code>starts_with</code>, <code>ends_with</code>, <code>length_gt</code>, <code>length_lt</code>, <code>is_empty</code>, <code>not_empty</code>, <code>matches</code>; combine with <code>and</code> / <code>or</code> / <code>not</code> and string/numeric literals."],
           ["thenSteps", "string[]", "Step names to activate when the condition is true"],
           ["elseSteps", "string[]", "Step names to activate when the condition is false"],
         ]} />
@@ -856,14 +928,14 @@ function McpSection() {
       <SectionHeading icon={Plug}>MCP (Model Context Protocol)</SectionHeading>
       <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
         MCP connections provide tool surfaces to agents. KubeSynapse supports three transport models
-        and documents 10 bundled MCP tool sidecars in the current chart values.
+        and ships 10 bundled MCP tool sidecars plus a separate <code>collector</code> sidecar in the current chart values.
       </p>
 
       <div id="mcp-transports">
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Transport Models</h3>
         <DocsTable headers={["Transport", "Use Case", "Security"]} rows={[
-          ["remote", "External MCP servers and SaaS bridges", "Stored credentials; 6 auth types (none, bearer, basic, oauth2, apiKey, mTLS, token)"],
-          ["hub", "Shared in-cluster MCP services in mcp-hub namespace", "Bearer token auth; default-deny NetworkPolicies; allow ingress from app=ai-agent pods"],
+          ["remote", "External MCP servers and SaaS bridges", "Stored credentials; 7 auth types (none, bearer, basic, oauth2, apiKey, mTLS, token)"],
+          ["hub", "Shared in-cluster MCP services in mcp-hub namespace", "Bearer token auth; default-deny NetworkPolicies; allow ingress from <code>app=ai-agent</code> pods in namespaces labelled <code>kubesynapse.ai/tenant=true</code>"],
           ["sidecar", "Per-agent local tool containers", "localhost-only; strongest isolation; non-root UID 1000; readOnlyRootFilesystem; drop ALL capabilities"],
         ]} />
       </div>
@@ -896,8 +968,10 @@ function McpSection() {
         ]} />
         <Callout variant="info" title="Connection validation">
           Remote connections are validated via HTTP GET to the endpoint with resolved headers. Hub connections
-          check <code>http://{'server'}.mcp-hub.svc.cluster.local:{'port'}/healthz</code>. Sidecar connections
-          are marked validated at deployment time.
+          check <code>http://{'{release}'}-mcp-{'{server}'}.mcp-hub.svc.cluster.local:8000/mcp</code>
+          (port 8000, path <code>/mcp</code>; <code>{'{release}'}</code> is the Helm release name, default prefix
+          <code>kubesynapse-mcp-</code>). Sidecar connections are accepted as valid at save time — reachability
+          is confirmed when the agent pod first starts.
         </Callout>
       </div>
 
@@ -944,7 +1018,9 @@ function A2aSection() {
       <div id="a2a-network">
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">NetworkPolicies</h3>
         <p className="mb-3 text-[oklch(0.80_0.01_264)]">
-          The operator generates two NetworkPolicies per agent to enforce A2A boundaries at the network layer:
+          The operator generates two NetworkPolicies per agent to enforce A2A boundaries at the network layer.
+          The podSelector is <code>app=ai-agent</code> + <code>agent-name</code>; the namespaceSelector matches
+          the agent's namespace by metadata name.
         </p>
         <DocsTable headers={["Policy", "Selects", "Allows"]} rows={[
           ["{agent}-a2a-egress", "All agent pods", "Outbound to each allowed target pod (by namespace label + agent-name selector)"],
@@ -956,7 +1032,9 @@ function A2aSection() {
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Runtime Injection</h3>
         <p className="mb-3 text-[oklch(0.80_0.01_264)]">
           Every agent invocation receives a collaboration system note with its available peers and
-          delegation instructions. The operator injects these environment variables into every runtime pod:
+          delegation instructions. The operator injects these environment variables into every runtime pod
+          (note: the A2A endpoints are the only routes served outside <code>/api/v1</code> — they are mounted
+          at the gateway root):
         </p>
         <DocsTable headers={["Env Var", "Source", "Purpose"]} rows={[
           ["A2A_ALLOWED_CALLERS_JSON", "AIAgent.spec.a2a.allowedCallers", "Who can call this agent"],
@@ -970,8 +1048,8 @@ function A2aSection() {
       <div id="a2a-api">
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">A2A API Endpoints</h3>
         <DocsTable headers={["Method", "Path", "Description"]} rows={[
-          ["GET", "/a2a/.well-known/agent-card.json", "A2A capability card (skills, interfaces, auth schemes)"],
-          ["POST", "/a2a/{assistant_id}", "JSON-RPC 2.0 dispatcher — methods: message/send, message/stream, tasks/get"],
+          ["GET", "/.well-known/agent-card.json?assistant_id={id}&namespace={ns}", "A2A capability card (skills, interfaces, auth schemes). <code>assistant_id</code> is a required query parameter; <code>namespace</code> is optional (defaults to the gateway's default namespace). Served at the gateway root, no <code>/a2a</code> prefix."],
+          ["POST", "/a2a/{assistant_id}?namespace={ns}", "JSON-RPC 2.0 dispatcher — methods: message/send, message/stream, tasks/get"],
         ]} />
       </div>
 
@@ -1058,7 +1136,7 @@ function PoliciesSection() {
           Applied to the LLM response before it is returned to the caller.
         </p>
         <DocsTable headers={["Field", "Type", "Description"]} rows={[
-          ["outputGuardrails.maskPII", "boolean", "Automatically redact SSNs, credit card numbers, emails, and phone numbers"],
+          ["outputGuardrails.maskPII", "boolean", "Automatically redact SSNs, credit card numbers, emails, and phone numbers. Enforced at runtime by the api-gateway (not at the CRD/admission layer)."],
           ["outputGuardrails.blockedOutputPatterns", "string[]", "Custom regex patterns to redact from LLM output"],
           ["outputGuardrails.maxOutputTokens", "integer", "Hard limit on token count in the LLM response"],
         ]} />
@@ -1124,7 +1202,7 @@ function PoliciesSection() {
       <div id="policy-seal">
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Policy Seal</h3>
         <DocsTable headers={["Field", "Type", "Description"]} rows={[
-          ["sealed", "boolean", "Marks the policy immutable. The operator still resolves and hashes the policy, and Gatekeeper can block UPDATE and DELETE operations when sealing is enabled."],
+          ["sealed", "boolean", "Marks the policy immutable. CRD default: <code>false</code>. The operator hashes the policy and injects <code>KUBESYNAPSE_POLICY_HASH</code> and <code>KUBESYNAPSE_POLICY_NAME</code> env vars into the agent pod for sealed-policy attestation. Gatekeeper blocks UPDATE and DELETE operations when sealing is enabled."],
         ]} />
       </div>
 
@@ -1138,7 +1216,7 @@ function PoliciesSection() {
           ["memoryPolicy.maxInjectedMemories", "integer", "Maximum number of promoted memory records injected per request"],
           ["memoryPolicy.maxInjectedChars", "integer", "Maximum total characters of injected memory context (prevents context-window blowout)"],
           ["memoryPolicy.allowedMemoryTypes", "string[]", "Optional allow-list of memory types eligible for retrieval (e.g. procedural, episodic)"],
-          ["memoryPolicy.autoPromote", "boolean", "When true, the platform may auto-promote high-signal memories without a manual pin action"],
+          ["memoryPolicy.autoPromote", "boolean", "When true, the platform may auto-promote high-signal memories without a manual pin action. CRD default: <code>false</code>; the api-gateway normalizes this to <code>true</code> at the API boundary."],
         ]} />
       </div>
 
@@ -1400,9 +1478,8 @@ agentctl skills tools --agent my-agent      # Tools for an agent
 agentctl providers list                     # LLM provider registry
 agentctl webhooks list                      # Webhook receivers
 agentctl webhooks dispatch my-webhook       # Invoke a webhook
-agentctl webhooks executions                # List trigger executions
-agentctl webhooks execution-show <id>       # Show execution detail
-agentctl webhooks replay <id>               # Replay a dead-letter execution`}
+agentctl webhooks triggers                  # List workflow triggers
+agentctl webhooks trigger-show <name>       # Show trigger detail`}
         lang="bash"
       />
 
@@ -1521,7 +1598,7 @@ function ApiReferenceSection() {
           ["GET", "/api/v1/auth/oidc/start/{provider}", "Start OIDC login flow (PKCE)"],
           ["GET", "/api/v1/auth/oidc/callback/{provider}", "OIDC callback"],
           ["GET", "/api/v1/auth/saml/start/{provider}", "Start SAML login flow"],
-          ["POST", "/api/v1/auth/saml/callback/{provider}", "SAML ACS callback"],
+          ["GET", "/api/v1/auth/saml/metadata/{provider}", "SAML SP metadata XML"],
         ]} />
       </div>
 
@@ -1548,13 +1625,14 @@ function ApiReferenceSection() {
           ["PUT", "/api/v1/webhooks/{name}", "Update webhook receiver"],
           ["DELETE", "/api/v1/webhooks/{name}", "Delete webhook receiver"],
           ["POST", "/api/v1/webhooks/{name}/invoke?namespace={namespace}", "Public webhook invocation (HMAC-signed)"],
+          ["POST", "/api/v1/webhooks/{name}/generate-secret", "Generate new HMAC secret for webhook"],
           ["GET", "/api/v1/workflow-triggers", "List workflow triggers"],
           ["POST", "/api/v1/workflow-triggers", "Create workflow trigger"],
           ["PUT", "/api/v1/workflow-triggers/{name}", "Update workflow trigger"],
           ["DELETE", "/api/v1/workflow-triggers/{name}", "Delete workflow trigger"],
-          ["GET", "/api/v1/webhooks/dispatched?status=pending", "List trigger executions (filterable by status, namespace)"],
-          ["POST", "/api/v1/webhooks/dispatched/{id}/claim", "Atomically claim a pending execution (compare-and-set to queued)"],
-          ["PATCH", "/api/v1/webhooks/dispatched/{id}/status", "Update execution status and lineage metadata"],
+          ["GET", "/api/v1/webhooks/dispatched/pending", "List pending trigger executions awaiting claim"],
+          ["POST", "/api/v1/webhooks/dispatched/{execution_id}/claim", "Atomically claim a pending execution (compare-and-set to queued)"],
+          ["PATCH", "/api/v1/webhooks/dispatched/{execution_id}/status", "Update execution status and lineage metadata"],
         ]} />
       </div>
 
@@ -1571,9 +1649,54 @@ function ApiReferenceSection() {
         ]} />
       </div>
 
+      <div id="api-incidents">
+        <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Incidents</h3>
+        <DocsTable headers={["Method", "Path", "Description"]} rows={[
+          ["GET", "/api/v1/incidents", "List incidents"],
+          ["POST", "/api/v1/incidents", "Create incident"],
+          ["PUT", "/api/v1/incidents/{name}", "Upsert incident (idempotent)"],
+          ["PATCH", "/api/v1/incidents/{name}", "Update incident status (acknowledge, resolve, close)"],
+          ["GET", "/api/v1/incidents/{name}", "Get incident details"],
+          ["POST", "/api/v1/incidents/{name}/escalate", "Escalate incident"],
+          ["GET", "/api/v1/incidents/{name}/timeline", "Get incident timeline"],
+          ["POST", "/api/v1/webhooks/alertmanager", "Alertmanager webhook receiver"],
+        ]} />
+      </div>
+
+      <div id="api-intelligence">
+        <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Intelligence & Collectors</h3>
+        <DocsTable headers={["Method", "Path", "Description"]} rows={[
+          ["GET", "/api/v1/intelligence/collectors", "List collectors"],
+          ["POST", "/api/v1/intelligence/collectors", "Register collector"],
+          ["DELETE", "/api/v1/intelligence/collectors/{id}", "Unregister collector"],
+          ["POST", "/api/v1/intelligence/collect", "Trigger collection on all collectors"],
+          ["GET", "/api/v1/intelligence/tasks", "List collection tasks"],
+          ["GET", "/api/v1/intelligence/tasks/{id}", "Get task details"],
+          ["DELETE", "/api/v1/intelligence/tasks/{id}", "Delete task"],
+          ["POST", "/api/v1/intelligence/schedules", "Create schedule"],
+          ["PUT", "/api/v1/intelligence/schedules/{id}", "Update schedule"],
+          ["DELETE", "/api/v1/intelligence/schedules/{id}", "Delete schedule"],
+          ["POST", "/api/v1/intelligence/alerts", "Create alert rule"],
+          ["PUT", "/api/v1/intelligence/alerts/{id}", "Update alert rule"],
+          ["DELETE", "/api/v1/intelligence/alerts/{id}", "Delete alert rule"],
+          ["POST", "/api/v1/intelligence/prompt-context", "Fetch intelligence output as prompt context"],
+        ]} />
+      </div>
+
+      <div id="api-skills">
+        <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Skills Catalog</h3>
+        <DocsTable headers={["Method", "Path", "Description"]} rows={[
+          ["GET", "/api/v1/skills/catalog", "List available skills"],
+          ["GET", "/api/v1/skills/catalog/{id}", "Get skill details"],
+          ["POST", "/api/v1/skills/catalog/refresh", "Refresh skills catalog"],
+          ["GET", "/api/v1/skills/tools", "List available tools"],
+        ]} />
+      </div>
+
       <div id="api-admin">
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Admin & System</h3>
         <DocsTable headers={["Method", "Path", "Description"]} rows={[
+          ["GET", "/health", "Root health check (no auth)"],
           ["GET", "/api/v1/health", "Health check (auth mode, service status)"],
           ["GET", "/api/v1/ready", "Readiness check (DB connectivity)"],
           ["GET", "/api/v1/system/health", "Comprehensive system health (DB, K8s, CRD counts, NATS, Qdrant)"],
@@ -1584,7 +1707,7 @@ function ApiReferenceSection() {
           ["DELETE", "/api/v1/policies/{name}", "Delete AgentPolicy"],
           ["GET", "/api/v1/approvals/{name}", "Get AgentApproval"],
           ["PATCH", "/api/v1/approvals/{name}", "Record approve/deny decision"],
-          ["POST", "/api/v1/export/bundle", "Export agents/workflows/policies as YAML bundle"],
+          ["GET", "/api/v1/export/bundle?namespace=default", "Export agents, workflows, and policies as YAML bundle"],
           ["POST", "/api/v1/import/bundle", "Import YAML bundle"],
         ]} />
       </div>
@@ -1627,7 +1750,7 @@ function ExportImportSection() {
       <div id="ei-cli">
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Export / Import</h3>
         <CodeBlock code={`# Export via REST API
-curl -X POST "http://localhost:8080/api/v1/export/bundle?namespace=default" \\
+curl -X GET "http://localhost:8080/api/v1/export/bundle?namespace=default" \\
   -H "Authorization: Bearer $TOKEN" > bundle.yaml
 
 # Import via REST API
@@ -1643,11 +1766,11 @@ kubectl apply -f bundle.yaml`} lang="bash" />
       <div id="ei-api">
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">REST API Bundle Endpoints</h3>
         <DocsTable headers={["Method", "Path", "Description"]} rows={[
-          ["POST", "/api/v1/export/bundle?namespace=default", "Exports agents, workflows, and policies as a multi-doc YAML bundle"],
+          ["GET", "/api/v1/export/bundle?namespace=default", "Exports agents, workflows, and policies as a multi-doc YAML bundle"],
           ["POST", "/api/v1/import/bundle", "Imports a multi-doc YAML bundle, creating or updating resources"],
         ]} />
         <CodeBlock code={`# Export via REST API
-curl -X POST "http://localhost:8080/api/v1/export/bundle?namespace=default" \\
+curl -X GET "http://localhost:8080/api/v1/export/bundle?namespace=default" \\
   -H "Authorization: Bearer $TOKEN" > bundle.yaml
 
 # Import via REST API
@@ -1686,7 +1809,7 @@ function TroubleshootingSection() {
           ["Workflow never completes", "Step stuck in Running", "Verify approval was submitted via AgentApproval CR. Check worker pod logs for the step."],
           ["Step keeps failing and retrying", "execution.maxAttempts exhausted", "Inspect the step output artifact for error messages. Check verification prompt produces valid PASS/FAIL responses."],
           ["Loop step stalled", "Circuit breaker opened", "Check circuitBreaker.noProgressThreshold — increase it or the cooldownMinutes. Verify plan items are being marked complete."],
-          ["Conditional branch not taken", "Expected branch skipped", "Verify the conditionExpr syntax and that the referenced step output path exists. Use agentctl workflow logs to trace evaluation."],
+          ["Conditional branch not taken", "Expected branch skipped", "Verify the conditionExpr syntax and that the referenced step output path exists. Use <code>agentctl workflows logs &lt;workflow-name&gt;</code> to trace evaluation."],
           ["Wave parallelism not working", "Steps run sequentially despite no dependsOn", "Check AgentTenant.resourceQuota.maxParallelSteps (default: 4) and MAX_PARALLEL_STEPS env on the operator."],
           ["Verification fails repeatedly", "verifyRetries exhausted", "Simplify the verification prompt to produce unambiguous PASS/FAIL. Check the step output format."],
         ]} />
@@ -1765,11 +1888,17 @@ function WebhooksSection() {
       <div id="wh-receiver">
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">WebhookReceiver</h3>
         <DocsTable headers={["Field", "Type", "Default", "Description"]} rows={[
-          ["secretRef", "string (required)", "—", "K8s Secret reference (format: namespace/name#key or name#key)"],
-          ["ipAllowlist", "string[]", "empty (allow all)", "CIDR entries restricting which IPs can invoke this webhook"],
-          ["rateLimit", "integer", "60", "Requests per minute limit (min: 1)"],
-          ["maxPayloadBytes", "integer", "1048576 (1 MiB)", "Maximum allowed payload size (min: 1)"],
-          ["enabled", "boolean", "true", "Whether the webhook receiver is active"],
+          ["secretRef", "string (required)", "—", "K8s Secret reference. Two formats: <code>namespace/name#key</code> (reads the key from a Secret in that namespace) or <code>NAME#KEY</code> (falls back to reading the upper-cased token from an environment variable)"],
+          ["additionalSecrets", "object (key-id → string)", "{}", "Map of key-id → <code>namespace/name#key</code> references for zero-downtime HMAC key rotation"],
+          ["provider", "generic | github | slack | stripe | pagerduty | grafana", "generic", "Provider adapter — auto-selects header and signature algorithm"],
+          ["apiKeyEnabled", "boolean", "false", "Allow <code>X-API-Key</code> header authentication alongside HMAC"],
+          ["ipAllowlist", "string[]", "[] (allow all)", "CIDR allowlist restricting which IPs can invoke this webhook"],
+          ["rateLimit", "integer", "60", "Requests per minute (min: 1). Per-receiver limit, separate from the global invoke rate limit."],
+          ["maxConcurrent", "integer", "0 (unlimited)", "Maximum concurrent invocations (min: 0)"],
+          ["maxPayloadBytes", "integer", "1048576 (1 MiB)", "Maximum allowed payload size in bytes (min: 1, max: 16 MiB)"],
+          ["responseTimeoutSeconds", "integer", "30", "Webhook response timeout in seconds (min: 1, max: 300)"],
+          ["payloadSchema", "object (JSON Schema)", "{}", "Optional JSON Schema validated against the inbound payload before HMAC check"],
+          ["enabled", "boolean", "true", "Whether the webhook receiver accepts invocations"],
         ]} />
         <Callout variant="info" title="Public invoke endpoint">
           External systems call <code>POST /api/v1/webhooks/{'{'}name{'}'}/invoke?namespace=default</code> with HMAC-SHA256
@@ -1780,15 +1909,21 @@ function WebhooksSection() {
 
       <div id="wh-trigger">
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">WorkflowTrigger</h3>
+        <p className="mb-3 text-sm text-[oklch(0.80_0.01_264)]">
+          A trigger requires exactly one of <code>workflowRef</code> (run a multi-step workflow) or
+          <code>agentRef</code> (invoke a single agent directly).
+        </p>
         <DocsTable headers={["Field", "Type", "Description"]} rows={[
-          ["sourceRef", "string (required)", "WebhookReceiver name to listen on"],
-          ["sourceKind", "WebhookReceiver | AgentEvent", "Event source type"],
-          ["eventFilter", "object", "Filter on event payload fields to decide whether to trigger"],
-          ["workflowRef.name", "string (required)", "AgentWorkflow name to trigger"],
-          ["workflowRef.namespace", "string", "Workflow namespace (defaults to trigger namespace)"],
-          ["payloadMapping", "object", "Map webhook payload fields to workflow input / step prompts"],
+          ["sourceRef", "string (required)", "Name of the source resource (WebhookReceiver or AgentEvent)"],
+          ["sourceKind", "WebhookReceiver | AgentEvent", "Kind of source resource"],
+          ["eventFilter", "object", "JSON filter applied to the event payload before triggering"],
+          ["workflowRef.name / .namespace", "string (mutually exclusive with agentRef)", "AgentWorkflow to execute"],
+          ["agentRef.name / .namespace", "string (mutually exclusive with workflowRef)", "AIAgent to invoke directly"],
+          ["payloadMapping", "object", "Map webhook payload fields to workflow input or step prompts"],
           ["maxRetries", "integer", "Retry count on trigger failure (min: 0, default: 0)"],
           ["backoffSeconds", "integer", "Delay between retries (min: 0, default: 60)"],
+          ["notifications_on_success", "string[]", "Notification channels (e.g. <code>slack:#oncall</code>) fired when the trigger succeeds"],
+          ["notifications_on_failure", "string[]", "Notification channels fired when the trigger fails (after all retries)"],
           ["enabled", "boolean", "Whether the trigger is active (default: true)"],
         ]} />
       </div>
@@ -1820,16 +1955,25 @@ function WebhooksSection() {
 kind: WebhookReceiver
 metadata:
   name: github-webhook
+  namespace: default
 spec:
-  secretRef: github-webhook-secret#key
+  # secretRef supports two formats:
+  #   1. namespace/name#key  → reads from a K8s Secret (recommended)
+  #   2. NAME#KEY            → falls back to env var (upper-cased, dashes → underscores)
+  secretRef: default/github-webhook-secret#hmac-key
+  provider: github
+  apiKeyEnabled: false
   ipAllowlist:
     - 140.82.112.0/20
   rateLimit: 120
+  maxPayloadBytes: 4194304
+  responseTimeoutSeconds: 30
 ---
 apiVersion: kubesynapse.ai/v1alpha1
 kind: WorkflowTrigger
 metadata:
   name: pr-review-trigger
+  namespace: default
 spec:
   sourceRef: github-webhook
   sourceKind: WebhookReceiver
@@ -1838,9 +1982,14 @@ spec:
     action: opened
   workflowRef:
     name: code-review-pipeline
+    namespace: default
   payloadMapping:
     input: 'Review PR #{{number}}: {{title}}'
-    pr_number: "{{number}}"`} lang="yaml" />
+    pr_number: "{{number}}"
+  notifications_on_success:
+    - slack:#code-review
+  notifications_on_failure:
+    - slack:#oncall`} lang="yaml" />
       </div>
     </div>
   );
@@ -1898,18 +2047,34 @@ function TracesSection() {
           Runtime events are a separate indexed store for operational telemetry — error spikes, cost outliers,
           token usage, stuck runs. The signal-watch controller consumes these to drive automated analysis.
         </p>
-        <DocsTable headers={["Event Field", "Type", "Description"]} rows={[
+        <h4 className="text-base font-semibold text-[oklch(0.95_0.005_264)] mb-2">Event types</h4>
+        <DocsTable headers={["Category", "Event types"]} rows={[
+          ["Run lifecycle (runtime)", "<code>run.started</code>, <code>run.completed</code>, <code>run.error</code>"],
+          ["Tool calls (runtime)", "<code>tool.started</code>, <code>tool.completed</code>, <code>tool.failed</code>"],
+          ["LLM calls (runtime)", "<code>llm.call</code> (includes prompt/completion/cache/reasoning tokens and cost)"],
+          ["A2A delegations (operator)", "<code>agent.call.started</code>, <code>agent.call.completed</code>, <code>agent.call.failed</code>"],
+          ["Workflow steps (operator)", "<code>step.started</code>, <code>step.completed</code>, <code>step.failed</code>"],
+          ["Human-in-the-loop (runtime)", "<code>human.question</code> (HITL prompts raised by the agent)"],
+          ["Plan progress (runtime)", "<code>todo.updated</code> (loop checklist state)"],
+        ]} />
+        <h4 className="text-base font-semibold text-[oklch(0.95_0.005_264)] mb-2 mt-4">Common event fields</h4>
+        <DocsTable headers={["Field", "Type", "Description"]} rows={[
           ["event_id", "string", "Unique event ID (upsert key)"],
           ["namespace", "string", "Namespace of the agent or workflow"],
-          ["runtime_kind", "string", "opencode | pi | mistral-vibe"],
-          ["event_type", "string", "error | warning | metric | lifecycle"],
+          ["runtime_kind", "string", "<code>opencode</code> | <code>pi</code> | <code>mistral-vibe</code>"],
+          ["event_type", "string", "One of the 15 event types listed above"],
           ["agent_name", "string", "Agent that produced the event"],
           ["session_id", "string", "Session this event belongs to"],
-          ["severity", "string", "info | warning | error | critical"],
+          ["severity", "string", "<code>info</code> | <code>warning</code> | <code>error</code> | <code>critical</code>"],
+          ["duration_ms", "integer", "Latency of the originating action (tool/llm/agent/step)"],
+          ["payload", "object", "Event-type-specific structured payload"],
         ]} />
-        <Callout variant="info" title="Tool result payloads">
+        <Callout variant="info" title="Tool result payloads &amp; the 40K cap">
           Full <code>tool_result</code> payloads rendered in the Observatory come from the runtime's final
           response payload and are forwarded by the operator. They are not carried in the live runtime status events.
+          The OpenCode runtime truncates extracted tool output to <strong>40,000 characters</strong> at
+          <code>opencode-runtime/analysis.py</code> before forwarding into the trace pipeline — this prevents
+          single tool calls from flooding the trace store.
         </Callout>
       </div>
     </div>
@@ -1919,12 +2084,42 @@ function TracesSection() {
 function IntelligenceSection() {
   return (
     <div className="space-y-8">
-      <SectionHeading icon={Cpu}>Intelligence & Collectors</SectionHeading>
+      <SectionHeading icon={Cpu}>Intelligence &amp; Collectors</SectionHeading>
       <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
         The Run Intelligence layer collects operational data, runs automated analysis scripts,
         and can proactively invoke agents when anomalies are detected. Collectors are registered
         agents that execute scheduled or on-demand intelligence tasks.
       </p>
+
+      <div id="intel-run-intel">
+        <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Run Intelligence Layer</h3>
+        <p className="mb-3 text-sm text-[oklch(0.80_0.01_264)]">
+          A dedicated <code>signal_watch</code> controller inside the operator watches the runtime-events
+          store and fires three bundled <strong>system agents</strong> when deterministic thresholds are crossed.
+          System agents are installed as Helm <code>post-install</code> / <code>post-upgrade</code> hooks into
+          the <code>kubesynapse-system</code> namespace. LLM agents are only invoked for
+          explanation/escalation — cheap SQL / rule checks fire first.
+        </p>
+        <DocsTable headers={["System agent", "Trigger", "Purpose"]} rows={[
+          ["<code>ks-run-inspector</code>", "Workflow step failure rate &gt; 30% or ≥ 3 errors in window", "Root-cause analysis on failed runs with actionable remediation steps"],
+          ["<code>ks-signal-summarizer</code>", "Deterministic anomaly check fires within last 30 min", "Correlates signals into a human-readable incident brief with severity suggestion"],
+          ["<code>ks-spend-reviewer</code>", "Spend &gt; <code>$10</code> in window or token usage 3× rolling average", "Reviews cost outliers, recommends budget or runtime changes"],
+        ]} />
+        <h4 className="text-base font-semibold text-[oklch(0.95_0.005_264)] mb-2 mt-4">Run Intelligence endpoints</h4>
+        <DocsTable headers={["Method", "Path", "Description"]} rows={[
+          ["GET", "/api/v1/agent-graph", "Per-agent run graph — workflow fan-in/out, dependency edges, recent activity heatmap"],
+          ["GET", "/api/v1/spend", "Aggregated token + cost spend breakdown by agent, namespace, model, and time window"],
+        ]} />
+        <Callout variant="info" title="Tunable thresholds">
+          Each system agent exposes its own trigger thresholds in <code>values.yaml</code>:
+          <code>systemAgents.runInspector.triggers.{'{}'}{'{ minFailureRate, minErrorCount }'}</code>,
+          <code>systemAgents.signalSummarizer.triggers.maxSignalAgeMinutes</code>, and
+          <code>systemAgents.spendReviewer.triggers.{'{}'}{'{ costThresholdUsd, tokenSpikeMultiplier }'}</code>.
+          Disable individual agents via <code>systemAgents.runInspector.enabled: false</code> (or
+          <code>signalSummarizer.enabled: false</code> / <code>spendReviewer.enabled: false</code>) — they
+          ship enabled by default.
+        </Callout>
+      </div>
 
       <div id="intel-collectors">
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Collectors</h3>
@@ -1993,6 +2188,75 @@ curl -X POST http://localhost:8080/api/v1/intelligence/prompt-context \\
   );
 }
 
+function IncidentsSection() {
+  return (
+    <div className="space-y-8">
+      <SectionHeading icon={Bug}>Incidents</SectionHeading>
+      <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
+        Incidents are actionable alerts managed through the <code>AgentIncident</code> CRD. They
+        can be created manually via the REST API or automatically via the Alertmanager webhook.
+        The operator watches incidents and can escalate, acknowledge, resolve, and auto-trigger
+        remediation workflows.
+      </p>
+
+      <div id="incident-crd">
+        <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">AgentIncident CRD</h3>
+        <DocsTable headers={["Field", "Type", "Description"]} rows={[
+          ["title", "string (required)", "Human-readable incident title"],
+          ["description", "string", "Detailed incident description"],
+          ["severity", "critical | warning | info (required)", "Incident severity level"],
+          ["source", "alertmanager | manual | k8s-event | webhook", "How the incident was created (default: manual)"],
+          ["status", "firing | acknowledged | diagnosing | remediating | resolved | closed | escalated", "State machine (default: firing)"],
+          ["labels", "object (string → string)", "Key-value labels for filtering and correlation"],
+          ["annotations", "object (string → string)", "Rich metadata"],
+          ["assignedAgent", "string", "AIAgent name to auto-trigger for diagnosis / remediation"],
+          ["escalationTimeout", "string (pattern <code>^[0-9]+(m|h)$</code>)", "Duration before auto-escalation (e.g. <code>15m</code>, <code>2h</code>). Default 15m for critical, 30m for warning, 1h for info."],
+          ["escalated", "boolean", "Whether this incident has been escalated (default: false)"],
+          ["autoAcknowledge", "boolean", "Auto-acknowledge on creation (default: true)"],
+          ["workflowRef.name / .namespace", "string", "AgentWorkflow reference for auto-remediation"],
+          ["acknowledgedAt / resolvedAt / closedAt / escalatedAt", "date-time", "Lifecycle timestamps"],
+        ]} />
+      </div>
+
+      <div id="incident-lifecycle">
+        <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Lifecycle</h3>
+        <DocsTable headers={["Transition", "Mechanism"]} rows={[
+          ["firing → acknowledged", "PATCH /api/v1/incidents/{name} with status=acknowledged"],
+          ["acknowledged → diagnosing", "PATCH with status=diagnosing (operator or assigned agent begins triage)"],
+          ["diagnosing → remediating", "PATCH with status=remediating (workflow has started)"],
+          ["remediating → resolved", "PATCH with status=resolved, Alertmanager resolve event, or workflow success"],
+          ["resolved → closed", "PATCH with status=closed"],
+          ["Auto-escalation", "After <code>escalationTimeout</code> the operator sets status=escalated"],
+        ]} />
+        <Callout variant="info" title="Alertmanager ingestion">
+          Alertmanager posts to <code>POST /api/v1/webhooks/alertmanager</code>. The gateway fingerprints the
+          alert payload, creates or updates an <code>AgentIncident</code>, and emits a runtime event. The
+          operator's incident controller reconciles the state machine. Resolve events auto-transition to
+          <code>resolved</code>.
+        </Callout>
+      </div>
+
+      <div id="incident-example">
+        <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Example</h3>
+        <CodeBlock code={`apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentIncident
+metadata:
+  name: prod-outage-001
+spec:
+  severity: critical
+  source: alertmanager
+  title: High CPU on node-3
+  status: firing
+  assignedAgent: remediation-bot
+  escalationTimeout: 15m
+  workflowRef:
+    name: auto-remediate
+    namespace: default`} lang="yaml" />
+      </div>
+    </div>
+  );
+}
+
 function FaqSection() {
   return (
     <div className="space-y-8">
@@ -2035,11 +2299,11 @@ function SecuritySection() {
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Authentication & Tokens</h3>
         <DocsTable headers={["Mechanism", "Implementation", "Detail"]} rows={[
           ["Bearer tokens", "hmac.compare_digest", "Constant-time comparison prevents timing attacks"],
-          ["JWT (local auth)", "JWT_SECRET signing key", "Separate from collector token (not shared)"],
+          ["JWT (local auth)", "JWT_SECRET signing key", "Separate from collector token by default — but the collector token encryption key falls back to JWT_SECRET when INTELLIGENCE_COLLECTOR_TOKEN_KEY is unset (the chart does not set it by default). Set INTELLIGENCE_COLLECTOR_TOKEN_KEY to a unique value to fully separate the keys."],
           ["Shared token mode", "Single bearer token", "Development only — use local or OIDC for production"],
           ["OIDC", "PKCE flow", "Google, GitHub, Azure AD, custom providers"],
           ["SAML", "SP-initiated", "Enterprise SSO integration"],
-          ["Refresh tokens", "384-bit random + keyed hash", "Stored hashed; rotation on use"],
+          ["Refresh tokens", "384-bit random + <code>SHA-256(JWT_SECRET ‖ token)</code> (key-prefix; NOT HMAC)", "Stored hashed; rotation on use. The construction is key-prefix SHA-256 (<code>auth_store.py:1867</code>), not a proper MAC — do not reuse this pattern for new code."],
           ["Password hashing", "argon2id (pbkdf2 fallback)", "Auto-upgrades on next login"],
         ]} />
       </div>
@@ -2058,9 +2322,9 @@ function SecuritySection() {
       <div id="sec-network">
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Network Security</h3>
         <DocsTable headers={["Layer", "Control"]} rows={[
-          ["Agent isolation", "Per-agent NetworkPolicies: deny-all egress, explicit allows for LiteLLM, Qdrant, MCP hub"],
-          ["MCP hub", "Dedicated namespace; default-deny; agent ingress on port 8000 only; DNS + HTTPS egress only"],
-          ["A2A policies", "Operator generates per-agent A2A egress/ingress NetworkPolicies based on allowedCallers/allowedTargets"],
+          ["Agent isolation", "Single <code>app: ai-agent</code> NetworkPolicy: allow-list egress to DNS (53), LiteLLM (4000), Qdrant (6333), OTLP collector (4317), Kubernetes API (443/6443), and MCP servers (8000)"],
+          ["MCP hub", "Dedicated <code>mcp-hub</code> namespace with default-deny NetworkPolicy; agent ingress on port 8000 only from <code>app=ai-agent</code> pods in namespaces labelled <code>kubesynapse.ai/tenant=true</code>; DNS + HTTPS egress, plus sandbox egress to Prometheus (9090), Grafana (3000), Qdrant (6333), LiteLLM (4000) within the release namespace"],
+          ["A2A policies", "Operator generates per-agent A2A egress/ingress NetworkPolicies scoped to <code>allowedCallers</code> / <code>allowedTargets</code>"],
           ["Service exposure", "All services are ClusterIP — no LoadBalancer or NodePort by default"],
           ["Ingress", "TLS enforced via cert-manager; HSTS, X-Frame-Options, X-Content-Type-Options headers"],
         ]} />
@@ -2089,9 +2353,25 @@ function SecuritySection() {
           ["NATS token", "platformSecrets.native.natsToken", "Yes — randAscii(32) if empty"],
           ["MCP bearer token", "mcpHub.auth.bearerToken", "Yes — randAscii(48) on first install"],
         ]} />
+        <h4 className="text-base font-semibold text-[oklch(0.95_0.005_264)] mb-2 mt-4">External secret backends</h4>
+        <p className="mb-3 text-sm text-[oklch(0.80_0.01_264)]">
+          The chart supports <code>platformSecrets.mode: external-secrets</code> to render a first-class
+          <code>ExternalSecret</code> resource that syncs LLM API keys from a pre-configured
+          <code>ClusterSecretStore</code>. Set <code>platformSecrets.externalSecrets.refreshInterval</code>
+          (default <code>1h</code>) and <code>platformSecrets.externalSecrets.createClusterSecretStore</code>
+          (default <code>true</code>) to control sync. The <code>native</code> mode (default) stores
+          secrets in Kubernetes Secrets within the release namespace.
+        </p>
+        <DocsTable headers={["Backend", "Configuration", "Notes"]} rows={[
+          ["External Secrets Operator", "<code>platformSecrets.mode: external-secrets</code>", "Reference AWS Secrets Manager, GCP Secret Manager, Azure Key Vault, or any ESO provider via a <code>ClusterSecretStore</code>. The chart renders the <code>ExternalSecret</code> and consumes the synced Secret."],
+          ["Vault / Sealed Secrets / SOPS", "Out-of-band, bring your own", "Render the LLM API keys Secret manually with your preferred tool, then leave <code>platformSecrets.mode: native</code>. The chart re-uses the existing Secret data on upgrade."],
+        ]} />
         <Callout variant="warning" title="Never commit secrets">
-          Use External Secrets Operator, Sealed Secrets, or Vault CSI for production. The <code>native</code> mode
-          stores secrets in Kubernetes Secrets within the release namespace.
+          Treat the <code>native</code> mode as a development convenience only. For production, set
+          <code>platformSecrets.mode: external-secrets</code> and ensure the required
+          <code>litellmMasterKey</code>, <code>apiGatewaySharedToken</code>, <code>databasePassword</code>, and
+          <code>jwtSecret</code> are present in the backing store. The chart fails the install with a clear
+          error if any of these are empty on first install.
         </Callout>
       </div>
 
@@ -2164,7 +2444,7 @@ function ComposerSection() {
           ["Approval gates", "Mark any step as requiring human approval before execution"],
           ["Loop steps", "Configure iterative execution with loop config"],
           ["Conditional branching", "Route execution based on step output conditions"],
-          ["Auto-retry", "Failed steps automatically retry with configurable backoff"],
+          ["YAML export", "Export the canvas to a complete AgentWorkflow YAML for git-tracked authoring — retry/backoff/timeout fields are configurable in YAML, not in the visual composer."],
         ]} />
       </div>
 
@@ -2173,6 +2453,8 @@ function ComposerSection() {
         <p className="text-sm text-[oklch(0.80_0.01_264)] mb-4">
           After running a workflow, use the Workspace Files panel to inspect what each agent produced.
           The file browser appears at the bottom of the composer when an agent step node is selected.
+          Text files (Markdown, YAML, JSON, Python, TypeScript, etc.) render in a Monaco preview with syntax
+          highlighting. Image files render inline (PNG, JPG, JPEG, GIF, SVG, WebP, BMP, ICO).
         </p>
         <DocsTable headers={["Action", "How"]} rows={[
           ["Browse files", "Expand the Workspace Files panel at the bottom of the composer"],
@@ -2228,6 +2510,7 @@ export const SECTIONS: DocSection[] = [
     subsections: [
       { id: "arch-overview", title: "System Overview" },
       { id: "arch-control", title: "Control Plane" },
+      { id: "arch-tenant", title: "Multi-Tenancy" },
       { id: "arch-execution", title: "Execution Plane" },
       { id: "arch-gateway", title: "API Gateway" },
     ],
@@ -2376,6 +2659,18 @@ export const SECTIONS: DocSection[] = [
     content: <ObservabilitySection />,
   },
   {
+    id: "incidents",
+    title: "Incidents",
+    icon: Bug,
+    searchText: "incidents alerts agentincident crd alertmanager webhook escalation severity status acknowledge resolve lifecycle remediation workflow",
+    subsections: [
+      { id: "incident-crd", title: "AgentIncident CRD" },
+      { id: "incident-lifecycle", title: "Lifecycle" },
+      { id: "incident-example", title: "Example" },
+    ],
+    content: <IncidentsSection />,
+  },
+  {
     id: "cli",
     title: "CLI Reference",
     icon: Terminal,
@@ -2396,6 +2691,9 @@ export const SECTIONS: DocSection[] = [
       { id: "api-providers", title: "LLM Providers" },
       { id: "api-webhooks", title: "Webhooks & Triggers" },
       { id: "api-mcp", title: "MCP & Catalog" },
+      { id: "api-incidents", title: "Incidents" },
+      { id: "api-intelligence", title: "Intelligence" },
+      { id: "api-skills", title: "Skills Catalog" },
       { id: "api-admin", title: "Admin & System" },
     ],
     content: <ApiReferenceSection />,
@@ -2443,8 +2741,9 @@ export const SECTIONS: DocSection[] = [
     id: "intelligence",
     title: "Intelligence & Collectors",
     icon: Cpu,
-    searchText: "intelligence collectors run analysis automation schedules alerts cron scripts anomaly detection prompt context system agents collection tasks",
+    searchText: "intelligence collectors run analysis automation schedules alerts cron scripts anomaly detection prompt context system agents collection tasks signal watch run inspector spend reviewer",
     subsections: [
+      { id: "intel-run-intel", title: "Run Intelligence Layer" },
       { id: "intel-collectors", title: "Collectors" },
       { id: "intel-tasks", title: "Collection Tasks" },
       { id: "intel-schedules", title: "Schedules" },

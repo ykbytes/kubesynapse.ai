@@ -1,25 +1,24 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, createElement } from "react";
 import { motion, useInView, AnimatePresence } from "framer-motion";
 import {
-  ArrowRight, ArrowLeftRight, Bot, BrainCircuit, CheckCircle2, ChevronDown, Circle, Clock,
+  ArrowRight, Bot, BrainCircuit, Check, CheckCircle2, ChevronDown, Clock,
   GitBranch, GripVertical, LayoutGrid, ListChecks, LoaderCircle, Lock,
-  Maximize2, MessageSquare, PanelLeftClose, PanelLeftOpen, Play, Plus, Radio,
-  RefreshCw, Save, Search, Server, Settings, Shield, ShieldCheck, Sparkles, Telescope, UserCheck,
-  Workflow, XCircle,
+  Maximize2, Menu, MessageSquare, PanelLeftClose, PanelLeftOpen, PanelRightClose, Play, Plus, Radio,
+  RefreshCw, Save, Search, Server, Settings, Shield, ShieldCheck, Sparkles, Star, Telescope, UserCheck,
+  Workflow, X, XCircle,
   Terminal, Copy,
   Boxes, Code, Puzzle, Activity, Eye,
   BookOpen, Cpu, Gauge, AlertTriangle, Wrench,
   MonitorDot, Layers, FolderTree, ChevronRight,
-  Check,
-  Menu,
-  X,
-  Star,
+  FileText, Hash, Sigma, History, Zap, TerminalSquare,
+  Trash2, Link2, Edit3, Lightbulb, Compass, BarChart3, Activity as ActivityIcon,
   GitCommitHorizontal,
   type LucideIcon,
 } from "lucide-react";
 import { BRAND } from "@/lib/brand";
 import { cn } from "@/lib/utils";
 import { KubeSynapseLogo } from "@/components/shared/KubeSynapseLogo";
+import { StaticAtmosphere } from "./StaticAtmosphere";
 
 const DocumentationPanel = lazy(() =>
   import("../docs/DocumentationPanel").then((m) => ({ default: m.DocumentationPanel })),
@@ -90,15 +89,15 @@ interface TerminalScene {
 }
 
 const colorMap: Record<string, string> = {
-  comment: "text-[oklch(0.62_0.01_264)]",
-  command: "text-[oklch(0.75_0.12_188)]",
-  string: "text-[oklch(0.76_0.16_154)]",
-  flag: "text-[oklch(0.82_0.16_84)]",
-  output: "text-[oklch(0.82_0.01_264)]",
-  yamlKey: "text-[oklch(0.75_0.12_308)]",
-  yamlVal: "text-[oklch(0.85_0.01_264)]",
-  prompt: "text-[oklch(0.76_0.16_154)]",
-  list: "text-[oklch(0.85_0.01_264)]",
+  comment: "text-[oklch(0.7_0.012_264)]",
+  command: "text-[oklch(0.82_0.13_188)]",
+  string: "text-[oklch(0.82_0.16_154)]",
+  flag: "text-[oklch(0.88_0.16_84)]",
+  output: "text-[oklch(0.92_0.005_264)]",
+  yamlKey: "text-[oklch(0.82_0.12_308)]",
+  yamlVal: "text-[oklch(0.92_0.005_264)]",
+  prompt: "text-[oklch(0.82_0.16_154)]",
+  list: "text-[oklch(0.92_0.005_264)]",
   accent: "text-[oklch(0.742_0.132_233)]",
   success: "text-[oklch(0.76_0.16_154)]",
   muted: "text-[oklch(0.62_0.01_264)]",
@@ -413,7 +412,9 @@ function TerminalExperience({ className }: { className?: string }) {
 
   return (
     <div className={cn("w-full text-left", className)}>
-      <div className="overflow-hidden rounded-[30px] border border-[oklch(0.31_0.012_264)] bg-[oklch(0.12_0.006_264)] shadow-[0_28px_90px_-36px_rgba(0,0,0,0.75)] ring-1 ring-[oklch(0.25_0.01_264)]">
+      <div className="relative overflow-hidden rounded-[30px] border border-[oklch(0.4_0.015_264)] bg-[oklch(0.16_0.012_264)] shadow-[0_28px_90px_-36px_rgba(0,0,0,0.85)] shadow-black/40 ring-1 ring-inset ring-white/[0.04] backdrop-blur-2xl">
+        {/* Top glass edge highlight */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/15 to-transparent" />
         <div className="border-b border-[oklch(0.25_0.01_264)] bg-[linear-gradient(180deg,oklch(0.16_0.009_264),oklch(0.138_0.008_264))]">
           <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
             <div className="flex min-w-0 items-center gap-3">
@@ -527,9 +528,9 @@ function TerminalExperience({ className }: { className?: string }) {
           role="tabpanel"
           aria-labelledby={`terminal-scene-tab-${currentScene.id}`}
           ref={terminalBodyRef}
-          className="relative max-h-[31rem] min-h-[18rem] overflow-auto bg-[radial-gradient(circle_at_top,oklch(0.19_0.012_264)_0%,oklch(0.12_0.006_264)_58%)] px-4 py-4 font-mono text-[12px] leading-6 sm:px-5 sm:py-5 sm:text-[13px]"
+          className="relative max-h-[31rem] min-h-[18rem] overflow-auto bg-[oklch(0.13_0.01_264)] px-4 py-4 font-mono text-[12px] leading-7 selection:bg-[oklch(0.708_0.101_188/0.3)] sm:px-5 sm:py-5 sm:text-[13px]"
         >
-          <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,oklch(0.2_0.012_264/0.35),transparent)]" />
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-12 bg-[linear-gradient(180deg,rgba(255,255,255,0.03),transparent)]" />
           <AnimatePresence mode="wait">
             <motion.div
               key={currentScene.id}
@@ -551,17 +552,17 @@ function TerminalExperience({ className }: { className?: string }) {
                     <span>&nbsp;</span>
                   ) : currentScene.mode === "editor" ? (
                     <div className="grid grid-cols-[2.25rem_minmax(0,1fr)] items-start gap-x-4 text-left">
-                      <span className="select-none text-right tabular-nums text-[oklch(0.45_0.01_264)]">
+                      <span className="select-none text-right tabular-nums text-[oklch(0.5_0.01_264)]">
                         {line.lineNumber ?? ""}
                       </span>
-                      <span className={cn("min-w-0 whitespace-pre-wrap break-words text-left", colorMap[line.color || "output"] || "text-[oklch(0.82_0.01_264)]")}>
+                      <span className={cn("min-w-0 whitespace-pre-wrap break-words text-left [text-shadow:0_1px_0_rgba(0,0,0,0.5)]", colorMap[line.color || "output"] || "text-[oklch(0.92_0.005_264)]")}>
                         {line.text}
                       </span>
                     </div>
                   ) : (
                     <div className="grid grid-cols-[1rem_minmax(0,1fr)] items-start gap-x-3 text-left">
-                      <span className="select-none text-[oklch(0.76_0.16_154/0.8)]">{line.prefix ?? ""}</span>
-                      <span className={cn("min-w-0 whitespace-pre-wrap break-words text-left", colorMap[line.color || "output"] || "text-[oklch(0.82_0.01_264)]")}>
+                      <span className="select-none text-[oklch(0.78_0.16_154/0.9)] [text-shadow:0_1px_0_rgba(0,0,0,0.5)]">{line.prefix ?? ""}</span>
+                      <span className={cn("min-w-0 whitespace-pre-wrap break-words text-left [text-shadow:0_1px_0_rgba(0,0,0,0.5)]", colorMap[line.color || "output"] || "text-[oklch(0.92_0.005_264)]")}>
                         {line.text}
                       </span>
                     </div>
@@ -797,14 +798,16 @@ function AnimatedCounter({ target, suffix = "" }: { target: number; suffix?: str
 
 function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
   return (
-    <section className="relative overflow-hidden px-4 pb-20 pt-16 sm:px-6 md:pb-28 md:pt-32">
+    <section className="relative overflow-hidden px-4 pb-16 pt-12 sm:px-6 md:pb-24 md:pt-24">
+      {/* Static atmosphere */}
+      <StaticAtmosphere />
       {/* Background grid */}
       <div
-        className="pointer-events-none absolute inset-0 opacity-[0.04]"
+        className="pointer-events-none absolute inset-0 opacity-[0.02]"
         style={{
           backgroundImage:
             "linear-gradient(to right, oklch(0.958 0.004 264) 1px, transparent 1px), linear-gradient(to bottom, oklch(0.958 0.004 264) 1px, transparent 1px)",
-          backgroundSize: "32px 32px",
+          backgroundSize: "40px 40px",
         }}
       />
       {/* Animated gradient orbs */}
@@ -838,7 +841,7 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.1 }}
-          className="text-3xl font-extrabold tracking-tight text-[oklch(0.968_0.004_264)] sm:text-5xl md:text-6xl lg:text-7xl"
+          className="text-3xl font-extrabold tracking-tight text-[oklch(0.968_0.004_264)] sm:text-4xl md:text-5xl lg:text-6xl"
         >
           Kubernetes-native{" "}
           <span className="bg-gradient-to-r from-[oklch(0.758_0.120_188)] via-[oklch(0.72_0.14_210)] to-[oklch(0.742_0.132_233)] bg-clip-text text-transparent">
@@ -850,11 +853,11 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.2 }}
-          className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-[oklch(0.82_0.01_264)] sm:text-lg md:text-xl"
+          className="mx-auto mt-5 max-w-2xl text-base leading-relaxed text-[oklch(0.85_0.01_264)] sm:text-base md:text-lg"
         >
           Self-hosted agent infrastructure for teams that want workflows, tools,
           memory, and observability to live inside the cluster. Deploy AI agents
-          for incident response, infrastructure work, and research pipelines —
+          for incident response, infrastructure operations, and platform automation —
           hardened by default, no security team required.
         </motion.p>
 
@@ -864,7 +867,7 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.7, delay: 0.4 }}
           id="install"
-          className="mx-auto mt-8 max-w-5xl scroll-mt-24"
+          className="mx-auto mt-6 max-w-5xl scroll-mt-20"
         >
           <TerminalExperience />
         </motion.div>
@@ -873,21 +876,24 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.3 }}
-          className="mt-8 flex flex-col items-stretch gap-4 sm:flex-row sm:items-center sm:justify-center"
+          className="mt-6 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-center"
         >
-          <a
+          <motion.a
             href="#install"
-            className="group relative flex w-full items-center justify-center gap-2 rounded-xl bg-[oklch(0.708_0.101_188)] px-7 py-3.5 text-sm font-semibold text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)] transition-all hover:shadow-xl hover:shadow-[oklch(0.708_0.101_188/0.45)] active:scale-[0.98] sm:w-auto"
+            className="group relative flex w-full items-center justify-center gap-2 rounded-xl bg-[oklch(0.708_0.101_188)] px-7 py-3 text-sm font-semibold text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)] sm:w-auto focus-visible:ring-2 focus-visible:ring-[oklch(0.708_0.101_188)] focus-visible:ring-offset-2 focus-visible:ring-offset-[oklch(0.18_0.01_264)]"
+            whileHover={{ x: [0, 2, -2, 0] }}
+            whileTap={{ scale: 0.98 }}
+            transition={{ type: "spring", stiffness: 300 }}
           >
             <span className="absolute inset-0 -z-10 rounded-xl bg-[oklch(0.708_0.101_188)] opacity-0 blur-xl motion-safe:group-hover:opacity-50 transition-opacity" />
             <Terminal className="h-4 w-4" />
             Start with Kind
             <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-          </a>
+          </motion.a>
           <button
             type="button"
             onClick={onOpenDocs}
-            className="flex w-full items-center justify-center gap-2 rounded-xl border border-[oklch(0.4_0.015_264)] bg-[oklch(0.206_0.009_264/0.8)] px-7 py-3.5 text-sm font-semibold text-[oklch(0.85_0.01_264)] shadow-sm backdrop-blur-sm transition-all hover:border-[oklch(0.708_0.101_188/0.4)] hover:text-[oklch(0.958_0.004_264)] sm:w-auto"
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-[oklch(0.45_0.015_264)] bg-[oklch(0.206_0.009_264/0.8)] px-7 py-3 text-sm font-semibold text-[oklch(0.85_0.01_264)] shadow-sm backdrop-blur-sm transition-all hover:border-[oklch(0.708_0.101_188/0.5)] hover:text-[oklch(0.958_0.004_264)] sm:w-auto focus-visible:ring-2 focus-visible:ring-[oklch(0.708_0.101_188)] focus-visible:ring-offset-2 focus-visible:ring-offset-[oklch(0.18_0.01_264)]"
           >
             <BookOpen className="h-4 w-4 text-[oklch(0.708_0.101_188)]" />
             View Documentation
@@ -899,10 +905,10 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.8, duration: 0.6 }}
-          className="mt-12 flex flex-wrap items-center justify-center gap-6 text-center sm:gap-10"
+          className="mt-8 flex flex-wrap items-center justify-center gap-5 text-center sm:gap-8"
         >
           {[
-            { label: "CRD Types", value: 12, suffix: "" },
+            { label: "CRD Types", value: 13, suffix: "" },
             { label: "MCP Sidecars", value: 10, suffix: "" },
             { label: "CLI Commands", value: 82, suffix: "" },
             { label: "Security Layers", value: 4, suffix: "" },
@@ -957,16 +963,17 @@ function EcosystemCloud() {
   ];
 
   return (
-    <section className="border-y border-[oklch(0.3_0.01_264)] bg-[oklch(0.149_0.008_264/0.8)] px-4 py-12 sm:px-6">
+    <section className="border-y border-[oklch(0.35_0.01_264)] bg-[oklch(0.19_0.01_264)] px-4 py-10 sm:px-6">
+      <StaticAtmosphere />
       <div className="mx-auto max-w-6xl">
-        <p className="mb-8 text-center text-xs font-semibold uppercase tracking-widest text-[oklch(0.62_0.01_264)]">
+        <p className="mb-6 text-center text-xs font-semibold uppercase tracking-widest text-[oklch(0.68_0.01_264)]">
           Built for the Kubernetes Ecosystem
         </p>
-        <div className="flex flex-wrap items-center justify-center gap-3">
+        <div className="flex flex-wrap items-center justify-center gap-2.5">
           {tools.map((tool) => (
             <motion.span
               key={tool.name}
-              className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-semibold backdrop-blur-sm transition-all hover:scale-105 ${tool.style}`}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-semibold backdrop-blur-sm transition-all hover:scale-105 ${tool.style.replace('/30', '/40').replace('/8', '/10')}`}
               whileHover={{ y: -2 }}
               transition={{ duration: 0.15 }}
             >
@@ -1026,7 +1033,7 @@ function ProblemSection() {
           </motion.h2>
         </motion.div>
 
-        <div className="grid gap-6 md:grid-cols-3">
+        <div className="grid gap-5 md:grid-cols-3">
           {problems.map((p, i) => {
             const Icon = p.icon;
             return (
@@ -1036,13 +1043,13 @@ function ProblemSection() {
                 initial="hidden"
                 animate={inView ? "visible" : "hidden"}
                 transition={{ delay: i * 0.1 }}
-                className={`group rounded-2xl border border-[oklch(0.35_0.015_264)] border-l-4 bg-[oklch(0.22_0.012_264/0.8)] p-6 backdrop-blur-sm transition-all hover:border-[oklch(0.758_0.120_188/0.5)] hover:shadow-lg hover:shadow-[oklch(0.708_0.101_188/0.08)] hover:-translate-y-1 sm:p-8 ${p.accent}`}
+                className={`group rounded-2xl border border-[oklch(0.4_0.015_264)] border-l-4 bg-[oklch(0.22_0.012_264)] p-5 backdrop-blur-sm transition-all hover:border-[oklch(0.708_0.101_188/0.6)] hover:shadow-[0_0_30px_-8px_oklch(0.708_0.101_188/0.12)] hover:-translate-y-1 sm:p-6 ${p.accent}`}
               >
-                <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.1)] text-[oklch(0.708_0.101_188)] ring-1 ring-[oklch(0.708_0.101_188/0.2)] transition-colors group-hover:bg-[oklch(0.708_0.101_188/0.15)]">
-                  <Icon className="h-6 w-6" />
+                <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.1)] text-[oklch(0.708_0.101_188)] ring-1 ring-[oklch(0.708_0.101_188/0.2)] transition-colors group-hover:bg-[oklch(0.708_0.101_188/0.15)]">
+                  <Icon className="h-5 w-5" />
                 </div>
-                <h3 className="text-lg font-semibold text-[oklch(0.958_0.004_264)]">{p.title}</h3>
-                <p className="mt-3 text-sm leading-relaxed text-[oklch(0.82_0.01_264)]">{p.description}</p>
+                <h3 className="text-base font-semibold text-[oklch(0.958_0.004_264)]">{p.title}</h3>
+                <p className="mt-2 text-sm leading-relaxed text-[oklch(0.8_0.01_264)]">{p.description}</p>
               </motion.div>
             );
           })}
@@ -1126,8 +1133,9 @@ function SecuritySection() {
   };
 
   return (
-    <section id="security" className="relative overflow-hidden px-4 py-24 sm:px-6 md:py-36" ref={ref}>
-      <div className="absolute inset-0 bg-gradient-to-b from-[oklch(0.142_0.020_264)] via-[oklch(0.149_0.008_264)] to-[oklch(0.164_0.007_264)]" />
+    <section id="security" className="relative overflow-hidden px-4 py-20 sm:px-6 md:py-28" ref={ref}>
+      <StaticAtmosphere />
+      <div className="absolute inset-0 bg-gradient-to-b from-[oklch(0.18_0.02_264)] via-[oklch(0.19_0.01_264)] to-[oklch(0.20_0.01_264)]" />
 
       <div className="relative mx-auto max-w-5xl">
         {/* Header */}
@@ -1141,11 +1149,11 @@ function SecuritySection() {
             <ShieldCheck className="h-3.5 w-3.5 text-[oklch(0.758_0.101_188)]" />
             <span className="text-xs font-semibold tracking-wide text-[oklch(0.758_0.101_188)]">Security First</span>
           </motion.div>
-          <motion.h2 variants={itemVariants} className="text-3xl font-bold tracking-tight text-[oklch(0.968_0.004_264)] sm:text-5xl">
+          <motion.h2 variants={itemVariants} className="text-3xl font-bold tracking-tight text-[oklch(0.968_0.004_264)] sm:text-4xl">
             Defense in{" "}
             <span className="bg-gradient-to-r from-[oklch(0.758_0.120_188)] to-[oklch(0.742_0.132_233)] bg-clip-text text-transparent">Depth</span>
           </motion.h2>
-          <motion.p variants={itemVariants} className="mx-auto mt-5 max-w-xl text-base leading-relaxed text-[oklch(0.78_0.01_264)]">
+          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-[oklch(0.8_0.01_264)]">
             Four independent layers protect every agent runtime — no single misconfiguration can compromise the platform.
           </motion.p>
         </motion.div>
@@ -1260,7 +1268,7 @@ function SecuritySection() {
 function UIPreviewSection() {
   const ref = useRef(null);
   const inView = useInView(ref, { once: true, margin: "-60px" });
-  const [activeTab, setActiveTab] = useState<"composer" | "workflow" | "agents" | "steps" | "policies" | "observatory">("composer");
+  const [activeTab, setActiveTab] = useState<"composer" | "workflow" | "agents" | "steps" | "policies" | "observatory" | "intelligence" | "incidents">("composer");
 
   const tabs = [
     { id: "composer" as const, label: "Composer", icon: Workflow, desc: "Visual workflow builder" },
@@ -1283,29 +1291,29 @@ function UIPreviewSection() {
   }, [inView]);
 
   return (
-    <section ref={ref} className="relative overflow-hidden py-24">
-      <div className="absolute inset-0 bg-gradient-to-b from-[oklch(0.145_0.022_264)] via-[oklch(0.13_0.02_264)] to-[oklch(0.18_0.025_264)]" />
-      <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: "radial-gradient(oklch(0.72_0.012_264) 1px, transparent 1px)", backgroundSize: "32px 32px" }} />
+    <section ref={ref} className="relative overflow-hidden py-20">
+      <StaticAtmosphere />
+      <div className="absolute inset-0 bg-gradient-to-b from-[oklch(0.10_0.012_264)] via-[oklch(0.13_0.012_264)] to-[oklch(0.15_0.012_264)]" />
 
       <div className="relative mx-auto max-w-7xl px-6">
         <div className="mx-auto max-w-3xl text-center">
-          <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[oklch(0.72_0.012_264)]/20 bg-[oklch(0.72_0.012_264)]/5 px-4 py-1.5">
+          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-[oklch(0.72_0.012_264)]/20 bg-[oklch(0.72_0.012_264)]/5 px-4 py-1.5">
             <Sparkles className="h-3.5 w-3.5 text-[oklch(0.72_0.012_264)]" />
             <span className="text-xs font-medium text-[oklch(0.72_0.012_264)]">Interactive Preview</span>
           </div>
-          <h2 className="text-4xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-5xl">
+          <h2 className="text-3xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl">
             See the Console{" "}
             <span className="bg-gradient-to-r from-[oklch(0.72_0.012_264)] to-[oklch(0.65_0.018_264)] bg-clip-text text-transparent">
               In Action
             </span>
           </h2>
-           <p className="mx-auto mt-4 max-w-2xl text-base text-[oklch(0.72_0.012_264)]">
-             Explore live workflows, manage agents with CRD-native tooling, enforce security policies, and inspect execution traces — all from the console.
-           </p>
-        </div>
+           <p className="mx-auto mt-3 max-w-2xl text-base text-[oklch(0.8_0.01_264)]">
+            Explore live workflows, manage agents with CRD-native tooling, enforce security policies, and inspect execution traces — all from the console.
+          </p>
+       </div>
 
-        <div className="mt-10 flex justify-center">
-          <div className="inline-flex rounded-2xl border border-[oklch(0.72_0.012_264)]/15 bg-[oklch(0.18_0.025_264)]/80 p-1.5 backdrop-blur-sm">
+       <div className="mt-8 flex justify-center">
+          <div className="inline-flex rounded-2xl border border-[oklch(0.32_0.014_264)] bg-[oklch(0.16_0.012_264)] p-1.5 shadow-xl shadow-black/30">
             {tabs.map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
@@ -1316,8 +1324,8 @@ function UIPreviewSection() {
                   className={cn(
                     "relative flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-all",
                     isActive
-                      ? "bg-[oklch(0.72_0.012_264)]/15 text-[oklch(0.958_0.004_264)] shadow-lg shadow-[oklch(0.72_0.012_264)]/5"
-                      : "text-[oklch(0.72_0.012_264)]/70 hover:text-[oklch(0.958_0.004_264)]"
+                      ? "bg-[oklch(0.708_0.101_188/0.18)] text-[oklch(0.99_0.004_264)] shadow-sm ring-1 ring-inset ring-[oklch(0.708_0.101_188/0.25)]"
+                      : "text-[oklch(0.78_0.012_264)] hover:bg-[oklch(0.26_0.018_264/0.5)] hover:text-[oklch(0.96_0.004_264)]"
                   )}
                 >
                   <Icon className="h-4 w-4" />
@@ -1343,35 +1351,37 @@ function UIPreviewSection() {
 
 // ─── Console Showcase (Mock Browser Window) ───
 
-function ConsoleShowcase({ activeTab }: { activeTab: "composer" | "workflow" | "agents" | "steps" | "policies" | "observatory" }) {
+function ConsoleShowcase({ activeTab }: { activeTab: "composer" | "workflow" | "agents" | "steps" | "policies" | "observatory" | "intelligence" | "incidents" }) {
   return (
     <div className="mx-auto max-w-7xl">
       {/* Mock Browser Chrome */}
-      <div className="overflow-hidden rounded-2xl border border-[oklch(0.72_0.012_264)]/30 bg-[oklch(0.22_0.018_264)] shadow-2xl shadow-black/50">
+      <div className="relative overflow-hidden rounded-2xl border border-[oklch(0.35_0.015_264)] bg-[oklch(0.18_0.014_264)] shadow-2xl shadow-black/60 ring-1 ring-inset ring-white/[0.04] backdrop-blur-xl">
+        {/* Top glass edge highlight */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/15 to-transparent" />
         {/* Browser Title Bar */}
-        <div className="flex items-center gap-3 border-b border-[oklch(0.72_0.012_264)]/30 bg-[oklch(0.16_0.012_264)] px-4 py-2.5">
+        <div className="flex items-center gap-3 border-b border-[oklch(0.35_0.015_264)] bg-[oklch(0.14_0.012_264)] px-4 py-2.5">
           <div className="flex gap-1.5">
             <div className="h-3 w-3 rounded-full bg-[oklch(0.55_0.02_264)]" />
             <div className="h-3 w-3 rounded-full bg-[oklch(0.55_0.02_264)]/60" />
             <div className="h-3 w-3 rounded-full bg-[oklch(0.55_0.02_264)]/40" />
           </div>
-          <div className="flex-1 rounded-lg bg-[oklch(0.30_0.020_264)] px-3 py-1 text-center">
+          <div className="flex-1 rounded-lg bg-[oklch(0.20_0.016_264)] px-3 py-1 text-center">
             <span className="text-[11px] font-semibold text-[oklch(0.92_0.004_264)]">kubesynapse.local — Console</span>
           </div>
         </div>
 
         {/* Console Content */}
-        <div className="flex h-[600px]">
+            <div className="flex h-[600px]">
           {/* Sidebar */}
-          <div className="flex w-56 flex-col border-r border-[oklch(0.72_0.012_264)]/30 bg-[oklch(0.16_0.012_264)]">
+          <div className="flex w-56 flex-col border-r border-[oklch(0.32_0.014_264)] bg-[oklch(0.15_0.012_264)]">
             {/* Brand */}
-            <div className="flex items-center gap-2.5 px-3 py-3 border-b border-[oklch(0.72_0.012_264)]/30">
+            <div className="flex items-center gap-2.5 px-3 py-3 border-b border-[oklch(0.32_0.014_264)]">
               <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[oklch(0.708_0.101_188)]">
                 <KubeSynapseLogo className="h-4 w-4" />
               </div>
               <div>
                 <span className="text-sm font-bold text-[oklch(0.99_0.004_264)]">KubeSynapse</span>
-                <span className="ml-1.5 text-[9px] text-[oklch(0.72_0.012_264)]">AI Agent Platform</span>
+                <span className="ml-1.5 text-[9px] text-[oklch(0.78_0.012_264)]">AI Agent Platform</span>
               </div>
             </div>
 
@@ -1383,6 +1393,8 @@ function ConsoleShowcase({ activeTab }: { activeTab: "composer" | "workflow" | "
                 { icon: Workflow, label: "Workflows", count: 2, active: activeTab === "workflow" || activeTab === "steps" || activeTab === "composer" },
                 { icon: Shield, label: "Policies", count: 3, active: activeTab === "policies" },
                 { icon: Telescope, label: "Observatory", count: 0, active: activeTab === "observatory" },
+                { icon: BrainCircuit, label: "Intelligence", count: 0, active: activeTab === "intelligence" },
+                { icon: AlertTriangle, label: "Incidents", count: 2, active: activeTab === "incidents" },
                 { icon: Settings, label: "Settings", count: 0, active: false },
               ].map((item) => {
                 const Icon = item.icon;
@@ -1392,8 +1404,8 @@ function ConsoleShowcase({ activeTab }: { activeTab: "composer" | "workflow" | "
                     className={cn(
                       "flex items-center justify-between rounded-lg px-2.5 py-2 text-xs transition-colors",
                       item.active
-                        ? "bg-[oklch(0.708_0.101_188)]/20 text-[oklch(0.99_0.004_264)]"
-                        : "text-[oklch(0.80_0.01_264)] hover:bg-[oklch(0.72_0.012_264)]/10 hover:text-[oklch(0.92_0.004_264)]"
+                        ? "bg-[oklch(0.708_0.101_188/0.18)] text-[oklch(0.99_0.004_264)] ring-1 ring-inset ring-[oklch(0.708_0.101_188/0.25)]"
+                        : "text-[oklch(0.84_0.01_264)] hover:bg-[oklch(0.28_0.018_264/0.5)] hover:text-[oklch(0.96_0.004_264)]"
                     )}
                   >
                     <div className="flex items-center gap-2.5">
@@ -1401,7 +1413,7 @@ function ConsoleShowcase({ activeTab }: { activeTab: "composer" | "workflow" | "
                       <span className="font-semibold">{item.label}</span>
                     </div>
                     {item.count > 0 && (
-                      <span className="rounded-md bg-[oklch(0.72_0.012_264)]/20 px-1.5 py-0.5 text-[10px] font-bold text-[oklch(0.92_0.004_264)]">
+                      <span className="rounded-md bg-[oklch(0.32_0.018_264)] px-1.5 py-0.5 text-[10px] font-bold text-[oklch(0.94_0.004_264)]">
                         {item.count}
                       </span>
                     )}
@@ -1410,12 +1422,12 @@ function ConsoleShowcase({ activeTab }: { activeTab: "composer" | "workflow" | "
               })}
             </div>
 
-            <div className="mx-2 my-1 h-px bg-[oklch(0.72_0.012_264)]/30" />
+            <div className="mx-2 my-1 h-px bg-[oklch(0.32_0.014_264)]" />
 
             {/* Resource List */}
             <div className="flex-1 overflow-hidden px-2">
               <div className="mb-1.5 px-1">
-                <span className="text-[9px] font-bold text-[oklch(0.72_0.012_264)] uppercase tracking-wider">Resources</span>
+                <span className="text-[9px] font-bold text-[oklch(0.82_0.01_264)] uppercase tracking-wider">Resources</span>
               </div>
               <div className="space-y-0.5">
                 {[
@@ -1425,15 +1437,15 @@ function ConsoleShowcase({ activeTab }: { activeTab: "composer" | "workflow" | "
                   { name: "backup-db", status: "failed", type: "workflow" },
                   { name: "guard-default", status: "active", type: "policy" },
                 ].map((item) => (
-                  <div key={item.name} className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-[oklch(0.72_0.012_264)]/10 cursor-pointer">
+                  <div key={item.name} className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-[oklch(0.28_0.018_264/0.6)] cursor-pointer">
                     <div
                       className={cn(
-                        "h-2 w-2 rounded-full shrink-0",
-                        item.status === "running" && "bg-emerald-400",
-                        item.status === "pending" && "bg-amber-400",
-                        item.status === "completed" && "bg-sky-400",
-                        item.status === "failed" && "bg-red-400",
-                        item.status === "active" && "bg-violet-400"
+                        "h-2 w-2 rounded-full shrink-0 ring-1 ring-offset-1 ring-offset-[oklch(0.15_0.012_264)]",
+                        item.status === "running" && "bg-emerald-400 ring-emerald-400/30",
+                        item.status === "pending" && "bg-amber-400 ring-amber-400/30",
+                        item.status === "completed" && "bg-sky-400 ring-sky-400/30",
+                        item.status === "failed" && "bg-red-400 ring-red-400/30",
+                        item.status === "active" && "bg-violet-400 ring-violet-400/30"
                       )}
                     />
                     <span className="truncate text-[11px] font-medium text-[oklch(0.92_0.004_264)]">{item.name}</span>
@@ -1443,22 +1455,22 @@ function ConsoleShowcase({ activeTab }: { activeTab: "composer" | "workflow" | "
             </div>
 
             {/* New Button */}
-            <div className="border-t border-[oklch(0.72_0.012_264)]/30 p-2">
-              <div className="flex items-center justify-center rounded-lg border border-dashed border-[oklch(0.72_0.012_264)]/30 py-2 text-[10px] font-semibold text-[oklch(0.80_0.01_264)] hover:border-[oklch(0.708_0.101_188)]/50 hover:text-[oklch(0.708_0.101_188)] cursor-pointer transition-colors">
+            <div className="border-t border-[oklch(0.32_0.014_264)] p-2">
+              <div className="flex items-center justify-center rounded-lg border border-dashed border-[oklch(0.36_0.014_264)] py-2 text-[10px] font-semibold text-[oklch(0.84_0.01_264)] hover:border-[oklch(0.708_0.101_188)]/50 hover:text-[oklch(0.708_0.101_188)] cursor-pointer transition-colors">
                 + New
               </div>
             </div>
           </div>
 
           {/* Main Content Area */}
-          <div className="flex flex-1 flex-col bg-[oklch(0.21_0.015_264)]">
+          <div className="flex flex-1 flex-col bg-[oklch(0.19_0.014_264)]">
             {/* Top Bar */}
-            <div className="flex items-center justify-between border-b border-[oklch(0.72_0.012_264)]/30 bg-[oklch(0.16_0.012_264)] px-4 py-2">
+            <div className="flex items-center justify-between border-b border-[oklch(0.32_0.014_264)] bg-[oklch(0.13_0.01_264)] px-4 py-2">
               <div className="flex items-center gap-3">
-                <div className="flex items-center gap-1.5 rounded-lg border border-[oklch(0.72_0.012_264)]/30 bg-[oklch(0.30_0.020_264)] px-2.5 py-1">
-                  <span className="text-[11px] text-[oklch(0.72_0.012_264)]">Namespace:</span>
+                <div className="flex items-center gap-1.5 rounded-lg border border-[oklch(0.32_0.014_264)] bg-[oklch(0.20_0.016_264)] px-2.5 py-1">
+                  <span className="text-[11px] text-[oklch(0.78_0.012_264)]">Namespace:</span>
                   <span className="text-[11px] font-bold text-[oklch(0.99_0.004_264)]">kubesynapse</span>
-                  <ChevronDown className="h-3 w-3 text-[oklch(0.72_0.012_264)]" />
+                  <ChevronDown className="h-3 w-3 text-[oklch(0.78_0.012_264)]" />
                 </div>
                 <div className="flex items-center gap-1.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-1">
                   <div className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
@@ -1466,7 +1478,7 @@ function ConsoleShowcase({ activeTab }: { activeTab: "composer" | "workflow" | "
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1.5 rounded-lg border border-[oklch(0.72_0.012_264)]/30 bg-[oklch(0.30_0.020_264)] px-2.5 py-1">
+                <div className="flex items-center gap-1.5 rounded-lg border border-[oklch(0.32_0.014_264)] bg-[oklch(0.20_0.016_264)] px-2.5 py-1">
                   <div className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
                   <span className="text-[10px] font-semibold text-[oklch(0.92_0.004_264)]">Connected</span>
                 </div>
@@ -1482,6 +1494,8 @@ function ConsoleShowcase({ activeTab }: { activeTab: "composer" | "workflow" | "
               {activeTab === "steps" && <FaithfulWorkflowStepsPanel />}
               {activeTab === "policies" && <FaithfulPolicyEditorPanel />}
               {activeTab === "observatory" && <FaithfulExecutionObservatoryPanel />}
+              {activeTab === "intelligence" && <FaithfulIntelligencePanel />}
+              {activeTab === "incidents" && <FaithfulIncidentsPanel />}
             </div>
           </div>
         </div>
@@ -1494,23 +1508,71 @@ function ConsoleShowcase({ activeTab }: { activeTab: "composer" | "workflow" | "
 
 function FaithfulComposerPanel() {
   const [paletteCollapsed, setPaletteCollapsed] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [propertiesOpen, setPropertiesOpen] = useState(false);
 
-  const CANVAS_W = 1180;
-  const CANVAS_H = 430;
-  const CANVAS_SCALE = 0.92;
-  const NODE_W = 176;
+  // Horizontal DAG layout so the workflow reads left-to-right, matching the
+  // upcoming product refactor. Each card carries the same rich metrics as
+  // the original composer: tools, files, duration, warnings, plan progress.
+  // Canvas width is sized to fit the console window's inner area (sidebar +
+  // canvas = max-w-7xl) so the full DAG is visible without horizontal scroll
+  // on standard desktop viewports.
+  const CANVAS_W = 996;
+  const CANVAS_H = 440;
+  const NODE_W = 170;
+  const COL_GAP = 30;
 
-  // Balanced layout so the workflow feels like a polished product preview,
-  // not a zoomed-in editor screenshot.
   const nodes = [
-    { id: "trigger", label: "Security Alert", x: 36, y: 184, h: 70, status: "completed", agent: "", runtime: "", prompt: "", approval: false },
-    { id: "triage", label: "Triage Alert", x: 248, y: 48, h: 112, status: "completed", agent: "security-analyst", runtime: "opencode", prompt: "Analyze severity, affected systems, IOC indicators.", approval: false },
-    { id: "collect", label: "Collect Evidence", x: 248, y: 270, h: 112, status: "completed", agent: "forensics", runtime: "opencode", prompt: "Collect logs, memory dumps, network captures.", approval: false },
-    { id: "assess", label: "Assess Impact", x: 506, y: 159, h: 112, status: "running", agent: "security-analyst", runtime: "opencode", prompt: "Assess blast radius, data exposure, business impact.", approval: false },
-    { id: "contain", label: "Contain Threat", x: 766, y: 48, h: 112, status: "waiting", agent: "incident-response", runtime: "opencode", prompt: "Isolate systems, block IPs, revoke credentials.", approval: true },
-    { id: "eradicate", label: "Eradicate & Recover", x: 766, y: 270, h: 112, status: "waiting", agent: "incident-response", runtime: "opencode", prompt: "Remove malware, patch vulns, restore backups.", approval: false },
-    { id: "report", label: "Post-Incident Report", x: 980, y: 159, h: 112, status: "waiting", agent: "doc-writer", runtime: "opencode", prompt: "Generate report with timeline, root cause, remediation.", approval: false },
+    {
+      id: "trigger", label: "Security Alert", x: 12, y: 180, h: 80, status: "completed",
+      agent: "", runtime: "", prompt: "", approval: false,
+      tools: 0, files: 0, duration: "0.0s", warnings: 0, planTotal: 0, planDone: 0, model: "",
+    },
+    {
+      id: "triage", label: "Triage Alert", x: 12 + NODE_W + COL_GAP, y: 40, h: 170, status: "completed",
+      agent: "security-analyst", runtime: "opencode",
+      prompt: "Analyze severity, affected systems, IOC indicators.",
+      approval: false, tools: 8, files: 3, duration: "1.2s",
+      warnings: 0, planTotal: 5, planDone: 5, model: "github-copilot/gpt-5-mini",
+    },
+    {
+      id: "collect", label: "Collect Evidence", x: 12 + NODE_W + COL_GAP, y: 230, h: 170, status: "completed",
+      agent: "forensics", runtime: "opencode",
+      prompt: "Collect logs, memory dumps, network captures.",
+      approval: false, tools: 14, files: 7, duration: "1.5s",
+      warnings: 1, planTotal: 6, planDone: 6, model: "github-copilot/gpt-5-mini",
+    },
+    {
+      id: "assess", label: "Assess Impact", x: 12 + (NODE_W + COL_GAP) * 2, y: 135, h: 170, status: "running",
+      agent: "security-analyst", runtime: "opencode",
+      prompt: "Assess blast radius, data exposure, business impact.",
+      approval: false, tools: 6, files: 2, duration: "2.1s",
+      warnings: 0, planTotal: 4, planDone: 3, model: "github-copilot/gpt-5-mini",
+    },
+    {
+      id: "contain", label: "Contain Threat", x: 12 + (NODE_W + COL_GAP) * 3, y: 40, h: 170, status: "waiting",
+      agent: "incident-response", runtime: "opencode",
+      prompt: "Isolate systems, block IPs, revoke credentials.",
+      approval: true, tools: 0, files: 0, duration: "—",
+      warnings: 0, planTotal: 0, planDone: 0, model: "github-copilot/gpt-5-mini",
+    },
+    {
+      id: "eradicate", label: "Eradicate & Recover", x: 12 + (NODE_W + COL_GAP) * 3, y: 230, h: 170, status: "waiting",
+      agent: "incident-response", runtime: "opencode",
+      prompt: "Remove malware, patch vulns, restore backups.",
+      approval: false, tools: 0, files: 0, duration: "—",
+      warnings: 0, planTotal: 0, planDone: 0, model: "github-copilot/gpt-5-mini",
+    },
+    {
+      id: "report", label: "Post-Incident Report", x: 12 + (NODE_W + COL_GAP) * 4, y: 135, h: 170, status: "waiting",
+      agent: "doc-writer", runtime: "opencode",
+      prompt: "Generate report with timeline, root cause, remediation.",
+      approval: false, tools: 0, files: 0, duration: "—",
+      warnings: 0, planTotal: 0, planDone: 0, model: "github-copilot/gpt-5-mini",
+    },
   ];
+
+  type NodeShape = (typeof nodes)[number];
 
   const edges = [
     { from: "trigger", to: "triage" }, { from: "trigger", to: "collect" },
@@ -1520,15 +1582,49 @@ function FaithfulComposerPanel() {
   ];
 
   const paletteAgents = [
-    { name: "security-analyst", runtime: "opencode", status: "Running" },
-    { name: "forensics", runtime: "opencode", status: "Running" },
-    { name: "incident-response", runtime: "opencode", status: "Idle" },
-    { name: "doc-writer", runtime: "opencode", status: "Idle" },
-    { name: "network-monitor", runtime: "opencode", status: "Running" },
+    { name: "docresearcher", runtime: "opencode", status: "Idle", model: "github-copilot/gpt-5-mini" },
+    { name: "implementation-pack-writer", runtime: "opencode", status: "Running", model: "litellm/gpt-5-mini" },
+    { name: "secure-incident-commander", runtime: "opencode", status: "Idle", model: "litellm/gpt-5-mini" },
+    { name: "secure-remediation-planner", runtime: "opencode", status: "Idle", model: "litellm/gpt-5-mini" },
+    { name: "secure-signal-watch", runtime: "opencode", status: "Running", model: "litellm/gpt-5-mini" },
+    { name: "secure-status-writer", runtime: "opencode", status: "Idle", model: "litellm/gpt-5-mini" },
+    { name: "securityresearcher", runtime: "opencode", status: "Idle", model: "github-copilot/gpt-5-mini" },
+    { name: "standup-git", runtime: "opencode", status: "Idle", model: "opencode-go/deepseek-v4-flash" },
+    { name: "standup-jira", runtime: "opencode", status: "Idle", model: "opencode-go/deepseek-v4-flash" },
+    { name: "standup-scribe", runtime: "opencode", status: "Idle", model: "opencode-go/deepseek-v4-flash" },
+    { name: "security-analyst", runtime: "opencode", status: "Running", model: "github-copilot/gpt-5-mini" },
+  ];
+
+  const runHistory = [
+    { id: "wf-run-9c7d1a", status: "completed", steps: "7/7", duration: "187.4s", when: "19:21:08" },
+    { id: "wf-run-4f8b2e", status: "failed", steps: "3/7", duration: "62.1s", when: "18:55:42" },
+    { id: "wf-run-2a91ce", status: "completed", steps: "7/7", duration: "201.9s", when: "18:30:11" },
+  ];
+
+  // Right-panel step details — mirrors the original's selected step view.
+  const selectedStep = {
+    id: "draft-pack",
+    name: "draft-pack",
+    status: "completed",
+    duration: "177.6s",
+    tools: 16,
+    files: 10,
+    warnings: 1,
+    summary: "Plan status - Tasks recorded in /workspace/todowrite-plan.json remain marked done (research_pack, create_implementation_pack, final_consistency_pass).",
+    warning: "Open Activity tab for details",
+  };
+
+  const toolActivity = [
+    { name: "Microsoft Learn Docs", icon: <BookOpen className="h-3.5 w-3.5 text-sky-400" />, count: 2, status: "completed" },
+    { name: "Load skill", icon: <Lightbulb className="h-3.5 w-3.5 text-amber-300" />, count: null, status: "completed" },
+    { name: "Run shell", icon: <TerminalSquare className="h-3.5 w-3.5 text-emerald-400" />, count: null, status: "completed" },
+    { name: "Read file", icon: <FileText className="h-3.5 w-3.5 text-[oklch(0.84_0.01_264)]" />, count: null, status: "completed" },
+    { name: "Search content", icon: <Search className="h-3.5 w-3.5 text-[oklch(0.84_0.01_264)]" />, count: null, status: "completed" },
+    { name: "Edit files", icon: <Edit3 className="h-3.5 w-3.5 text-[oklch(0.84_0.01_264)]" />, count: null, status: "completed" },
   ];
 
   function statusDotColor(s: string) {
-    return s === "Running" ? "bg-emerald-400" : s === "Failed" ? "bg-red-400" : "bg-[oklch(0.72_0.012_264)]/60";
+    return s === "Running" ? "bg-emerald-400" : s === "Failed" ? "bg-red-400" : "bg-[oklch(0.78_0.012_264)]";
   }
 
   function nodeAccentColor(r: string) {
@@ -1543,7 +1639,7 @@ function FaithfulComposerPanel() {
       case "completed": return "border-emerald-400/50";
       case "running": return "border-amber-400/50";
       case "failed": return "border-red-400/50";
-      default: return "border-[oklch(0.72_0.012_264)]/40";
+      default: return "border-[oklch(0.32_0.014_264)]";
     }
   }
 
@@ -1567,18 +1663,20 @@ function FaithfulComposerPanel() {
     switch (status) {
       case "running": return "bg-amber-400/70";
       case "completed": return "bg-emerald-400/60";
-      default: return "bg-[oklch(0.72_0.012_264)]/40";
+      default: return "bg-[oklch(0.40_0.014_264)]";
     }
   }
 
   function statusBadge(s: string) {
     switch (s) {
       case "completed":
-        return <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-400/15 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-300"><CheckCircle2 className="h-2.5 w-2.5" />Done</span>;
+        return <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/35 bg-emerald-400/15 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-300"><CheckCircle2 className="h-2.5 w-2.5" />Done</span>;
       case "running":
-        return <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/15 px-1.5 py-0.5 text-[9px] font-semibold text-amber-300"><LoaderCircle className="h-2.5 w-2.5 animate-spin" />Running</span>;
+        return <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/40 bg-amber-400/15 px-1.5 py-0.5 text-[9px] font-semibold text-amber-300"><LoaderCircle className="h-2.5 w-2.5 animate-spin" />Running</span>;
       case "waiting":
-        return <span className="inline-flex items-center gap-1 rounded-full border border-[oklch(0.72_0.012_264)]/30 bg-[oklch(0.72_0.012_264)]/10 px-1.5 py-0.5 text-[9px] font-semibold text-[oklch(0.80_0.01_264)]"><Clock className="h-2.5 w-2.5" />Waiting</span>;
+        return <span className="inline-flex items-center gap-1 rounded-full border border-[oklch(0.40_0.014_264)] bg-[oklch(0.24_0.014_264)] px-1.5 py-0.5 text-[9px] font-semibold text-[oklch(0.84_0.01_264)]"><Clock className="h-2.5 w-2.5" />Waiting</span>;
+      case "failed":
+        return <span className="inline-flex items-center gap-1 rounded-full border border-red-400/40 bg-red-400/15 px-1.5 py-0.5 text-[9px] font-semibold text-red-300"><XCircle className="h-2.5 w-2.5" />Failed</span>;
       default: return null;
     }
   }
@@ -1590,13 +1688,11 @@ function FaithfulComposerPanel() {
     }
   }
 
-  function nodeCenterY(node: typeof nodes[number]) {
+  function nodeCenterY(node: NodeShape) {
     return node.y + node.h / 2;
   }
 
-  // Curved connector that stops just before the target handle so the arrowhead
-  // stays elegant instead of overlapping the cards.
-  function edgePath(from: typeof nodes[0], to: typeof nodes[0]) {
+  function edgePath(from: NodeShape, to: NodeShape) {
     const fx = from.x + NODE_W + 2;
     const fy = nodeCenterY(from);
     const tx = to.x - 3;
@@ -1606,124 +1702,157 @@ function FaithfulComposerPanel() {
     return `M ${fx} ${fy} C ${fx + curve} ${fy}, ${tx - curve} ${ty}, ${tx} ${ty}`;
   }
 
+  const totalDuration = "187.4s";
+  const completedSteps = 2;
+  const totalSteps = 7;
+  const totalWarnings = nodes.reduce((acc, n) => acc + n.warnings, 0);
+  const totalTools = nodes.reduce((acc, n) => acc + n.tools, 0);
+  const totalFiles = nodes.reduce((acc, n) => acc + n.files, 0);
+
   return (
-    <div className="flex h-full flex-col bg-[oklch(0.21_0.015_264)]">
+    <div className="flex h-full flex-col bg-[oklch(0.19_0.014_264)]">
       {/* ── Toolbar ── */}
-      <div className="border-b border-[oklch(0.72_0.012_264)]/20 bg-[oklch(0.16_0.012_264)] shrink-0">
+      <div className="border-b border-[oklch(0.32_0.014_264)] bg-[oklch(0.13_0.01_264)] shrink-0">
         <div className="flex items-center gap-2 px-3 py-2">
           <div className="flex items-center gap-2 shrink-0">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-[oklch(0.72_0.012_264)]/15 cursor-pointer">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-[oklch(0.28_0.018_264)] cursor-pointer">
               <ArrowRight className="h-4 w-4 rotate-180 text-[oklch(0.80_0.01_264)]" />
             </div>
             <div>
               <div className="text-[11px] font-bold text-[oklch(0.99_0.004_264)]">incident-response</div>
-              <div className="text-[9px] text-[oklch(0.72_0.012_264)]/60">Automated incident response workflow</div>
+              <div className="text-[9px] text-[oklch(0.78_0.012_264)]">Cleanup validation rerun 3 · 2026-06-04</div>
             </div>
           </div>
           <div className="flex-1 min-w-0 ml-4">
             <div className="flex items-center gap-1.5">
-              <span className="text-[8px] font-semibold text-[oklch(0.72_0.012_264)]/50 uppercase tracking-wider">Input</span>
+              <span className="text-[8px] font-semibold text-[oklch(0.72_0.012_264)]/60 uppercase tracking-wider">Workflow Input</span>
             </div>
-            <div className="mt-0.5 rounded-md border border-[oklch(0.72_0.012_264)]/25 bg-[oklch(0.28_0.018_264)] px-2 py-1 text-[10px] text-[oklch(0.92_0.004_264)] font-mono truncate">
+            <div className="mt-0.5 rounded-md border border-[oklch(0.32_0.014_264)] bg-[oklch(0.20_0.016_264)] px-2 py-1 text-[10px] text-[oklch(0.94_0.004_264)] font-mono truncate">
               Alert: Suspicious outbound connection from prod-web-03 → 185.220.101.42:443
             </div>
-            <div className="mt-0.5 text-[8px] text-[oklch(0.72_0.012_264)]/40 font-mono">
-              Referenced as <span className="text-[oklch(0.70_0.14_175)]/70">{'{{input}}'}</span> in step prompts
+            <div className="mt-0.5 text-[8px] text-[oklch(0.72_0.012_264)]/50 font-mono">
+              Referenced as <span className="text-[oklch(0.78_0.16_154)]">{'{{input}}'}</span> in step prompts
             </div>
           </div>
           <div className="flex items-center gap-1.5 shrink-0 ml-auto">
-            <span className="flex items-center gap-1 text-[9px] font-semibold text-amber-400">
-              <Circle className="h-2 w-2 fill-current" /><span className="hidden sm:inline">Unsaved</span>
-            </span>
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-[oklch(0.72_0.012_264)]/25 bg-[oklch(0.28_0.018_264)] hover:bg-[oklch(0.72_0.012_264)]/15 cursor-pointer" title="Auto-layout">
-              <LayoutGrid className="h-3 w-3 text-[oklch(0.80_0.01_264)]" />
+            <div className="flex h-7 items-center gap-1.5 rounded-lg border border-[oklch(0.32_0.014_264)] bg-[oklch(0.20_0.016_264)] px-2 cursor-pointer hover:bg-[oklch(0.24_0.018_264)]" title="Layout">
+              <LayoutGrid className="h-3 w-3 text-[oklch(0.84_0.01_264)]" />
+              <span className="text-[10px] font-medium text-[oklch(0.94_0.004_264)]">Layout</span>
             </div>
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-[oklch(0.72_0.012_264)]/20 bg-[oklch(0.72_0.012_264)]/15 cursor-pointer" title="Layout direction">
-              <ArrowLeftRight className="h-3 w-3 text-[oklch(0.80_0.01_264)]" />
+            <div
+              onClick={() => setPropertiesOpen(v => !v)}
+              className={cn(
+                "flex h-7 items-center gap-1.5 rounded-lg border px-2 cursor-pointer",
+                propertiesOpen
+                  ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
+                  : "border-[oklch(0.32_0.014_264)] bg-[oklch(0.20_0.016_264)] text-[oklch(0.94_0.004_264)] hover:bg-[oklch(0.24_0.018_264)]"
+              )}
+              title="Toggle step details"
+            >
+              <BarChart3 className="h-3 w-3" />
+              <span className="text-[10px] font-medium">Details</span>
             </div>
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-[oklch(0.72_0.012_264)]/15 cursor-pointer relative" title="Live activity">
-              <Radio className="h-3 w-3 text-[oklch(0.80_0.01_264)]" />
-              <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-[oklch(0.32_0.014_264)] bg-[oklch(0.20_0.016_264)] hover:bg-[oklch(0.24_0.018_264)] cursor-pointer" title="Live activity">
+              <Radio className="h-3 w-3 text-[oklch(0.84_0.01_264)]" />
+              <span className="absolute -mt-2 -ml-2 h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
             </div>
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-[oklch(0.72_0.012_264)]/15 cursor-pointer" title="Maximize">
-              <Maximize2 className="h-3 w-3 text-[oklch(0.80_0.01_264)]" />
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-[oklch(0.32_0.014_264)] bg-[oklch(0.20_0.016_264)] hover:bg-[oklch(0.24_0.018_264)] cursor-pointer" title="Maximize">
+              <Maximize2 className="h-3 w-3 text-[oklch(0.84_0.01_264)]" />
             </div>
-            <div className="flex h-7 items-center gap-1 rounded-lg bg-[oklch(0.708_0.101_188)] px-2.5 hover:bg-[oklch(0.708_0.101_188)]/90 cursor-pointer">
+            <div className="flex h-7 items-center gap-1 rounded-lg bg-[oklch(0.708_0.101_188)] px-2.5 hover:bg-[oklch(0.74_0.105_188)] cursor-pointer shadow-sm">
               <Save className="h-3 w-3 text-[oklch(0.158_0.007_264)]" />
               <span className="text-[10px] font-bold text-[oklch(0.158_0.007_264)]">Save</span>
             </div>
-            <div className="flex h-7 items-center gap-1 rounded-lg bg-emerald-500/20 border border-emerald-500/30 px-2.5 hover:bg-emerald-500/30 cursor-pointer">
-              <Play className="h-3 w-3 text-emerald-300" />
-              <span className="text-[10px] font-bold text-emerald-300">Run</span>
+            <div className="flex h-7 items-center gap-1 rounded-lg bg-gradient-to-r from-emerald-500 to-emerald-400 px-2.5 hover:from-emerald-400 hover:to-emerald-300 cursor-pointer shadow-sm shadow-emerald-500/30">
+              <Play className="h-3 w-3 text-emerald-950" />
+              <span className="text-[10px] font-bold text-emerald-950">Run</span>
             </div>
           </div>
         </div>
 
-        {/* Status bar */}
-        <div className="flex items-center gap-3 px-3 py-1 border-t border-[oklch(0.72_0.012_264)]/20 bg-[oklch(0.12_0.012_264)] text-[10px]">
-          <span className="flex items-center gap-1">
-            <LoaderCircle className="h-3 w-3 animate-spin text-amber-400" />
-            <span className="font-bold text-amber-400">running</span>
+        {/* Status bar — mirrors the original: completed pill · run id · steps · progress · queued timestamp */}
+        <div className="flex items-center gap-3 px-3 py-1.5 border-t border-[oklch(0.32_0.014_264)] bg-[oklch(0.10_0.01_264)] text-[10px]">
+          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[9px] font-bold text-emerald-300">
+            <CheckCircle2 className="h-3 w-3" /> completed
           </span>
-          <span className="font-mono text-[oklch(0.80_0.01_264)]">#a3f8c2d1</span>
-          <span className="inline-flex items-center rounded-full border border-[oklch(0.72_0.012_264)]/30 px-1.5 py-0.5 text-[9px] font-semibold text-[oklch(0.80_0.01_264)]">2/7 steps</span>
-          <div className="flex-1 max-w-48 flex items-center gap-1.5">
-            <div className="h-1.5 flex-1 rounded-full bg-[oklch(0.72_0.012_264)]/30 overflow-hidden">
-              <div className="h-full w-[29%] rounded-full bg-amber-400 animate-pulse" />
+          <span className="flex items-center gap-1 font-mono text-[oklch(0.84_0.01_264)]">
+            <Hash className="h-3 w-3 text-[oklch(0.72_0.012_264)]" /> wf-run-d4a8b1
+          </span>
+          <span className="inline-flex items-center rounded-full border border-[oklch(0.32_0.014_264)] bg-[oklch(0.20_0.016_264)] px-2 py-0.5 text-[9px] font-semibold text-[oklch(0.92_0.004_264)]">
+            {completedSteps}/{totalSteps} steps
+          </span>
+          <div className="flex-1 max-w-56 flex items-center gap-1.5">
+            <div className="h-1.5 flex-1 rounded-full bg-[oklch(0.28_0.018_264)] overflow-hidden">
+              <div className="h-full w-[29%] rounded-full bg-gradient-to-r from-amber-400 to-amber-300" />
             </div>
-            <span className="text-[9px] font-mono text-[oklch(0.80_0.01_264)]">29%</span>
+            <span className="text-[9px] font-mono text-[oklch(0.84_0.01_264)]">29%</span>
           </div>
+          <span className="hidden md:flex items-center gap-1.5 text-[oklch(0.72_0.012_264)]">
+            <Sigma className="h-3 w-3" /> {totalTools} tools · {totalFiles} files
+          </span>
+          {totalWarnings > 0 && (
+            <span className="hidden md:inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/10 px-2 py-0.5 text-[9px] font-semibold text-amber-300">
+              <AlertTriangle className="h-3 w-3" /> {totalWarnings} warning{totalWarnings > 1 ? "s" : ""}
+            </span>
+          )}
+          <span className="ml-auto flex items-center gap-1.5 text-[oklch(0.72_0.012_264)]">
+            <Clock className="h-3 w-3" /> total {totalDuration} · queued 19:27:30
+          </span>
         </div>
       </div>
 
-      {/* ── Canvas ── */}
+      {/* ── Canvas + Run History strip ── */}
       <div className="flex flex-1 overflow-hidden">
         {/* Node Palette */}
-        <div className={cn("border-r border-[oklch(0.72_0.012_264)]/20 bg-[oklch(0.16_0.012_264)] flex flex-col shrink-0 transition-all duration-200", paletteCollapsed ? "w-10" : "w-44")}>
+        <div className={cn("border-r border-[oklch(0.32_0.014_264)] bg-[oklch(0.13_0.01_264)] flex flex-col shrink-0 transition-all duration-200", paletteCollapsed ? "w-10" : "w-56")}>
           {paletteCollapsed ? (
             <div className="flex flex-col items-center py-2 gap-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-[oklch(0.72_0.012_264)]/15 cursor-pointer" onClick={() => setPaletteCollapsed(false)}>
-                <PanelLeftOpen className="h-3.5 w-3.5 text-[oklch(0.80_0.01_264)]" />
+              <div className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-[oklch(0.28_0.018_264)] cursor-pointer" onClick={() => setPaletteCollapsed(false)}>
+                <PanelLeftOpen className="h-3.5 w-3.5 text-[oklch(0.84_0.01_264)]" />
               </div>
             </div>
           ) : (
             <>
-              <div className="flex items-center justify-between border-b border-[oklch(0.72_0.012_264)]/20 px-2 py-1.5">
-                <span className="text-[9px] font-bold text-[oklch(0.80_0.01_264)] uppercase tracking-wider">Agents</span>
+              <div className="flex items-center justify-between border-b border-[oklch(0.32_0.014_264)] px-2 py-1.5">
+                <span className="text-[9px] font-bold text-[oklch(0.88_0.01_264)] uppercase tracking-wider">Node Palette</span>
                 <div className="flex items-center gap-1">
-                  <div className="flex h-5 w-5 items-center justify-center rounded hover:bg-[oklch(0.72_0.012_264)]/15 cursor-pointer">
-                    <Plus className="h-3 w-3 text-[oklch(0.80_0.01_264)]" />
+                  <div className="flex h-5 w-5 items-center justify-center rounded hover:bg-[oklch(0.28_0.018_264)] cursor-pointer">
+                    <Plus className="h-3 w-3 text-[oklch(0.84_0.01_264)]" />
                   </div>
-                  <div className="flex h-5 w-5 items-center justify-center rounded hover:bg-[oklch(0.72_0.012_264)]/15 cursor-pointer" onClick={() => setPaletteCollapsed(true)}>
-                    <PanelLeftClose className="h-3 w-3 text-[oklch(0.80_0.01_264)]" />
+                  <div className="flex h-5 w-5 items-center justify-center rounded hover:bg-[oklch(0.28_0.018_264)] cursor-pointer" onClick={() => setPaletteCollapsed(true)}>
+                    <PanelLeftClose className="h-3 w-3 text-[oklch(0.84_0.01_264)]" />
                   </div>
                 </div>
               </div>
-              <div className="px-2 py-1">
-                <div className="flex items-center gap-1.5 rounded-md border border-[oklch(0.72_0.012_264)]/25 bg-[oklch(0.28_0.018_264)] px-2 py-1">
-                  <Search className="h-2.5 w-2.5 text-[oklch(0.72_0.012_264)]" />
-                  <span className="text-[9px] text-[oklch(0.72_0.012_264)]">Search...</span>
+              <div className="px-2 py-1.5">
+                <div className="flex items-center gap-1.5 rounded-md border border-[oklch(0.32_0.014_264)] bg-[oklch(0.20_0.016_264)] px-2 py-1">
+                  <Search className="h-2.5 w-2.5 text-[oklch(0.78_0.012_264)]" />
+                  <span className="text-[9px] text-[oklch(0.78_0.012_264)]">Search agents…</span>
                 </div>
               </div>
-              <div className="flex-1 overflow-auto px-2 py-1">
+              <div className="flex-1 overflow-auto px-2 pb-1">
                 {[
-                  { runtime: "opencode", icon: <Code className="h-2.5 w-2.5 text-emerald-400" /> },
+                  { runtime: "opencode", icon: <Code className="h-3 w-3 text-emerald-400" />, count: paletteAgents.length },
                 ].map(group => {
                   const agents = paletteAgents.filter(a => a.runtime === group.runtime);
                   if (!agents.length) return null;
                   return (
-                    <div key={group.runtime} className="mb-1">
-                      <div className="flex items-center gap-1 px-1 py-0.5">
-                        <ChevronDown className="h-2.5 w-2.5 text-[oklch(0.72_0.012_264)]" />
+                    <div key={group.runtime} className="mb-1 overflow-hidden rounded-md border border-[oklch(0.32_0.014_264)]/60 bg-[oklch(0.18_0.014_264)]">
+                      <div className="flex items-center gap-1.5 px-1.5 py-1 border-b border-[oklch(0.32_0.014_264)]/60">
+                        <ChevronDown className="h-3 w-3 text-[oklch(0.84_0.01_264)]" />
                         {group.icon}
-                        <span className="text-[9px] font-semibold text-[oklch(0.80_0.01_264)]">{group.runtime}</span>
+                        <span className="text-[10px] font-bold text-[oklch(0.92_0.004_264)] uppercase tracking-wider">{group.runtime}</span>
+                        <span className="ml-auto text-[9px] font-mono text-[oklch(0.72_0.012_264)]">{group.count}</span>
                       </div>
-                      <div className="ml-2 space-y-0.5">
+                      <div className="space-y-0.5 p-1">
                         {agents.map(agent => (
-                          <div key={agent.name} className="flex items-center gap-1.5 rounded-md px-1.5 py-1 hover:bg-[oklch(0.72_0.012_264)]/10 cursor-grab active:cursor-grabbing">
-                            <GripVertical className="h-2.5 w-2.5 text-[oklch(0.72_0.012_264)]" />
-                            <div className={cn("h-1.5 w-1.5 rounded-full shrink-0", statusDotColor(agent.status))} />
-                            <span className="truncate text-[10px] font-medium text-[oklch(0.92_0.004_264)]">{agent.name}</span>
+                          <div key={agent.name} className="group rounded-md border-l-2 border-l-emerald-400/50 bg-[oklch(0.22_0.018_264)] px-1.5 py-1 hover:bg-[oklch(0.28_0.02_264)] cursor-grab active:cursor-grabbing">
+                            <div className="flex items-center gap-1.5">
+                              <GripVertical className="h-2.5 w-2.5 text-[oklch(0.78_0.012_264)]" />
+                              <div className={cn("h-2 w-2 shrink-0 rounded-full ring-1 ring-offset-1 ring-offset-[oklch(0.22_0.018_264)]", statusDotColor(agent.status), agent.status === "Running" ? "ring-emerald-400/40" : "ring-transparent")} />
+                              <span className="truncate text-[10px] font-semibold text-[oklch(0.96_0.003_264)]">{agent.name}</span>
+                            </div>
+                            <div className="ml-4 mt-0.5 truncate text-[8px] font-mono text-[oklch(0.72_0.012_264)]">{agent.model}</div>
                           </div>
                         ))}
                       </div>
@@ -1731,144 +1860,385 @@ function FaithfulComposerPanel() {
                   );
                 })}
               </div>
+              {/* Workspace Files expandable — matches the original's bottom group */}
+              <div className="border-t border-[oklch(0.32_0.014_264)]">
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left hover:bg-[oklch(0.18_0.014_264)]"
+                >
+                  <ChevronRight className="h-3 w-3 text-[oklch(0.78_0.012_264)]" />
+                  <FolderTree className="h-3 w-3 text-[oklch(0.78_0.012_264)]" />
+                  <span className="text-[10px] font-bold text-[oklch(0.92_0.004_264)]">Workspace Files</span>
+                </button>
+              </div>
             </>
           )}
         </div>
 
         {/* Canvas */}
-        <div className="flex-1 overflow-auto bg-[oklch(0.21_0.015_264)]">
-          <div className="flex min-h-full min-w-full items-start justify-center px-6 py-5">
-            <div className="relative" style={{ width: CANVAS_W * CANVAS_SCALE, height: CANVAS_H * CANVAS_SCALE }}>
-              <div
-                className="absolute left-0 top-0 origin-top-left"
-                style={{ width: CANVAS_W, height: CANVAS_H, transform: `scale(${CANVAS_SCALE})` }}
-              >
-                {/* Grid */}
-                <div className="absolute inset-0 opacity-[0.06]" style={{ backgroundImage: "radial-gradient(oklch(0.72_0.012_264) 1px, transparent 1px)", backgroundSize: "24px 24px" }} />
+        <div className="flex flex-1 flex-col overflow-hidden">
+          <div className="flex-1 overflow-x-auto overflow-y-auto bg-[oklch(0.15_0.012_264)] composer-scroll">
+            <div className="relative" style={{ width: CANVAS_W, height: CANVAS_H, minWidth: "100%" }}>
+              {/* Grid */}
+              <div className="absolute inset-0 opacity-[0.06]" style={{ backgroundImage: "radial-gradient(oklch(0.78_0.012_264) 1px, transparent 1px)", backgroundSize: "24px 24px" }} />
 
-                {/* SVG Edges */}
-                <svg
-                  className="absolute inset-0 pointer-events-none"
-                  width={CANVAS_W}
-                  height={CANVAS_H}
-                  viewBox={`0 0 ${CANVAS_W} ${CANVAS_H}`}
-                  style={{ zIndex: 1 }}
-                >
-                  <defs>
-                    <marker id="edgeArrowIdle" markerWidth="8" markerHeight="8" refX="6.6" refY="4" orient="auto" markerUnits="userSpaceOnUse">
-                      <path d="M0,0 L8,4 L0,8 Z" fill="#94a3b8" />
-                    </marker>
-                    <marker id="edgeArrowActive" markerWidth="8" markerHeight="8" refX="6.6" refY="4" orient="auto" markerUnits="userSpaceOnUse">
-                      <path d="M0,0 L8,4 L0,8 Z" fill="#6ee7b7" />
-                    </marker>
-                    <marker id="edgeArrowRunning" markerWidth="8" markerHeight="8" refX="6.6" refY="4" orient="auto" markerUnits="userSpaceOnUse">
-                      <path d="M0,0 L8,4 L0,8 Z" fill="#fcd34d" />
-                    </marker>
-                  </defs>
-                  {edges.map((edge, i) => {
-                    const fn = nodes.find(n => n.id === edge.from)!;
-                    const tn = nodes.find(n => n.id === edge.to)!;
-                    return (
-                      <path
-                        key={i}
-                        d={edgePath(fn, tn)}
-                        stroke={edgeStroke(fn.status)}
-                        strokeWidth={fn.status === "running" ? 2.5 : 2.2}
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        fill="none"
-                        opacity={fn.status === "waiting" ? 0.7 : 0.92}
-                        markerEnd={edgeMarker(fn.status)}
-                        strokeDasharray={fn.status === "running" ? "7 6" : undefined}
-                      />
-                    );
-                  })}
-                </svg>
-
-                {/* Nodes */}
-                {nodes.map((node, i) => (
-                  <motion.div
-                    key={node.id}
-                    initial={{ opacity: 0, scale: 0.85 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ delay: 0.1 + i * 0.06 }}
-                    className={cn(
-                      "absolute w-[176px] overflow-hidden rounded-2xl border border-l-2 bg-[oklch(0.22_0.018_264)] shadow-[0_12px_40px_rgba(0,0,0,0.45)] backdrop-blur-sm",
-                      nodeAccentColor(node.runtime),
-                      nodeStatusBorder(node.status),
-                      node.status === "running" && "ring-2 ring-amber-400/40"
-                    )}
-                    style={{ left: node.x, top: node.y, height: node.h, zIndex: 2 }}
+                  {/* SVG Edges */}
+                  <svg
+                    className="absolute inset-0 pointer-events-none"
+                    width={CANVAS_W}
+                    height={CANVAS_H}
+                    viewBox={`0 0 ${CANVAS_W} ${CANVAS_H}`}
+                    style={{ zIndex: 1 }}
                   >
-                    {node.status === "running" && (
-                      <div className="absolute inset-0 rounded-2xl border-2 border-amber-400/30 pointer-events-none animate-pulse" />
-                    )}
+                    <defs>
+                      <marker id="edgeArrowIdle" markerWidth="8" markerHeight="8" refX="6.6" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+                        <path d="M0,0 L8,4 L0,8 Z" fill="#94a3b8" />
+                      </marker>
+                      <marker id="edgeArrowActive" markerWidth="8" markerHeight="8" refX="6.6" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+                        <path d="M0,0 L8,4 L0,8 Z" fill="#6ee7b7" />
+                      </marker>
+                      <marker id="edgeArrowRunning" markerWidth="8" markerHeight="8" refX="6.6" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+                        <path d="M0,0 L8,4 L0,8 Z" fill="#fcd34d" />
+                      </marker>
+                    </defs>
+                    {edges.map((edge, i) => {
+                      const fn = nodes.find(n => n.id === edge.from)!;
+                      const tn = nodes.find(n => n.id === edge.to)!;
+                      return (
+                        <path
+                          key={i}
+                          d={edgePath(fn, tn)}
+                          stroke={edgeStroke(fn.status)}
+                          strokeWidth={fn.status === "running" ? 2.5 : 2.2}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          fill="none"
+                          opacity={fn.status === "waiting" ? 0.55 : 0.92}
+                          markerEnd={edgeMarker(fn.status)}
+                          strokeDasharray={fn.status === "running" ? "7 6" : undefined}
+                        />
+                      );
+                    })}
+                  </svg>
 
-                    {/* Header */}
-                    <div className="flex items-center gap-2 border-b border-[oklch(0.72_0.012_264)]/20 px-3 py-2">
-                      {runtimeIcon(node.runtime)}
-                      <span className="flex-1 truncate text-[11px] font-bold text-[oklch(0.99_0.004_264)]">{node.label}</span>
-                      {statusBadge(node.status)}
-                    </div>
-
-                    {/* Body */}
-                    <div className="space-y-1.5 px-3 py-2">
-                      <div className="flex items-center gap-1.5">
-                        <span className="inline-flex max-w-[112px] items-center truncate rounded-md border border-[oklch(0.72_0.012_264)]/30 bg-[oklch(0.32_0.020_264)] px-1.5 py-0.5 text-[9px] font-semibold text-[oklch(0.92_0.004_264)]">
-                          {node.agent || "unassigned"}
-                        </span>
-                        {node.status === "completed" && <span className="text-[9px] font-mono text-[oklch(0.72_0.012_264)]">1.2s</span>}
-                        {node.status === "running" && <span className="text-[9px] font-mono text-amber-300">2.1s</span>}
-                      </div>
-                      {node.prompt && (
-                        <p className="line-clamp-2 text-[9px] leading-tight text-[oklch(0.80_0.01_264)]">{node.prompt}</p>
+                  {/* Nodes */}
+                  {nodes.map((node, i) => (
+                    <motion.div
+                      key={node.id}
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: 0.05 + i * 0.05 }}
+                      className={cn(
+                        "absolute w-[180px] overflow-hidden rounded-2xl border border-[oklch(0.40_0.015_264)] border-l-2 bg-[oklch(0.22_0.018_264)] shadow-[0_18px_55px_rgba(0,0,0,0.6)]",
+                        nodeAccentColor(node.runtime),
+                        nodeStatusBorder(node.status),
+                        node.status === "running" && "ring-2 ring-amber-400/40"
                       )}
-                      <div className="flex flex-wrap items-center gap-1">
-                        {node.approval && (
-                          <span className="inline-flex items-center gap-0.5 rounded-full border border-orange-400/30 bg-orange-400/15 px-1.5 py-0.5 text-[8px] font-semibold text-orange-300">
-                            <UserCheck className="h-2 w-2" /> HITL
-                          </span>
+                      style={{ left: node.x, top: node.y, height: node.h, zIndex: 2 }}
+                    >
+                      {node.status === "running" && (
+                        <div className="absolute inset-0 rounded-2xl border-2 border-amber-400/30 pointer-events-none animate-pulse" />
+                      )}
+
+                      {/* Header — icon · label · status badge */}
+                      <div className="flex items-center gap-2 border-b border-[oklch(0.32_0.014_264)] bg-[oklch(0.18_0.014_264)] px-3 py-2">
+                        {node.runtime ? (
+                          <div className="flex h-5 w-5 items-center justify-center rounded-md bg-emerald-500/10 border border-emerald-500/30">
+                            {runtimeIcon(node.runtime)}
+                          </div>
+                        ) : (
+                          <div className="flex h-5 w-5 items-center justify-center rounded-md bg-sky-500/15 border border-sky-500/30">
+                            <Zap className="h-3 w-3 text-sky-300" />
+                          </div>
                         )}
-                        {node.id === "assess" && (
-                          <span className="inline-flex items-center gap-0.5 rounded-full border border-purple-400/30 bg-purple-400/15 px-1.5 py-0.5 text-[8px] font-semibold text-purple-300">
-                            <GitBranch className="h-2 w-2" /> Conditional
-                          </span>
-                        )}
+                        <span className="flex-1 truncate text-[11px] font-bold text-[oklch(0.99_0.004_264)]">{node.label}</span>
+                        {statusBadge(node.status)}
                       </div>
+
+                      {/* Agent + duration row */}
+                      {node.runtime && (
+                        <div className="flex items-center gap-1.5 border-b border-[oklch(0.32_0.014_264)]/60 px-3 py-1.5">
+                          <div className="inline-flex min-w-0 items-center gap-1 truncate rounded-md border border-[oklch(0.32_0.014_264)] bg-[oklch(0.16_0.012_264)] px-1.5 py-0.5 text-[9px] font-semibold text-[oklch(0.94_0.004_264)]">
+                            <Bot className="h-2.5 w-2.5 text-emerald-400" />
+                            <span className="truncate">{node.agent}</span>
+                          </div>
+                          {node.duration !== "—" && (
+                            <span className="ml-auto inline-flex items-center gap-0.5 text-[9px] font-mono text-[oklch(0.78_0.012_264)]">
+                              <Clock className="h-2.5 w-2.5" /> {node.duration}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Body */}
+                      <div className="space-y-2 px-3 py-2">
+                        {node.prompt && (
+                          <p className="line-clamp-2 text-[9px] leading-snug text-[oklch(0.82_0.01_264)]">{node.prompt}</p>
+                        )}
+
+                        {/* Metric row — tools · files · duration · verified badge */}
+                        {node.runtime && node.status !== "waiting" && (
+                          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[9px] font-medium text-[oklch(0.78_0.012_264)]">
+                            <span className="inline-flex items-center gap-0.5"><Wrench className="h-2.5 w-2.5" /> {node.tools} tools</span>
+                            <span className="inline-flex items-center gap-0.5"><FileText className="h-2.5 w-2.5" /> {node.files} files</span>
+                            {node.duration !== "—" && (
+                              <span className="inline-flex items-center gap-0.5 font-mono"><Sigma className="h-2.5 w-2.5" /> {node.duration}</span>
+                            )}
+                            {node.id === "report" && (
+                              <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-emerald-300"><CheckCircle2 className="h-2.5 w-2.5" />Verified</span>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Warning badge */}
+                        {node.warnings > 0 && (
+                          <div className="inline-flex items-center gap-1 rounded-full border border-amber-400/40 bg-amber-400/15 px-1.5 py-0.5 text-[9px] font-semibold text-amber-300">
+                            <AlertTriangle className="h-2.5 w-2.5" />
+                            {node.warnings} warning{node.warnings > 1 ? "s" : ""}
+                          </div>
+                        )}
+
+                        {/* HITL / Conditional */}
+                        <div className="flex flex-wrap items-center gap-1">
+                          {node.approval && (
+                            <span className="inline-flex items-center gap-0.5 rounded-full border border-orange-400/40 bg-orange-400/15 px-1.5 py-0.5 text-[8px] font-semibold text-orange-300">
+                              <UserCheck className="h-2 w-2" /> HITL
+                            </span>
+                          )}
+                          {node.id === "assess" && (
+                            <span className="inline-flex items-center gap-0.5 rounded-full border border-purple-400/40 bg-purple-400/15 px-1.5 py-0.5 text-[8px] font-semibold text-purple-300">
+                              <GitBranch className="h-2 w-2" /> Conditional
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Plan progress footer — mirrors the original's "Plan · 8/8 tasks" + blue bar */}
+                      {node.runtime && node.planTotal > 0 && (
+                        <div className="border-t border-[oklch(0.32_0.014_264)] bg-[oklch(0.16_0.012_264)] px-3 py-1.5">
+                          <div className="flex items-center justify-between text-[8px] font-semibold uppercase tracking-wider">
+                            <span className="text-[oklch(0.78_0.012_264)]">Plan</span>
+                            <span className="font-mono text-[oklch(0.92_0.004_264)]">{node.planDone}/{node.planTotal} tasks</span>
+                          </div>
+                          <div className="mt-1 h-1 overflow-hidden rounded-full bg-[oklch(0.28_0.018_264)]">
+                            <div
+                              className={cn("h-full rounded-full",
+                                node.planDone === node.planTotal
+                                  ? "bg-gradient-to-r from-sky-400 to-sky-300"
+                                  : "bg-gradient-to-r from-sky-400/80 to-sky-300/80"
+                              )}
+                              style={{ width: `${(node.planDone / node.planTotal) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Connection handles */}
+                      {node.id !== "trigger" && (
+                        <div className={cn("absolute -left-1 top-1/2 h-4 w-1.5 -translate-y-1/2 rounded-full", handleTone(node.status))} />
+                      )}
+                      {node.id !== "report" && (
+                        <div className={cn("absolute -right-1 top-1/2 h-4 w-1.5 -translate-y-1/2 rounded-full", handleTone(node.status))} />
+                      )}
+                    </motion.div>
+                  ))}
+
+                  {/* OUT connectors — siblings of cards so they're not clipped by overflow-hidden.
+                      Positioned at the bottom of each card relative to the canvas. */}
+                  {nodes.map((node) => (
+                    node.id !== "report" && node.status !== "waiting" && (
+                      <div
+                        key={`out-${node.id}`}
+                        className="pointer-events-none absolute z-20 flex flex-col items-center gap-0.5"
+                        style={{ left: node.x + NODE_W / 2, top: node.y + node.h + 8, transform: "translateX(-50%)" }}
+                      >
+                        <span className="text-[7px] font-bold uppercase tracking-wider text-emerald-300">OUT</span>
+                        <div className="h-2 w-2 rounded-full bg-emerald-400 ring-2 ring-emerald-400/30 shadow-[0_0_8px_rgba(110,231,183,0.6)]" />
+                      </div>
+                    )
+                  ))}
+
+                  {/* Mini toolbar — node type chips */}
+                  <div className="absolute bottom-3 left-4 flex items-center gap-1.5 rounded-lg border border-[oklch(0.32_0.014_264)] bg-[oklch(0.18_0.014_264)]/95 px-2 py-1.5 shadow-lg shadow-black/30">
+                    <div className="rounded bg-[oklch(0.28_0.018_264)] px-1.5 py-0.5 text-[9px] font-semibold text-[oklch(0.92_0.004_264)]">Trigger</div>
+                    <div className="rounded bg-[oklch(0.28_0.018_264)] px-1.5 py-0.5 text-[9px] font-semibold text-[oklch(0.92_0.004_264)]">Agent Step</div>
+                    <div className="rounded bg-[oklch(0.28_0.018_264)] px-1.5 py-0.5 text-[9px] font-semibold text-[oklch(0.92_0.004_264)]">Approval</div>
+                  </div>
+
+                  {/* Vertical zoom controls */}
+                  <div className="absolute bottom-3 right-4 flex flex-col gap-1 rounded-lg border border-[oklch(0.32_0.014_264)] bg-[oklch(0.18_0.014_264)]/95 p-1 shadow-lg shadow-black/30">
+                    <div className="flex h-6 w-7 cursor-pointer items-center justify-center rounded hover:bg-[oklch(0.28_0.018_264)]">
+                      <span className="text-[11px] font-bold text-[oklch(0.92_0.004_264)]">+</span>
                     </div>
-
-                    {/* Connection handles */}
-                    {node.id !== "trigger" && (
-                      <div className={cn("absolute -left-1 top-1/2 h-4 w-1.5 -translate-y-1/2 rounded-full", handleTone(node.status))} />
-                    )}
-                    {node.id !== "report" && (
-                      <div className={cn("absolute -right-1 top-1/2 h-4 w-1.5 -translate-y-1/2 rounded-full", handleTone(node.status))} />
-                    )}
-                  </motion.div>
-                ))}
-
-{/* Mini toolbar */}
-                <div className="absolute bottom-3 left-4 flex items-center gap-1.5 rounded-lg border border-[oklch(0.72_0.012_264)]/30 bg-[oklch(0.22_0.018_264)]/95 px-2 py-1.5 shadow-lg shadow-black/20">
-                  <div className="rounded bg-[oklch(0.72_0.012_264)]/20 px-1.5 py-0.5 text-[9px] font-semibold text-[oklch(0.92_0.004_264)]">Trigger</div>
-                  <div className="rounded bg-[oklch(0.72_0.012_264)]/20 px-1.5 py-0.5 text-[9px] font-semibold text-[oklch(0.92_0.004_264)]">Agent Step</div>
+                    <div className="flex h-6 w-7 cursor-pointer items-center justify-center rounded hover:bg-[oklch(0.28_0.018_264)]">
+                      <span className="text-[11px] font-bold text-[oklch(0.92_0.004_264)]">−</span>
+                    </div>
+                    <div className="flex h-6 w-7 cursor-pointer items-center justify-center rounded hover:bg-[oklch(0.28_0.018_264)]">
+                      <span className="text-[7px] font-bold uppercase tracking-wider text-[oklch(0.84_0.01_264)]">Fit</span>
+                    </div>
+                    <div className="flex h-6 w-7 cursor-pointer items-center justify-center rounded hover:bg-[oklch(0.28_0.018_264)]">
+                      <Lock className="h-2.5 w-2.5 text-[oklch(0.84_0.01_264)]" />
+                    </div>
+                  </div>
                 </div>
+              </div>
 
-                {/* Zoom controls */}
-                <div className="absolute bottom-3 right-4 flex flex-col gap-1">
-                  <div className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg border border-[oklch(0.72_0.012_264)]/30 bg-[oklch(0.22_0.018_264)]/95 hover:bg-[oklch(0.72_0.012_264)]/20">
-                    <span className="text-[10px] font-bold text-[oklch(0.92_0.004_264)]">+</span>
+          {/* Run History strip — expandable, mirrors original's bottom panel */}
+          <div className="border-t border-[oklch(0.32_0.014_264)] bg-[oklch(0.13_0.01_264)] shrink-0">
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(v => !v)}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-[oklch(0.16_0.012_264)]"
+            >
+              <History className="h-3.5 w-3.5 text-[oklch(0.78_0.012_264)]" />
+              <span className="text-[10px] font-bold text-[oklch(0.92_0.004_264)]">Run history</span>
+              <span className="text-[9px] text-[oklch(0.72_0.012_264)]">Expand to browse past executions.</span>
+              <span className="ml-auto inline-flex items-center gap-1 text-[9px] text-[oklch(0.78_0.012_264)]">
+                {runHistory.length} runs
+                <ChevronDown className={cn("h-3 w-3 transition-transform", historyOpen ? "rotate-180" : "")} />
+              </span>
+            </button>
+            {historyOpen && (
+              <div className="border-t border-[oklch(0.32_0.014_264)] bg-[oklch(0.10_0.01_264)]">
+                <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-x-3 px-3 py-1.5 text-[8px] font-bold uppercase tracking-wider text-[oklch(0.72_0.012_264)]">
+                  <span>Run id</span>
+                  <span>Status</span>
+                  <span>Steps</span>
+                  <span>Duration</span>
+                  <span>Queued</span>
+                  <span></span>
+                </div>
+                {runHistory.map((run) => (
+                  <div key={run.id} className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-x-3 border-t border-[oklch(0.20_0.016_264)] px-3 py-1.5 hover:bg-[oklch(0.16_0.012_264)]">
+                    <span className="flex items-center gap-1.5 text-[10px] font-mono text-[oklch(0.94_0.004_264)]">
+                      <Hash className="h-2.5 w-2.5 text-[oklch(0.72_0.012_264)]" /> {run.id}
+                    </span>
+                    {statusBadge(run.status)}
+                    <span className="text-[10px] font-mono text-[oklch(0.84_0.01_264)]">{run.steps}</span>
+                    <span className="text-[10px] font-mono text-[oklch(0.84_0.01_264)]">{run.duration}</span>
+                    <span className="text-[10px] font-mono text-[oklch(0.78_0.012_264)]">{run.when}</span>
+                    <span className="text-[9px] font-semibold text-[oklch(0.708_0.101_188)]">View →</span>
                   </div>
-                  <div className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg border border-[oklch(0.72_0.012_264)]/30 bg-[oklch(0.22_0.018_264)]/95 hover:bg-[oklch(0.72_0.012_264)]/20">
-                    <span className="text-[10px] font-bold text-[oklch(0.92_0.004_264)]">−</span>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right properties panel — collapsible */}
+        {propertiesOpen && (
+        <div className="w-72 shrink-0 border-l border-[oklch(0.32_0.014_264)] bg-[oklch(0.13_0.01_264)] flex flex-col overflow-hidden">
+          {/* Header: step name + status + actions */}
+          <div className="flex items-center gap-2 border-b border-[oklch(0.32_0.014_264)] px-3 py-2">
+            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-emerald-500/10 border border-emerald-500/30">
+              <Settings className="h-3.5 w-3.5 text-emerald-300" />
+            </div>
+            <span className="flex-1 truncate text-[11px] font-bold text-[oklch(0.99_0.004_264)]">{selectedStep.name}</span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-1.5 py-0.5 text-[8px] font-bold text-emerald-300">
+              <CheckCircle2 className="h-2.5 w-2.5" /> Completed
+            </span>
+            <Trash2 className="h-3.5 w-3.5 cursor-pointer text-[oklch(0.78_0.012_264)] hover:text-red-300" />
+            <PanelRightClose
+              className="h-3.5 w-3.5 cursor-pointer text-[oklch(0.78_0.012_264)]"
+              onClick={() => setPropertiesOpen(false)}
+            />
+          </div>
+
+          {/* Tabs */}
+          <div className="flex items-center gap-1 border-b border-[oklch(0.32_0.014_264)] px-2 py-1.5">
+            {[
+              { id: "overview", label: "Overview", icon: <BarChart3 className="h-3 w-3" /> },
+              { id: "activity", label: "Activity", icon: <ActivityIcon className="h-3 w-3" /> },
+              { id: "config", label: "Config", icon: <Settings className="h-3 w-3" /> },
+              { id: "deps", label: "Dependencies", icon: <Link2 className="h-3 w-3" /> },
+            ].map((t, i) => {
+              const active = i === 0;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-medium transition-colors",
+                    active
+                      ? "bg-[oklch(0.20_0.016_264)] text-[oklch(0.96_0.003_264)] ring-1 ring-inset ring-[oklch(0.32_0.014_264)]"
+                      : "text-[oklch(0.72_0.012_264)] hover:text-[oklch(0.92_0.004_264)]"
+                  )}
+                >
+                  {t.icon}
+                  <span>{t.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex-1 overflow-auto">
+            {/* Status banner with metrics */}
+            <div className="m-2 rounded-lg border border-emerald-400/30 bg-gradient-to-r from-emerald-500/10 to-emerald-400/5 p-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-300" />
+                  <span className="text-[11px] font-bold text-emerald-300">Completed</span>
+                </div>
+                <span className="font-mono text-[10px] text-[oklch(0.92_0.004_264)]">{selectedStep.duration}</span>
+              </div>
+              <div className="mt-2 flex items-center gap-3 text-[9px] font-semibold">
+                <span className="inline-flex items-center gap-1 text-[oklch(0.84_0.01_264)]">
+                  <Wrench className="h-3 w-3" /> {selectedStep.tools} tools
+                </span>
+                <span className="inline-flex items-center gap-1 text-[oklch(0.84_0.01_264)]">
+                  <FileText className="h-3 w-3" /> {selectedStep.files} files
+                </span>
+                {selectedStep.warnings > 0 && (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-amber-300">
+                    <AlertTriangle className="h-3 w-3" /> {selectedStep.warnings} warning
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* What happened */}
+            <div className="mx-2 mb-2 rounded-lg border border-[oklch(0.32_0.014_264)] bg-[oklch(0.18_0.014_264)] p-3">
+              <div className="mb-1.5 text-[8px] font-bold uppercase tracking-wider text-[oklch(0.72_0.012_264)]">What happened</div>
+              <p className="text-[10px] leading-relaxed text-[oklch(0.84_0.01_264)]">{selectedStep.summary}</p>
+            </div>
+
+            {/* Warning to review */}
+            <div className="mx-2 mb-2 rounded-lg border border-amber-400/30 bg-amber-400/5 p-3">
+              <div className="flex items-center gap-1.5">
+                <Compass className="h-3.5 w-3.5 text-amber-300" />
+                <span className="text-[10px] font-bold text-amber-300">{selectedStep.warnings} warning to review</span>
+              </div>
+              <p className="mt-1 text-[9px] text-[oklch(0.84_0.01_264)]">{selectedStep.warning}</p>
+            </div>
+
+            {/* Tool activity */}
+            <div className="mx-2 mb-2">
+              <div className="mb-1.5 text-[8px] font-bold uppercase tracking-wider text-[oklch(0.72_0.012_264)]">Tool activity</div>
+              <div className="overflow-hidden rounded-lg border border-[oklch(0.32_0.014_264)] bg-[oklch(0.18_0.014_264)]">
+                {toolActivity.map((tool, idx) => (
+                  <div
+                    key={tool.name}
+                    className={cn(
+                      "flex items-center gap-2 px-2.5 py-1.5 hover:bg-[oklch(0.22_0.018_264)]",
+                      idx > 0 && "border-t border-[oklch(0.32_0.014_264)]"
+                    )}
+                  >
+                    {tool.icon}
+                    <span className="flex-1 truncate text-[10px] font-medium text-[oklch(0.94_0.004_264)]">{tool.name}</span>
+                    {tool.count && (
+                      <span className="text-[9px] font-mono text-[oklch(0.72_0.012_264)]">x{tool.count}</span>
+                    )}
+                    <span className="text-[9px] font-semibold text-emerald-300">{tool.status}</span>
                   </div>
-                  <div className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg border border-[oklch(0.72_0.012_264)]/30 bg-[oklch(0.22_0.018_264)]/95 hover:bg-[oklch(0.72_0.012_264)]/20">
-                    <span className="text-[8px] font-semibold text-[oklch(0.80_0.01_264)]">Fit</span>
-                  </div>
+                ))}
+                <div className="border-t border-[oklch(0.32_0.014_264)] bg-[oklch(0.16_0.012_264)] px-2.5 py-1.5 text-center text-[9px] text-[oklch(0.72_0.012_264)]">
+                  +1 more tool types
                 </div>
               </div>
             </div>
           </div>
         </div>
+        )}
       </div>
     </div>
   );
@@ -1982,12 +2352,14 @@ function FaithfulAgentManagementPanel() {
   const [runtimeKind, setRuntimeKind] = useState("opencode");
   const agent = { name: "data-pipeline", model: "gpt-4o", status: "running", runtimeKind, systemPrompt: "You are a data pipeline agent. Fetch, transform, and load data from source systems to the warehouse. Validate schemas and handle errors gracefully.", policyRef: "data-guard-policy", capabilities: 3, accessLevel: "Connected" };
 
-  const runtimeMeta: Record<string, { label: string; desc: string; tone: string }> = {
-    opencode: { label: "OpenCode", desc: "Default persistent runtime with memory, skills, and workspace state", tone: "border-emerald-500/30 bg-emerald-500/5 text-emerald-200" },
+  const runtimeMeta: Record<string, { label: string; desc: string; tone: string; status: "production" | "alpha" }> = {
+    opencode: { label: "OpenCode", desc: "Default persistent runtime with memory, skills, and workspace state", tone: "border-emerald-500/30 bg-emerald-500/5 text-emerald-200", status: "production" },
+    pi: { label: "Pi", desc: "Lightweight conversational runtime with smaller memory footprint", tone: "border-sky-500/30 bg-sky-500/5 text-sky-200", status: "alpha" },
+    "mistral-vibe": { label: "Mistral Vibe", desc: "Alternative runtime for Mistral-hosted model routing experiments", tone: "border-purple-500/30 bg-purple-500/5 text-purple-200", status: "alpha" },
   };
 
   const rt = runtimeMeta[runtimeKind];
-  const RUNTIMES = ["opencode"];
+  const RUNTIMES = ["opencode", "pi", "mistral-vibe"];
 
   return (
     <div className="h-full overflow-auto bg-[oklch(0.145_0.022_264)] p-4">
@@ -2102,7 +2474,7 @@ function FaithfulAgentManagementPanel() {
           {activeTab === "runtime" && (
             <div className="rounded-xl border border-[oklch(0.72_0.012_264)]/10 bg-[oklch(0.10_0.015_264)] p-4">
               <h4 className="text-sm font-semibold text-[oklch(0.958_0.004_264)] mb-1">Runtime profile</h4>
-              <p className="text-[10px] text-[oklch(0.72_0.012_264)]/50 mb-3">OpenCode is the production runtime used by the current examples, quickstart flows, and hardened agent path.</p>
+              <p className="text-[10px] text-[oklch(0.72_0.012_264)]/50 mb-3">OpenCode is the production runtime. Pi and Mistral Vibe are alpha options for evaluation.</p>
               <div className="space-y-1.5">
                 {RUNTIMES.map(rid => {
                   const info = runtimeMeta[rid];
@@ -2116,8 +2488,20 @@ function FaithfulAgentManagementPanel() {
                         selected ? info.tone : "border-[oklch(0.72_0.012_264)]/10 hover:border-[oklch(0.72_0.012_264)]/20"
                       )}
                     >
-                      <div>
-                        <span className="text-[11px] font-medium text-[oklch(0.958_0.004_264)]">{info.label}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[11px] font-medium text-[oklch(0.958_0.004_264)]">{info.label}</span>
+                          {info.status === "alpha" && (
+                            <span className="inline-flex items-center gap-0.5 rounded-full border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[8px] font-semibold text-amber-300">
+                              alpha
+                            </span>
+                          )}
+                          {info.status === "production" && (
+                            <span className="inline-flex items-center gap-0.5 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-1.5 py-0.5 text-[8px] font-semibold text-emerald-300">
+                              production
+                            </span>
+                          )}
+                        </div>
                         <p className="text-[9px] text-[oklch(0.72_0.012_264)]/40">{info.desc}</p>
                       </div>
                       {selected && <Check className="h-3.5 w-3.5" />}
@@ -2522,6 +2906,121 @@ function FaithfulExecutionObservatoryPanel() {
   );
 }
 
+// ─── Intelligence Panel ───
+
+function FaithfulIntelligencePanel() {
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-between border-b border-[oklch(0.72_0.012_264)]/10 px-4 py-2.5">
+        <div className="flex items-center gap-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[oklch(0.72_0.012_264)]/15 bg-[oklch(0.18_0.025_264)]">
+            <BrainCircuit className="h-4 w-4 text-violet-400" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-[oklch(0.958_0.004_264)]">Intelligence</h3>
+            <p className="text-[10px] text-[oklch(0.72_0.012_264)]/60">Signal watch & run analytics</p>
+          </div>
+        </div>
+      </div>
+      <div className="flex-1 overflow-auto p-4">
+        <div className="mb-4 grid grid-cols-2 gap-3">
+          {[
+            { label: "Total Runs", value: "1,247", change: "+12.3%", up: true },
+            { label: "Avg Duration", value: "8.2s", change: "-5.1%", up: false },
+            { label: "Success Rate", value: "97.8%", change: "+0.4%", up: true },
+            { label: "Token Spend", value: "84.2k", change: "+18.7%", up: true },
+          ].map((stat) => (
+            <div key={stat.label} className="rounded-lg border border-[oklch(0.72_0.012_264)]/10 bg-[oklch(0.18_0.025_264)] p-3">
+              <span className="text-[10px] text-[oklch(0.72_0.012_264)]/50">{stat.label}</span>
+              <div className="mt-1 flex items-baseline gap-2">
+                <span className="text-lg font-bold text-[oklch(0.958_0.004_264)]">{stat.value}</span>
+                <span className={cn("text-[10px] font-medium", stat.up ? "text-emerald-400" : "text-red-400")}>
+                  {stat.change}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="rounded-lg border border-[oklch(0.72_0.012_264)]/10 p-3">
+          <div className="mb-2 flex items-center gap-2">
+            <Activity className="h-3.5 w-3.5 text-[oklch(0.708_0.101_188)]" />
+            <span className="text-[11px] font-medium text-[oklch(0.958_0.004_264)]">Signal Watch — Anomaly Detection</span>
+          </div>
+          <div className="space-y-1.5">
+            {[
+              { signal: "Failure Rate Spike", severity: "critical", time: "2m ago", value: "+340%" },
+              { signal: "Token Budget Warning", severity: "warning", time: "15m ago", value: "78% used" },
+              { signal: "Slow Run Detected", severity: "info", time: "1h ago", value: "45.2s avg" },
+            ].map((s) => (
+              <div key={s.signal} className="flex items-center justify-between rounded-md bg-[oklch(0.10_0.015_264)] px-2.5 py-1.5">
+                <div className="flex items-center gap-2">
+                  <div className={cn("h-1.5 w-1.5 rounded-full", s.severity === "critical" && "bg-red-400", s.severity === "warning" && "bg-amber-400", s.severity === "info" && "bg-sky-400")} />
+                  <span className="text-[11px] text-[oklch(0.958_0.004_264)]">{s.signal}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] font-mono text-red-400/80">{s.value}</span>
+                  <span className="text-[9px] text-[oklch(0.72_0.012_264)]/40">{s.time}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Incidents Panel ───
+
+function FaithfulIncidentsPanel() {
+  const incidents = [
+    { id: "INC-001", severity: "critical", title: "Node NotReady — worker-3", status: "triaging", age: "2m" },
+    { id: "INC-002", severity: "warning", title: "Pod CrashLoopBackOff — api-gateway-7f", status: "remediating", age: "8m" },
+    { id: "INC-003", severity: "warning", title: "High Memory Pressure — etcd-0", status: "resolved", age: "32m" },
+    { id: "INC-004", severity: "info", title: "Certificate Expiring — ingress-tls", status: "acknowledged", age: "2h" },
+  ];
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-between border-b border-[oklch(0.72_0.012_264)]/10 px-4 py-2.5">
+        <div className="flex items-center gap-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-[oklch(0.72_0.012_264)]/15 bg-[oklch(0.18_0.025_264)]">
+            <AlertTriangle className="h-4 w-4 text-amber-400" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-[oklch(0.958_0.004_264)]">Incidents</h3>
+            <p className="text-[10px] text-[oklch(0.72_0.012_264)]/60">Alert lifecycle management</p>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-400">2 Active</div>
+        </div>
+      </div>
+      <div className="flex-1 overflow-auto p-3">
+        <div className="space-y-1.5">
+          {incidents.map((inc) => (
+            <div key={inc.id} className="flex items-center justify-between rounded-lg border border-[oklch(0.72_0.012_264)]/10 bg-[oklch(0.18_0.025_264)] p-3 hover:border-[oklch(0.72_0.012_264)]/20">
+              <div className="flex items-center gap-3">
+                <div className={cn("h-2 w-2 rounded-full", inc.severity === "critical" && "bg-red-400", inc.severity === "warning" && "bg-amber-400", inc.severity === "info" && "bg-sky-400")} />
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-mono font-bold text-[oklch(0.958_0.004_264)]">{inc.id}</span>
+                    <span className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium", inc.status === "triaging" && "bg-red-500/10 text-red-400", inc.status === "remediating" && "bg-amber-500/10 text-amber-400", inc.status === "resolved" && "bg-emerald-500/10 text-emerald-400", inc.status === "acknowledged" && "bg-sky-500/10 text-sky-400")}>
+                      {inc.status}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-[oklch(0.72_0.012_264)]/70">{inc.title}</p>
+                </div>
+              </div>
+              <span className="text-[9px] text-[oklch(0.72_0.012_264)]/40">{inc.age}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Features Grid ───
 
 function FeaturesSection() {
@@ -2537,14 +3036,14 @@ function FeaturesSection() {
       icon: MonitorDot,
       title: "Cluster-Native Agent Workflows",
       description:
-        "Orchestrate multi-agent pipelines for infrastructure tasks: pod diagnostics, log analysis, health checks, and deployment verification — with human approval gates.",
-      tags: ["Workflows", "HITL", "Multi-Agent"],
+        "Orchestrate pipelines for infrastructure tasks: pod diagnostics, log analysis, health checks, and deployment verification. Same agentRef across steps with autoRetry, session grouping, and human approval gates.",
+      tags: ["Workflows", "HITL", "Auto-Retry"],
     },
     {
       icon: Puzzle,
       title: "MCP Tool Ecosystem",
       description:
-        "10 bundled MCP tool sidecars: code execution, web search, browser, documents, database, git, and more. Hot-attach any MCP server.",
+        "10 bundled MCP tool sidecars: kubectl, code execution, web search, browser, database, git, github, and more. Hot-attach any MCP server.",
       tags: ["10 Sidecars", "Hot Attach", "Tools"],
     },
     {
@@ -2558,7 +3057,7 @@ function FeaturesSection() {
       icon: Workflow,
       title: "Visual DAG Workflows",
       description:
-        "Build multi-agent pipelines with the drag-and-drop composer. Approval gates, parallel execution, retries, and artifact passing.",
+        "Build DAG pipelines with the drag-and-drop composer. Approval gates, parallel execution, retries, and artifact passing.",
       tags: ["DAG", "Retries", "Approval"],
     },
     {
@@ -2575,32 +3074,40 @@ function FeaturesSection() {
         "Plugin auto-discovery blocked. Immutable security baseline enforced at the config layer. Admin-controlled provider routing prevents API key exfiltration. Model governance via allowlist.",
       tags: ["Security", "Zero-Trust", "Audit"],
     },
+    {
+      icon: AlertTriangle,
+      title: "Incident Lifecycle Automation",
+      description:
+        "Alertmanager webhook ingests alerts into AgentIncident CRDs. Operator lifecycle controller handles triage, escalation, auto-remediation, and post-mortem capture.",
+      tags: ["Alertmanager", "AgentIncident", "Escalation"],
+    },
   ];
 
   const ref = useRef(null);
   const inView = useInView(ref, { once: true, margin: "-80px" });
 
   return (
-    <section id="features" className="px-4 py-24 sm:px-6 md:py-32" ref={ref}>
+    <section className="px-4 py-16 sm:px-6 md:py-24" ref={ref}>
+      <StaticAtmosphere />
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
           animate={inView ? "visible" : "hidden"}
           variants={containerVariants}
-          className="mb-16 text-center"
+          className="mb-10 text-center"
         >
           <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
             Platform Capabilities
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-4xl">
             Everything Your Cluster <span className="text-[oklch(0.708_0.101_188)]">Needs</span>
           </motion.h2>
-          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-[oklch(0.82_0.01_264)]">
+          <motion.p variants={itemVariants} className="mx-auto mt-3 max-w-2xl text-base text-[oklch(0.8_0.01_264)]">
             From incident triage to capacity planning. A complete AI operations layer for Kubernetes-native infrastructure.
           </motion.p>
         </motion.div>
 
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {features.map((feature, i) => {
             const Icon = feature.icon;
             return (
@@ -2610,18 +3117,18 @@ function FeaturesSection() {
                 initial="hidden"
                 animate={inView ? "visible" : "hidden"}
                 transition={{ delay: i * 0.08 }}
-                className="group rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.5)] p-6 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:border-[oklch(0.708_0.101_188/0.3)] hover:shadow-lg hover:shadow-[oklch(0.708_0.101_188/0.05)] sm:p-7"
+                className="group rounded-2xl border border-[oklch(0.35_0.01_264)] bg-[oklch(0.206_0.009_264)] p-5 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:border-[oklch(0.708_0.101_188/0.5)] hover:shadow-[0_0_30px_-8px_oklch(0.708_0.101_188/0.12)] sm:p-6"
               >
-                <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.1)] text-[oklch(0.708_0.101_188)] ring-1 ring-[oklch(0.708_0.101_188/0.2)] transition-colors group-hover:bg-[oklch(0.708_0.101_188/0.15)]">
+                <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.1)] text-[oklch(0.708_0.101_188)] ring-1 ring-[oklch(0.708_0.101_188/0.2)] transition-colors group-hover:bg-[oklch(0.708_0.101_188/0.15)]">
                   <Icon className="h-5 w-5" />
                 </div>
                 <h3 className="text-base font-semibold text-[oklch(0.958_0.004_264)]">{feature.title}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-[oklch(0.82_0.01_264)]">{feature.description}</p>
-                <div className="mt-4 flex flex-wrap gap-2">
+                <p className="mt-2 text-sm leading-relaxed text-[oklch(0.8_0.01_264)]">{feature.description}</p>
+                <div className="mt-3 flex flex-wrap gap-1.5">
                   {feature.tags.map((tag) => (
                     <span
                       key={tag}
-                      className="rounded-full bg-[oklch(0.252_0.010_264)] px-2.5 py-0.5 text-[11px] font-medium text-[oklch(0.82_0.01_264)]"
+                      className="rounded-full bg-[oklch(0.28_0.01_264)] px-2 py-0.5 text-[10px] font-medium text-[oklch(0.8_0.01_264)]"
                     >
                       {tag}
                     </span>
@@ -2644,7 +3151,7 @@ function TrustBar() {
     { icon: ShieldCheck, label: "Immutable runtime config — plugin-free by default" },
     { icon: Lock, label: "RBAC + NetworkPolicy + provider enforcement" },
     { icon: Eye, label: "Request tracing with x-request-id propagation" },
-    { icon: Code, label: "Apache 2.0 — free forever" },
+    { icon: Code, label: "Apache 2.0 — open source" },
     { icon: Terminal, label: "Kind quickstart in under 5 minutes" },
   ];
 
@@ -2652,8 +3159,9 @@ function TrustBar() {
   const inView = useInView(ref, { once: true });
 
   return (
-    <section ref={ref} className="border-y border-[oklch(0.25_0.01_264)] bg-[oklch(0.17_0.008_264/0.5)] py-10">
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-center gap-x-10 gap-y-3 px-4">
+    <section ref={ref} className="border-y border-[oklch(0.32_0.01_264)] bg-[oklch(0.20_0.01_264)] py-8">
+      <StaticAtmosphere />
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-center gap-x-8 gap-y-2 px-4">
         {items.map((item, i) => {
           const Icon = item.icon;
           return (
@@ -2662,7 +3170,7 @@ function TrustBar() {
               initial={{ opacity: 0, y: 8 }}
               animate={inView ? { opacity: 1, y: 0 } : {}}
               transition={{ delay: i * 0.08, duration: 0.4 }}
-              className="flex items-center gap-2.5 text-xs font-medium text-[oklch(0.72_0.01_264)]"
+              className="flex items-center gap-2.5 text-xs font-medium text-[oklch(0.78_0.01_264)]"
             >
               <Icon className="h-4 w-4 text-[oklch(0.708_0.101_188)]" />
               {item.label}
@@ -2715,10 +3223,10 @@ function UseCasesSection() {
     },
     {
       icon: Layers,
-      title: "Multi-Cluster Fleet Management",
-      tags: ["Fleet", "Observability"],
+      title: "Policy-Enforced Automation",
+      tags: ["AgentPolicy", "Guardrails", "Audit"],
       description:
-        "Deploy KubeSynapse on each cluster in your fleet. Collect traces, correlate incidents, and run cross-cluster diagnostics — all from a single pane of glass.",
+        "Define AgentPolicy CRDs that enforce model allowlists, PII masking, token budgets, tool whitelists, and output guardrails on every agent action — across workflows, invocations, and incident automation.",
     },
   ];
 
@@ -2726,26 +3234,26 @@ function UseCasesSection() {
   const inView = useInView(ref, { once: true, margin: "-80px" });
 
   return (
-    <section ref={ref} id="use-cases" className="px-4 py-24 sm:px-6 md:py-32">
+    <section ref={ref} id="use-cases" className="px-4 py-20 sm:px-6 md:py-28">
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
           animate={inView ? "visible" : "hidden"}
           variants={containerVariants}
-          className="mb-14 text-center"
+          className="mb-10 text-center"
         >
           <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
             Use Cases
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-4xl">
             What You Can <span className="text-[oklch(0.708_0.101_188)]">Build</span>
           </motion.h2>
-          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-[oklch(0.82_0.01_264)]">
+          <motion.p variants={itemVariants} className="mx-auto mt-3 max-w-2xl text-base text-[oklch(0.8_0.01_264)]">
             KubeSynapse plugs into your existing Kubernetes deployments. No new infrastructure required.
           </motion.p>
         </motion.div>
 
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {useCases.map((uc, i) => {
             const Icon = uc.icon;
             return (
@@ -2755,22 +3263,22 @@ function UseCasesSection() {
                 initial="hidden"
                 animate={inView ? "visible" : "hidden"}
                 transition={{ delay: i * 0.07 }}
-                className="group rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.4)] p-6 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:border-[oklch(0.708_0.101_188/0.3)] hover:shadow-lg hover:shadow-[oklch(0.708_0.101_188/0.05)] sm:p-7"
+                className="group rounded-2xl border border-[oklch(0.35_0.01_264)] bg-[oklch(0.206_0.009_264)] p-5 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:border-[oklch(0.708_0.101_188/0.5)] hover:shadow-[0_0_30px_-8px_oklch(0.708_0.101_188/0.12)] sm:p-6"
               >
-                <div className="mb-4 flex items-center justify-between">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.1)] text-[oklch(0.708_0.101_188)] ring-1 ring-[oklch(0.708_0.101_188/0.2)] transition-colors group-hover:bg-[oklch(0.708_0.101_188/0.15)]">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.1)] text-[oklch(0.708_0.101_188)] ring-1 ring-[oklch(0.708_0.101_188/0.2)] transition-colors group-hover:bg-[oklch(0.708_0.101_188/0.15)]">
                     <Icon className="h-5 w-5" />
                   </div>
                   <div className="flex gap-1.5">
                     {uc.tags.map((tag) => (
-                      <span key={tag} className="rounded-full bg-[oklch(0.252_0.010_264)] px-2 py-0.5 text-[10px] font-medium text-[oklch(0.82_0.01_264)]">
+                      <span key={tag} className="rounded-full bg-[oklch(0.28_0.01_264)] px-2 py-0.5 text-[10px] font-medium text-[oklch(0.8_0.01_264)]">
                         {tag}
                       </span>
                     ))}
                   </div>
                 </div>
                 <h3 className="text-base font-semibold text-[oklch(0.958_0.004_264)]">{uc.title}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-[oklch(0.82_0.01_264)]">{uc.description}</p>
+                <p className="mt-2 text-sm leading-relaxed text-[oklch(0.8_0.01_264)]">{uc.description}</p>
               </motion.div>
             );
           })}
@@ -2808,18 +3316,19 @@ function HowItWorks() {
   const inView = useInView(ref, { once: true, margin: "-80px" });
 
   return (
-    <section className="px-4 py-24 sm:px-6 md:py-32" ref={ref}>
+    <section className="px-4 py-20 sm:px-6 md:py-28" ref={ref}>
+      <StaticAtmosphere />
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
           animate={inView ? "visible" : "hidden"}
           variants={containerVariants}
-          className="mb-16 text-center"
+          className="mb-12 text-center"
         >
           <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
             How It Works
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-4xl">
             From YAML to{" "}
             <span className="bg-gradient-to-r from-[oklch(0.708_0.101_188)] to-[oklch(0.742_0.132_233)] bg-clip-text text-transparent">
               Running Agent
@@ -2827,7 +3336,7 @@ function HowItWorks() {
           </motion.h2>
         </motion.div>
 
-        <div className="grid gap-6 lg:grid-cols-3">
+        <div className="grid gap-5 lg:grid-cols-3">
           {steps.map((step, i) => {
             const Icon = step.icon;
             return (
@@ -2858,20 +3367,20 @@ function HowItWorks() {
                   </div>
                 )}
 
-                <div className="relative overflow-hidden rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.5)] p-6 backdrop-blur-sm transition-all duration-300 hover:border-[oklch(0.708_0.101_188/0.3)] hover:shadow-lg hover:shadow-[oklch(0.708_0.101_188/0.05)] hover:-translate-y-1 sm:p-8">
+                <div className="relative overflow-hidden rounded-2xl border border-[oklch(0.35_0.01_264)] bg-[oklch(0.206_0.009_264)] p-5 backdrop-blur-sm transition-all duration-300 hover:border-[oklch(0.708_0.101_188/0.5)] hover:shadow-[0_0_30px_-8px_oklch(0.708_0.101_188/0.12)] hover:-translate-y-1 sm:p-6">
                   {/* Step number badge */}
-                  <div className="relative mb-6 flex items-center justify-between">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.15)] text-[oklch(0.708_0.101_188)] shadow-lg shadow-[oklch(0.708_0.101_188/0.1)] sm:h-14 sm:w-14">
-                      <Icon className="h-6 w-6 sm:h-7 sm:w-7" />
+                  <div className="relative mb-5 flex items-center justify-between">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.15)] text-[oklch(0.708_0.101_188)] shadow-lg shadow-[oklch(0.708_0.101_188/0.1)] sm:h-12 sm:w-12">
+                      <Icon className="h-5 w-5 sm:h-6 sm:w-6" />
                     </div>
-                    <span className="text-4xl font-black text-[oklch(0.708_0.101_188/0.1)] sm:text-5xl">
+                    <span className="text-3xl font-black text-[oklch(0.708_0.101_188/0.1)] sm:text-4xl">
                       {step.num}
                     </span>
                   </div>
 
                   <div className="relative">
-                    <h3 className="text-lg font-bold text-[oklch(0.958_0.004_264)] sm:text-xl">{step.title}</h3>
-                    <p className="mt-3 text-sm leading-relaxed text-[oklch(0.82_0.01_264)]">
+                    <h3 className="text-base font-bold text-[oklch(0.958_0.004_264)] sm:text-lg">{step.title}</h3>
+                    <p className="mt-2 text-sm leading-relaxed text-[oklch(0.8_0.01_264)]">
                       {step.description}
                     </p>
                   </div>
@@ -2902,8 +3411,8 @@ function ArchitectureSection() {
       items: [
         { name: "Kubernetes API Server", sub: "CRD registration & admission" },
         { name: "Operator (Kopf)", sub: "Reconcile AIAgent, AgentWorkflow…" },
-        { name: "API Gateway (FastAPI)", sub: "100+ REST & SSE endpoints" },
-        { name: "12 CRD Types", sub: "v1alpha1 custom resources" },
+        { name: "API Gateway (FastAPI)", sub: "224 REST & SSE endpoints" },
+        { name: "13 CRD Types", sub: "v1alpha1 custom resources" },
       ],
     },
     {
@@ -2930,27 +3439,28 @@ function ArchitectureSection() {
   ];
 
   return (
-    <section id="architecture" className="border-y border-[oklch(0.3_0.01_264)] bg-[oklch(0.149_0.008_264/0.5)] px-4 py-24 sm:px-6 md:py-32" ref={ref}>
+    <section id="architecture" className="border-y border-[oklch(0.35_0.01_264)] bg-[oklch(0.19_0.01_264)] px-4 py-20 sm:px-6 md:py-28" ref={ref}>
+      <StaticAtmosphere />
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
           animate={inView ? "visible" : "hidden"}
           variants={containerVariants}
-          className="mb-16 text-center"
+          className="mb-12 text-center"
         >
           <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
             Architecture
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-4xl">
             Built for <span className="text-[oklch(0.708_0.101_188)]">Production</span>
           </motion.h2>
-          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-2xl text-base text-[oklch(0.82_0.01_264)]">
+          <motion.p variants={itemVariants} className="mx-auto mt-3 max-w-2xl text-base text-[oklch(0.8_0.01_264)]">
             Separation of control plane and execution plane. Every agent is an isolated StatefulSet
             with its own persistent volume, network policy, and governance envelope.
           </motion.p>
         </motion.div>
 
-        <div className="grid gap-6 md:grid-cols-3">
+        <div className="grid gap-5 md:grid-cols-3">
           {planes.map((plane, i) => (
             <motion.div
               key={plane.label}
@@ -2958,21 +3468,21 @@ function ArchitectureSection() {
               initial="hidden"
               animate={inView ? "visible" : "hidden"}
               transition={{ delay: i * 0.1 }}
-              className={`rounded-2xl border ${plane.color} p-6 backdrop-blur-sm`}
+              className={`rounded-2xl border ${plane.color.replace('/5', '/8')} p-5 backdrop-blur-sm`}
             >
-              <h3 className="mb-4 text-sm font-bold uppercase tracking-wider text-[oklch(0.72_0.01_264)]">{plane.label}</h3>
-              <div className="space-y-3">
+              <h3 className="mb-3 text-sm font-bold uppercase tracking-wider text-[oklch(0.78_0.01_264)]">{plane.label}</h3>
+              <div className="space-y-2.5">
                 {plane.items.map((item) => (
                   <motion.div
                     key={item.name}
-                    className="group flex items-start gap-3 rounded-lg border border-[oklch(0.3_0.01_264/0.5)] bg-[oklch(0.164_0.007_264/0.8)] px-4 py-3 text-sm transition-all hover:border-[oklch(0.708_0.101_188/0.3)] hover:shadow-sm"
-                    whileHover={{ x: 4 }}
+                    className="group flex items-start gap-3 rounded-lg border border-[oklch(0.35_0.01_264)] bg-[oklch(0.18_0.01_264)] px-3.5 py-2.5 text-sm transition-all hover:border-[oklch(0.708_0.101_188/0.5)] hover:shadow-[0_0_20px_-6px_oklch(0.708_0.101_188/0.1)]"
+                    whileHover={{ x: 3 }}
                     transition={{ duration: 0.15 }}
                   >
                     <CheckCircle2 className={`mt-0.5 h-4 w-4 flex-shrink-0 ${plane.iconColor}`} />
                     <div>
                       <span className="font-medium text-[oklch(0.958_0.004_264)]">{item.name}</span>
-                      <p className="text-[11px] text-[oklch(0.62_0.01_264)]">{item.sub}</p>
+                      <p className="text-[11px] text-[oklch(0.7_0.01_264)]">{item.sub}</p>
                     </div>
                   </motion.div>
                 ))}
@@ -3091,29 +3601,30 @@ function WhySection() {
   ];
 
   return (
-    <section className="border-y border-[oklch(0.3_0.01_264)] bg-[oklch(0.149_0.008_264/0.5)] px-4 py-24 sm:px-6 md:py-32" ref={ref}>
+    <section className="border-y border-[oklch(0.35_0.01_264)] bg-[oklch(0.19_0.01_264)] px-4 py-20 sm:px-6 md:py-28" ref={ref}>
+      <StaticAtmosphere />
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
           animate={inView ? "visible" : "hidden"}
           variants={containerVariants}
-          className="mb-16 text-center"
+          className="mb-12 text-center"
         >
           <motion.p variants={itemVariants} className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">
             Why KubeSynapse
           </motion.p>
-          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+          <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-4xl">
             Purpose-Built for{" "}
             <span className="bg-gradient-to-r from-[oklch(0.708_0.101_188)] to-[oklch(0.742_0.132_233)] bg-clip-text text-transparent">
               Production
             </span>
           </motion.h2>
-          <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-xl text-base text-[oklch(0.82_0.01_264)]">
+          <motion.p variants={itemVariants} className="mx-auto mt-3 max-w-xl text-base text-[oklch(0.8_0.01_264)]">
             Not a Python library with a deployment guide. A complete AI operations platform designed from day one for Kubernetes operators.
           </motion.p>
         </motion.div>
 
-        <div className="grid gap-6 md:grid-cols-2">
+        <div className="grid gap-5 md:grid-cols-2">
           {reasons.map((reason, i) => {
             const Icon = reason.icon;
             return (
@@ -3123,14 +3634,14 @@ function WhySection() {
                 initial="hidden"
                 animate={inView ? "visible" : "hidden"}
                 transition={{ delay: i * 0.1 }}
-                className="group flex flex-col gap-4 rounded-2xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.5)] p-6 backdrop-blur-sm transition-all hover:border-[oklch(0.708_0.101_188/0.3)] hover:shadow-lg hover:shadow-[oklch(0.708_0.101_188/0.05)] sm:flex-row sm:gap-5 sm:p-7"
+                className="group flex flex-col gap-3 rounded-2xl border border-[oklch(0.35_0.01_264)] bg-[oklch(0.206_0.009_264)] p-5 backdrop-blur-sm transition-all hover:border-[oklch(0.708_0.101_188/0.5)] hover:shadow-[0_0_30px_-8px_oklch(0.708_0.101_188/0.12)] sm:flex-row sm:gap-4 sm:p-6"
               >
-                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.1)] text-[oklch(0.708_0.101_188)] ring-1 ring-[oklch(0.708_0.101_188/0.2)] transition-colors group-hover:bg-[oklch(0.708_0.101_188/0.15)]">
-                  <Icon className="h-6 w-6" />
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[oklch(0.708_0.101_188/0.1)] text-[oklch(0.708_0.101_188)] ring-1 ring-[oklch(0.708_0.101_188/0.2)] transition-colors group-hover:bg-[oklch(0.708_0.101_188/0.15)]">
+                  <Icon className="h-5 w-5" />
                 </div>
                 <div>
                   <h3 className="text-base font-semibold text-[oklch(0.958_0.004_264)]">{reason.title}</h3>
-                  <p className="mt-2 text-sm leading-relaxed text-[oklch(0.82_0.01_264)]">{reason.description}</p>
+                  <p className="mt-1.5 text-sm leading-relaxed text-[oklch(0.8_0.01_264)]">{reason.description}</p>
                 </div>
               </motion.div>
             );
@@ -3219,7 +3730,8 @@ function KubeMatrix() {
 
 function BottomCTA() {
   return (
-    <section className="relative px-4 py-24 sm:px-6 md:py-32 overflow-hidden">
+    <section className="relative px-4 py-20 sm:px-6 md:py-28 overflow-hidden">
+      <StaticAtmosphere />
       <KubeMatrix />
       <div className="relative mx-auto max-w-4xl text-center" style={{ zIndex: 2 }}>
         <motion.div
@@ -3227,7 +3739,7 @@ function BottomCTA() {
           whileInView={{ opacity: 1, scale: 1 }}
           viewport={{ once: true }}
           transition={{ duration: 0.6 }}
-          className="relative overflow-hidden rounded-3xl border border-[oklch(0.3_0.01_264)] bg-[oklch(0.206_0.009_264/0.5)] p-6 shadow-2xl shadow-[oklch(0.708_0.101_188/0.05)] backdrop-blur-sm sm:p-8 md:p-16"
+          className="relative overflow-hidden rounded-3xl border border-[oklch(0.35_0.01_264)] bg-[oklch(0.206_0.009_264)] p-5 shadow-2xl shadow-[oklch(0.708_0.101_188/0.08)] backdrop-blur-sm sm:p-6 md:p-12"
         >
           {/* Animated gradient border effect */}
           <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-3xl">
@@ -3235,13 +3747,13 @@ function BottomCTA() {
           </div>
 
           <div className="relative">
-            <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-[oklch(0.708_0.101_188)] text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)]">
-              <KubeSynapseLogo className="h-7 w-7" animated />
+            <div className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-[oklch(0.708_0.101_188)] text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)]">
+              <KubeSynapseLogo className="h-6 w-6" animated />
             </div>
-            <h2 className="text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
+            <h2 className="text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-3xl md:text-4xl">
               Ready to <span className="text-[oklch(0.708_0.101_188)]">Automate</span>?
             </h2>
-            <p className="mx-auto mt-4 max-w-xl text-base text-[oklch(0.82_0.01_264)]">
+            <p className="mx-auto mt-3 max-w-xl text-base text-[oklch(0.8_0.01_264)]">
               Deploy KubeSynapse on your cluster and let AI agents handle incident response,
               infrastructure automation, and operational intelligence.
             </p>
@@ -3265,20 +3777,23 @@ function BottomCTA() {
               </div>
             </div>
 
-            <div className="mt-8 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
-              <a
+            <div className="mt-6 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
+              <motion.a
                 href="#install"
-                className="group relative flex w-full items-center justify-center gap-2 rounded-xl bg-[oklch(0.708_0.101_188)] px-8 py-3.5 text-sm font-semibold text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)] transition-all hover:shadow-xl active:scale-[0.98] sm:w-auto"
+                className="group relative flex w-full items-center justify-center gap-2 rounded-xl bg-[oklch(0.708_0.101_188)] px-7 py-3 text-sm font-semibold text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)] sm:w-auto focus-visible:ring-2 focus-visible:ring-[oklch(0.708_0.101_188)] focus-visible:ring-offset-2 focus-visible:ring-offset-[oklch(0.206_0.009_264)]"
+                whileHover={{ x: [0, 2, -2, 0] }}
+                whileTap={{ scale: 0.98 }}
+                transition={{ type: "spring", stiffness: 300 }}
               >
                 <span className="absolute inset-0 -z-10 rounded-xl bg-[oklch(0.708_0.101_188)] opacity-0 blur-xl motion-safe:group-hover:opacity-50 transition-opacity" />
                 Run Quickstart
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-              </a>
+              </motion.a>
               <a
                 href="https://github.com/ykbytes/kubesynapse.ai"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex w-full items-center justify-center gap-2 rounded-xl border border-[oklch(0.4_0.015_264)] bg-[oklch(0.206_0.009_264/0.8)] px-8 py-3.5 text-sm font-semibold text-[oklch(0.85_0.01_264)] shadow-sm transition-all hover:border-[oklch(0.708_0.101_188/0.4)] hover:text-[oklch(0.958_0.004_264)] sm:w-auto"
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-[oklch(0.45_0.015_264)] bg-[oklch(0.206_0.009_264/0.8)] px-7 py-3 text-sm font-semibold text-[oklch(0.85_0.01_264)] shadow-sm transition-all hover:border-[oklch(0.708_0.101_188/0.5)] hover:text-[oklch(0.958_0.004_264)] sm:w-auto focus-visible:ring-2 focus-visible:ring-[oklch(0.708_0.101_188)] focus-visible:ring-offset-2 focus-visible:ring-offset-[oklch(0.206_0.009_264)]"
               >
                 <GitBranch className="h-4 w-4 text-[oklch(0.708_0.101_188)]" />
                 View on GitHub
@@ -3295,23 +3810,24 @@ function BottomCTA() {
 
 function Footer() {
   return (
-    <footer className="border-t border-[oklch(0.3_0.01_264)] px-4 py-14 sm:px-6">
+    <footer className="border-t border-[oklch(0.35_0.01_264)] bg-[oklch(0.18_0.01_264)] px-4 py-10 sm:px-6">
+      <StaticAtmosphere />
       <div className="mx-auto max-w-7xl">
-        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
           <div className="sm:col-span-2 lg:col-span-1">
             <div className="flex items-center gap-2">
               <KubeSynapseLogo className="h-5 w-5 text-[oklch(0.708_0.101_188)]" />
               <span className="text-sm font-bold text-[oklch(0.958_0.004_264)]">{BRAND.name}</span>
             </div>
-            <p className="mt-3 max-w-sm text-xs leading-relaxed text-[oklch(0.68_0.01_264)]">
+            <p className="mt-2 max-w-sm text-xs leading-relaxed text-[oklch(0.72_0.01_264)]">
               The AI-powered command center for Kubernetes operations.
               Self-hosted, open source under Apache 2.0.
             </p>
           </div>
 
           <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-[oklch(0.62_0.01_264)]">Platform</h4>
-            <ul className="mt-4 space-y-2.5 text-sm text-[oklch(0.78_0.01_264)]">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-[oklch(0.68_0.01_264)]">Platform</h4>
+            <ul className="mt-3 space-y-2 text-sm text-[oklch(0.78_0.01_264)]">
               <li><a href="#features" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Features</a></li>
               <li><a href="#architecture" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Architecture</a></li>
               <li><a href="#install" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Quick Start</a></li>
@@ -3320,8 +3836,8 @@ function Footer() {
           </div>
 
           <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-[oklch(0.62_0.01_264)]">Resources</h4>
-            <ul className="mt-4 space-y-2.5 text-sm text-[oklch(0.78_0.01_264)]">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-[oklch(0.68_0.01_264)]">Resources</h4>
+            <ul className="mt-3 space-y-2 text-sm text-[oklch(0.78_0.01_264)]">
               <li><a href="https://github.com/ykbytes/kubesynapse.ai" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">GitHub</a></li>
               <li><a href="https://github.com/ykbytes/kubesynapse.ai/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Changelog</a></li>
               <li><a href="https://github.com/ykbytes/kubesynapse.ai/tree/main/charts/kubesynapse" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Helm Charts</a></li>
@@ -3340,14 +3856,14 @@ function Footer() {
           </div>
         </div>
 
-        <div className="mt-12 flex flex-col items-center justify-between gap-4 border-t border-[oklch(0.25_0.01_264)] pt-8 sm:flex-row">
-          <p className="text-xs text-[oklch(0.58_0.01_264)]">
+        <div className="mt-8 flex flex-col items-center justify-between gap-3 border-t border-[oklch(0.3_0.01_264)] pt-6 sm:flex-row">
+          <p className="text-xs text-[oklch(0.62_0.01_264)]">
             &copy; {new Date().getFullYear()} {BRAND.name}. Open source under Apache 2.0. Built by{" "}
             <a href="https://www.linkedin.com/in/yakdhane/" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-[oklch(0.708_0.101_188)]">
               Ahmed YAKDHANE
             </a>.
           </p>
-          <div className="flex items-center gap-4 text-xs text-[oklch(0.58_0.01_264)]">
+          <div className="flex items-center gap-3 text-xs text-[oklch(0.62_0.01_264)]">
             <a href="/sitemap.xml" className="hover:text-[oklch(0.708_0.101_188)]">Sitemap</a>
             <span>Self-hosted &middot; No telemetry &middot; Your cluster, your data</span>
           </div>

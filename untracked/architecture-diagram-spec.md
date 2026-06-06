@@ -21,7 +21,7 @@ The visual needs to show that:
 
 The current `docs/kubesynth-architectureold.drawio` is not faithful to the shipped platform:
 
-- It lists only 5 CRDs, while the chart installs 12 CRDs under `charts/kubesynapse/crds/*.yaml`.
+- It lists only 5 CRDs, while the chart installs 13 CRDs under `charts/kubesynapse/crds/*.yaml`.
 - It shows an OpenCode-only runtime plane, while the repo ships `opencode`, `pi`, and `mistral-vibe` runtimes.
 - It treats the gateway mainly as ingress and routing, while current code also owns auth, CRUD, invoke routing, A2A, webhook intake, traces, and UI-facing metadata.
 - It omits `McpConnection`, `WebhookReceiver`, `WorkflowTrigger`, and the observability CRDs.
@@ -36,7 +36,7 @@ Use this as the implementation prompt for a designer, diagramming tool, or follo
 ```text
 Redesign the KubeSynapse architecture diagram as a wide, modern, repo-faithful platform diagram that can replace docs/kubesynth-architectureold.drawio. The main message should be: "Ship AI agents as Kubernetes resources." Use a Kubernetes cluster boundary as the main visual frame. Put external actors on the left, external providers on the right, and use clear horizontal lanes inside the cluster.
 
-Show Kubernetes CRDs as the control-plane source of truth, not PostgreSQL. Group the 12 CRDs into three families: agent CRDs (AIAgent, AgentPolicy, AgentApproval, AgentWorkflow, AgentTenant), integration CRDs (McpConnection, WebhookReceiver, WorkflowTrigger), and observability CRDs (ConnectorPlugin, ObservationTarget, ObservationPolicy, ObservationReport).
+Show Kubernetes CRDs as the control-plane source of truth, not PostgreSQL. Group the 13 CRDs into four families: agent CRDs (AIAgent, AgentPolicy, AgentApproval, AgentWorkflow, AgentTenant), integration CRDs (McpConnection, WebhookReceiver, WorkflowTrigger), incident CRDs (AgentIncident), and observability CRDs (ConnectorPlugin, ObservationTarget, ObservationPolicy, ObservationReport).
 
 Show the API gateway as both the public edge and a major backend boundary. Its label should visibly cover auth, CRUD, invoke and stream routing, A2A, webhooks, and Execution Observatory APIs. Show the web UI adjacent to this edge layer, with browser traffic entering the UI and the UI forwarding same-host /api traffic to the gateway.
 

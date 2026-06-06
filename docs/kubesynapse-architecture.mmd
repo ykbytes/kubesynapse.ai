@@ -8,6 +8,7 @@ flowchart TB
     EXT["🔗 External Apps & Webhooks"]:::client
     GH["🐙 Git Repositories"]:::external
     IDP["🔐 Identity Providers"]:::external
+    AM["🚨 Alertmanager"]:::external
 
     %% ═══════════════════════════════════════════════════
     %% CONTROL PLANE
@@ -17,7 +18,7 @@ flowchart TB
     Trace ingestion · Observatory APIs"):::gateway
 
     K8S{{"☸️ Kubernetes API
-    12 CRDs"}}:::k8s
+    13 CRDs"}}:::k8s
 
     OP("🔧 Operator
     Kopf reconcile loop
@@ -105,6 +106,7 @@ flowchart TB
     OP -.->|"Inject immutable config"| SEC
 
     OC -->|"Git clone / repo access"| GH
+    AM -->|"POST /api/v1/webhooks/alertmanager"| GW
     OC -->|"localhost or hub transport"| MCP
     OC -->|"Workspace + checkpoints"| PVC
     OC -->|"HTTPS /v1/chat/completions"| LLM

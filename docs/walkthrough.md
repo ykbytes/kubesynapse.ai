@@ -6,7 +6,7 @@ This document is a current implementation walkthrough of the platform that exist
 
 As of April 2026, the shipped platform is centered on these paths:
 
-- `AIAgent`, `AgentPolicy`, `AgentWorkflow`, `AgentApproval`, and `AgentTenant` remain the core control-plane CRDs
+- `AIAgent`, `AgentPolicy`, `AgentWorkflow`, `AgentApproval`, `AgentTenant`, and `AgentIncident` remain the core control-plane CRDs
 - `ConnectorPlugin`, `ObservationTarget`, `ObservationPolicy`, and `ObservationReport` extend the control plane with an observability model
 - the runtime surface supports the three in-tree runtime kinds exposed by the CRD: `opencode`, `pi`, and `mistral-vibe`
 - the operator provisions singleton runtime sandboxes and worker Jobs from Kubernetes resources instead of maintaining an external workflow service
@@ -19,7 +19,7 @@ The platform chart in `charts/KubeSynapse` is still the entry point for the full
 
 What the chart installs now:
 
-- the control-plane CRDs for agents, policies, workflows, approvals, tenants, and observability
+- the control-plane CRDs for agents, policies, workflows, approvals, tenants, incidents, and observability
 - the operator deployment and worker configuration
 - the API gateway, web UI, LiteLLM, Redis, Qdrant, NATS, and PostgreSQL
 - the shared MCP hub namespace and hub-server deployment model
@@ -99,7 +99,7 @@ Current major surfaces:
 - eval management and result inspection
 - provider-centric settings and admin views
 - MCP registry and connection management
-- intelligence and observability dashboards
+- intelligence, observability, and incidents dashboards
 
 The observability dashboard now understands:
 
@@ -151,9 +151,35 @@ Current practical model:
 - a policy describes how telemetry should be interpreted
 - a report is the resulting visible status artifact
 
+The observability layer integrates with the run intelligence pipeline:
+- **Signal Watch** (`controllers/signal_watch.py`) runs SQL-based anomaly detection against the execution trace tables, identifying cost spikes, error rate increases, and latency regressions
+- detected anomalies can trigger `AgentIncident` creation through the incident management system (see [§8](#8-incident-management))
+- **System agents** receive signal context and produce human-readable explanations for the UI
+
 The current implementation intentionally includes demo-driven report generation so the end-to-end flow is visible before a full external telemetry backend is wired in.
 
-## 8. Deployment and Operations Paths
+## 8. Incident Management
+
+Incident management is built into the platform through the `AgentIncident` CRD, the Alertmanager webhook receiver, and the operator's incident lifecycle controller.
+
+Key components:
+
+- **Alertmanager webhook** — external alert sources POST to `POST /api/v1/webhooks/alertmanager` on the gateway, which upserts an `AgentIncident` record and creates the corresponding Kubernetes CR
+- **Operator incident controller** (`controllers/incident_controller.py`) — watches `AgentIncident` CRs and drives the lifecycle: firing → acknowledged → resolved → closed. It syncs status transitions back to the gateway via `PUT /api/v1/incidents/{name}`
+- **Escalation** — incidents can be escalated with configurable severity levels; the controller persists escalation timer state in CRD annotations and re-triggers handlers on transition
+- **Remediation workflows** — incident status transitions can trigger linked `AgentWorkflow` runs for automated remediation
+- **Signal watch integration** — the SQL-based anomaly detection engine (`controllers/signal_watch.py`) can proactively create incidents when it detects anomalous patterns in execution traces
+
+The gateway exposes a full incident REST surface:
+- `GET /api/v1/incidents` — list incidents
+- `POST /api/v1/incidents` — create incident
+- `PUT /api/v1/incidents/{name}` — idempotent upsert
+- `PATCH /api/v1/incidents/{name}` — update status (acknowledge, resolve, close)
+- `GET /api/v1/incidents/{name}/timeline` — incident event timeline
+
+The web UI includes a dedicated **Incidents** tab within the Intelligence workspace for viewing and managing incident state.
+
+## 9. Deployment and Operations Paths
 
 There are now two real ways operators use this repository:
 
@@ -166,7 +192,7 @@ Operationally important files:
 - `deploy/values.local-images.example.yaml`
 - `tests/test_production_readiness.py`
 
-## 9. What Changed from the Older Walkthrough
+## 10. What Changed from the Older Walkthrough
 
 The earlier walkthrough was no longer accurate in several important ways.
 
@@ -184,7 +210,7 @@ The current code instead reflects:
 - worker-artifact-first workflow execution
 - observability CRDs, collector support, and related UI views
 
-## 10. Recommended Companion Docs
+## 11. Recommended Companion Docs
 
 For more precise detail, read these alongside this walkthrough:
 

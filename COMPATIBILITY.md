@@ -174,7 +174,7 @@ This script:
 ### Tested (CI-verified on every PR)
 - ✅ Kind clusters: 1.25, 1.27, 1.29, 1.31, 1.32
 - ✅ Helm install → health check → agent create → reconcile → cleanup
-- ✅ All 12 CRDs install and validate
+- ✅ All 13 CRDs install and validate
 
 ### Planned (roadmap)
 - 🧪 EKS (AWS) — Q2 2026

@@ -87,6 +87,7 @@ local image tags, and same-host `/api` UI routing aligned with the current repo.
 | Redis | localhost:6379 | Cache / sessions |
 | NATS | in-cluster | Shared messaging service |
 | Qdrant | in-cluster | Vector DB |
+| Alertmanager Webhook | http://localhost:8080/api/v1/webhooks/alertmanager | Webhook receiver — creates and upserts AgentIncident records |
 
 ---
 
@@ -327,6 +328,7 @@ LiteLLM schema initialization is automatic in the Helm chart.
 - [ ] Configure log aggregation (Fluent Bit / Vector)
 - [ ] Run security scan: `make lint` + `bandit`
 - [ ] Enable OIDC or SAML for auth
+- [ ] Configure Alertmanager webhook to POST to `https://<gateway>/api/v1/webhooks/alertmanager`
 - [ ] Set up alerts for critical paths
 
 ---

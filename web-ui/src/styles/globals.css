@@ -436,6 +436,28 @@
     display: none;
   }
 
+  .composer-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: oklch(0.35_0.014_264) transparent;
+  }
+  .composer-scroll::-webkit-scrollbar {
+    height: 10px;
+    width: 10px;
+  }
+  .composer-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .composer-scroll::-webkit-scrollbar-thumb {
+    background: oklch(0.30_0.014_264);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  .composer-scroll::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.40_0.014_264);
+    background-clip: padding-box;
+  }
+
   html {
     font-size: 15px;
     scroll-behavior: smooth;

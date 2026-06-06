@@ -38,10 +38,11 @@ flowchart TB
         LLM[LLM providers]
         IDP[OIDC / SAML / LDAP]
         GIT[Git repositories]
+        AM[Alertmanager]
     end
 
     subgraph Cluster["KubeSynapse cluster"]
-        K8S[Kubernetes API + 12 CRDs]
+        K8S[Kubernetes API + 13 CRDs]
         GW[API Gateway]
         OP[Operator]
         RT[Runtime StatefulSets]
@@ -60,6 +61,7 @@ flowchart TB
     OP --> JOB
     RT --> LLM
     RT --> GIT
+    AM --> GW
 ```
 
 **Key interactions:**
@@ -81,7 +83,7 @@ flowchart TB
     EXT[External apps and webhooks]
 
     GW[API Gateway]
-    K8S[Kubernetes API + 12 CRDs]
+    K8S[Kubernetes API + 13 CRDs]
     OP[Operator]
 
     OC[OpenCode runtime StatefulSets]
@@ -143,7 +145,7 @@ flowchart TB
 
 ### Kubernetes API and CRDs
 
-The chart installs 12 CRDs and the Kubernetes API remains the source of truth for desired state.
+The chart installs 13 CRDs and the Kubernetes API remains the source of truth for desired state.
 
 | CRD | Scope | Purpose |
 | --- | --- | --- |
@@ -319,6 +321,35 @@ sequenceDiagram
 
 ---
 
+## Data Flow: Incident Management
+
+```mermaid
+sequenceDiagram
+    participant AM as Alertmanager
+    participant GW as API Gateway
+    participant DB as PostgreSQL
+    participant OP as Operator
+    participant RT as Runtime (remediation agent)
+    participant WR as Workflow Job
+
+    AM->>GW: POST /api/v1/webhooks/alertmanager
+    GW->>GW: Upsert AgentIncident (PUT)
+    GW->>DB: Persist incident + timeline event
+    GW-->>AM: 200 OK (incident tracking id)
+    OP->>GW: GET /api/v1/incidents?status=firing
+    OP->>OP: Evaluate escalation timer
+    OP->>WR: Trigger workflow if workflowRef set
+    WR->>RT: Run remediation steps
+    RT-->>OP: Workflow result
+    OP->>GW: PATCH /api/v1/incidents/{name} (resolve)
+```
+
+Incidents can also be created manually via `POST /api/v1/incidents` or `PUT /api/v1/incidents/{name}`.
+The operator reconciles the `AgentIncident` CRD status against the gateway incident state and
+drives the lifecycle (acknowledge, escalate, resolve, trigger workflows).
+
+---
+
 ## CRD Relationships
 
 ```mermaid
@@ -335,6 +366,7 @@ flowchart TB
     OT[ObservationTarget]
     OP[ObservationPolicy]
     OR[ObservationReport]
+    AI[AgentIncident]
 
     AG -->|references| AP
     AG -->|uses| MC
@@ -347,6 +379,8 @@ flowchart TB
     OT -->|collects via| CP
     OT -->|evaluated by| OP
     OT -->|produces| OR
+    AI -->|triggers| AW
+    AI -->|assigned to| AG
 ```
 
 ---
@@ -361,6 +395,7 @@ flowchart TB
 | `Qdrant` | Optional semantic retrieval for runtime memory and search | Enabled by default in values, but the shipped deployment uses `emptyDir` unless you customize it |
 | `NATS` | Async extension point | Enabled by default, but not on the primary invoke path |
 | MCP hub | Shared MCP service pool | Complements per-agent sidecars and `McpConnection` records |
+| Alertmanager | External alert source | POSTs to `/api/v1/webhooks/alertmanager`; gateway upserts AgentIncident records |
 
 ---
 
@@ -379,4 +414,4 @@ See [`docs/architecture-overview.md`](architecture-overview.md), [`docs/observab
 
 ---
 
-**Last Updated:** 2026-05-28
+**Last Updated:** 2026-06-05
