@@ -86,7 +86,7 @@ helm upgrade --install kubesynapse ./charts/kubesynapse \
   -f ./deploy/values.cluster.yaml
 
 # 3. Wait for pods to become ready
-kubectl wait --for=condition=ready pod -n kubesynapse -l app=kubesynapse-api-gateway --timeout=120s
+kubectl wait --for=condition=ready pod -n kubesynapse -l app=kubesynapse-api-gateway --timeout=300s
 
 # 4. Verify health
 curl http://localhost:8080/api/v1/health`}
@@ -222,6 +222,10 @@ agentctl agents invoke my-first-agent --stream "Stream this response"`} lang="ba
             },
           ]}
         />
+        <Callout variant="tip" title="Next: Architecture">
+          Once KubeSynapse is running, continue to <strong>Architecture</strong> to learn how the
+          control plane, 13 CRDs, execution plane, and multi-tenancy with <code>AgentTenant</code> fit together.
+        </Callout>
       </div>
     </div>
   );
@@ -262,7 +266,7 @@ function ArchitectureSection() {
           ["tenantName", "string (required)", "Human-readable name (e.g. <code>data-science-team</code>)"],
           ["namespace", "string (required)", "Kubernetes namespace that this tenant owns"],
           ["resourceQuota.maxCPU / maxMemory / maxPods / maxGPU", "string / string / integer / string", "Hard caps applied to the tenant's namespace"],
-          ["resourceQuota.maxParallelSteps", "integer (min: 1, default: 4)", "Maximum parallel workflow steps per execution for this tenant"],
+          ["resourceQuota.maxParallelSteps", "integer (min: 1, default: 4)", "Maximum parallel workflow steps per execution for this tenant. Default is a documented convention — the CRD does not set a server-side default."],
           ["allowedModels", "string[]", "LLM model identifiers this tenant may use (e.g. <code>gpt-4o</code>, <code>claude-3-5-sonnet</code>)"],
           ["adminUsers", "string[]", "OIDC usernames or groups who can manage agents in this tenant"],
         ]} />
@@ -690,6 +694,11 @@ curl -N -X POST http://localhost:8080/api/v1/agents/my-agent/invoke/stream \\
           from runtime invoke outcomes (workflow step results, HITL responses), not from this endpoint —
           the runtime continues to manage its own thread state independently.
         </Callout>
+        <Callout variant="tip" title="Related: Memory & Context">
+          Chat sessions feed into the durable memory system. See <strong>Memory & Context</strong> for how
+          conversation highlights are promoted to persistent recall, the auto-promotion scoring formula,
+          and supported memory types (<code>procedural</code>, <code>episodic</code>).
+        </Callout>
       </div>
     </div>
   );
@@ -754,6 +763,11 @@ function MemorySection() {
           Durable memory is injected on both sync and streamed invokes. If the gateway needs to assemble a
           memory-heavy system prompt first, it can preserve parity by emitting SSE from a non-stream runtime invoke.
         </Callout>
+        <Callout variant="tip" title="Related: Chat Sessions & Agent Policies">
+          Durable memory is promoted from chat session context (see <strong>Chat Sessions</strong>).
+          Auto-promotion thresholds, max-injected counts, and allowed memory types are governed by
+          <code>AgentPolicy.memoryPolicy</code> (see <strong>Agent Policies → Memory Policy</strong>).
+        </Callout>
       </div>
     </div>
   );
@@ -773,8 +787,8 @@ function WorkflowsSection() {
         <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           An <code>AgentWorkflow</code> defines a multi-step DAG. The operator topologically sorts steps
           and dispatches them in waves — all frontier steps with no unsatisfied dependencies run in parallel
-          (capped at <code>maxParallelSteps</code> per tenant). Failed steps fail-fast by default, cancelling
-          siblings.
+          (capped at <code>maxParallelSteps</code> per tenant; the cap is on concurrent worker tasks, not the
+          number of steps queued in the frontier). Failed steps fail-fast by default, cancelling siblings.
         </p>
       </div>
 
@@ -1101,12 +1115,18 @@ spec:
     maxTimeoutSeconds: 60
     requireHitl: true`} lang="yaml" />
       </div>
-    </div>
-  );
-}
+        <Callout variant="tip" title="Related: A2A & Agent Policies">
+          Agent-to-Agent communication is governed by both the <code>AIAgent</code> spec (<code>a2a.allowedCallers</code>)
+          and <code>AgentPolicy</code> (<code>a2a.allowedTargets</code>, <code>a2a.maxTimeoutSeconds</code>,
+          <code>a2a.requireHitl</code>). The operator generates per-agent NetworkPolicies to enforce A2A
+          boundaries at the network layer. See <strong>Agent Policies → A2A Policy</strong> for details.
+        </Callout>
+      </div>
+    );
+  }
 
-function PoliciesSection() {
-  return (
+  function PoliciesSection() {
+    return (
     <div className="space-y-8">
       <SectionHeading icon={ShieldCheck}>Agent Policies</SectionHeading>
       <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
@@ -1177,7 +1197,7 @@ function PoliciesSection() {
       <div id="policy-mcp">
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">MCP Server Access Control</h3>
         <DocsTable headers={["Field", "Type", "Description"]} rows={[
-          ["allowedMcpServers", "string[]", "Whitelist of MCP server type labels the agent may call (e.g. ['github', 'filesystem']). Empty = no MCP access. Enforced via NetworkPolicy egress rules generated by the operator."],
+          ["allowedMcpServers", "string[]", "Whitelist of MCP server type labels the agent may call (e.g. ['github', 'filesystem']). Empty = no MCP access. Enforced by the gateway at invoke time; per-agent NetworkPolicy egress rules targeting <code>mcp.kubesynapse.ai/type</code> labels reinforce at the network layer."],
           ["mcpRequireHitl", "boolean", "When true (default), every MCP tool call must pass through the HITL gate and requires AgentApproval before execution."],
         ]} />
       </div>
@@ -2062,7 +2082,7 @@ function TracesSection() {
           ["event_id", "string", "Unique event ID (upsert key)"],
           ["namespace", "string", "Namespace of the agent or workflow"],
           ["runtime_kind", "string", "<code>opencode</code> | <code>pi</code> | <code>mistral-vibe</code>"],
-          ["event_type", "string", "One of the 15 event types listed above"],
+          ["event_type", "string", "One of 15 event types — 9 emitted by the OpenCode runtime (run.*, tool.*, llm.call, human.question, todo.updated) and 6 emitted by the operator (agent.call.*, step.*)"],
           ["agent_name", "string", "Agent that produced the event"],
           ["session_id", "string", "Session this event belongs to"],
           ["severity", "string", "<code>info</code> | <code>warning</code> | <code>error</code> | <code>critical</code>"],
@@ -2304,7 +2324,7 @@ function SecuritySection() {
           ["OIDC", "PKCE flow", "Google, GitHub, Azure AD, custom providers"],
           ["SAML", "SP-initiated", "Enterprise SSO integration"],
           ["Refresh tokens", "384-bit random + <code>SHA-256(JWT_SECRET ‖ token)</code> (key-prefix; NOT HMAC)", "Stored hashed; rotation on use. The construction is key-prefix SHA-256 (<code>auth_store.py:1867</code>), not a proper MAC — do not reuse this pattern for new code."],
-          ["Password hashing", "argon2id (pbkdf2 fallback)", "Auto-upgrades on next login"],
+          ["Password hashing", "argon2id (pbkdf2_sha256 fallback)", "Auto-upgrades on next login"],
         ]} />
       </div>
 
