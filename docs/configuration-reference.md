@@ -92,6 +92,11 @@ The `OPENCODE_MEMORY_*` variables documented below apply only to the runtime-loc
 | `SIGNAL_WATCH_STUCK_MULTIPLIER` | `2.0` | Stuck run duration multiplier |
 | `SIGNAL_WATCH_SYSTEM_NS` | `kubesynapse-system` | System agents namespace |
 
+The operator also seeds namespace-local runtime copies of `kubesynapse-llm-api-keys`.
+`DEFAULT_LITELLM_MASTER_KEY` and `DEFAULT_API_GATEWAY_SHARED_TOKEN` are the source of
+truth for the native secret provisioning path, and runtime pods read those namespace-local
+copies rather than the `kubesynapse` namespace secret directly.
+
 ### Runtime Event Emission (All Runtimes)
 
 | Variable | Default | Description |

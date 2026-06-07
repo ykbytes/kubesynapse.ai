@@ -23,6 +23,7 @@ Each issue follows this pattern: **Symptoms -> Diagnosis -> Fix -> Prevention**
 - [Workflow Logs Return "No Worker Pod Found"](#workflow-logs-return-no-worker-pod-found)
 - [Auth Page Shows Bootstrap When Users Exist](#auth-page-shows-bootstrap-when-users-exist)
 - [Web UI Changes Not Visible After Deploy](#web-ui-changes-not-visible-after-deploy)
+- [LiteLLM Returns Invalid Proxy Token Errors](#litellm-returns-invalid-proxy-token-errors)
 
 ---
 
@@ -964,3 +965,69 @@ Browsers cache these assets for 1 year. After each deploy, the old cached bundle
 2. **DevTools**: Network tab → "Disable cache" checkbox
 3. **Incognito window**: Always loads fresh assets
 4. **Cache-busting is automatic**: Each build produces new bundle filenames (e.g., `index-X9sjL0aj.js` → `index-D4b0WUm_.js`), so after hard refresh, the new files load correctly
+
+---
+
+## LiteLLM Returns Invalid Proxy Token Errors
+
+### Symptoms
+
+- Agent runs fail with `Authentication Error, Invalid proxy server token passed`
+- LiteLLM logs show `401 Unauthorized` on `GET /v1/models` or `POST /v1/chat/completions`
+- The gateway or sandbox pods appear healthy, but model discovery and chat requests still fail
+
+### Diagnosis
+
+```bash
+# Check the LiteLLM auth failures and requester IPs
+kubectl logs -n kubesynapse deployment/kubesynapse-litellm --tail=200
+
+# Check the gateway token currently mounted in the gateway pods
+kubectl exec -n kubesynapse deploy/kubesynapse-api-gateway -- printenv | grep LITELLM_MASTER_KEY
+
+# Check the namespace-local runtime secret used by sandbox pods
+kubectl get secret kubesynapse-llm-api-keys -n default -o jsonpath='{.data.LITELLM_MASTER_KEY}' | base64 -d
+
+# Check LiteLLM's actual configured master key
+kubectl exec -n kubesynapse deploy/kubesynapse-litellm -- printenv | grep LITELLM_MASTER_KEY
+```
+
+Common causes:
+
+| Cause | Indicator |
+|-------|-----------|
+| **Namespace secret drift** | `kubesynapse-llm-api-keys` in `kubesynapse` and the agent namespace contain different `LITELLM_MASTER_KEY` values |
+| **Wrong token type** | Gateway or credential-proxy sends a token LiteLLM does not use as its configured `LITELLM_MASTER_KEY` |
+| **Pods not restarted after secret change** | Secret is correct but gateway or sandbox pods still serve stale env vars |
+| **Operator defaults out of sync** | Newly provisioned runtime namespace secrets keep getting recreated with old `DEFAULT_LITELLM_MASTER_KEY` or `DEFAULT_API_GATEWAY_SHARED_TOKEN` values |
+
+### Fix
+
+**Namespace secret drift:**
+
+```bash
+# Make both copies match LiteLLM's real master key
+kubectl patch secret kubesynapse-llm-api-keys -n kubesynapse \
+  -p '{"stringData":{"LITELLM_MASTER_KEY":"dev-litellm-key"}}'
+
+kubectl patch secret kubesynapse-llm-api-keys -n default \
+  -p '{"stringData":{"LITELLM_MASTER_KEY":"dev-litellm-key"}}'
+
+# Restart components that read the secret as env vars
+kubectl rollout restart deployment/kubesynapse-api-gateway -n kubesynapse
+kubectl delete pod -n default docresearcher-sandbox-0 implementation-pack-writer-sandbox-0
+```
+
+**Operator defaults out of sync:**
+
+```bash
+# Verify the operator defaults that seed namespace-local runtime secrets
+kubectl exec -n kubesynapse deploy/kubesynapse-operator -- printenv | grep DEFAULT_LITELLM_MASTER_KEY
+kubectl exec -n kubesynapse deploy/kubesynapse-operator -- printenv | grep DEFAULT_API_GATEWAY_SHARED_TOKEN
+```
+
+### Prevention
+
+- Treat `kubesynapse-llm-api-keys` as namespace-scoped for runtime traffic. The operator provisions a copy into each agent namespace, and the `credential-proxy` sidecar reads `LITELLM_MASTER_KEY` and `API_GATEWAY_SHARED_TOKEN` from that local secret.
+- Keep the chart values or operator defaults aligned with LiteLLM's real configured `LITELLM_MASTER_KEY`.
+- After changing any secret-backed token, restart the gateway and recreate affected sandbox pods so they pick up the new env vars.
