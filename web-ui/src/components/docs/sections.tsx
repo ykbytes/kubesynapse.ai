@@ -987,6 +987,12 @@ function McpSection() {
           <code>kubesynapse-mcp-</code>). Sidecar connections are accepted as valid at save time — reachability
           is confirmed when the agent pod first starts.
         </Callout>
+        <Callout variant="warning" title="Remote MCP agent wiring">
+          Use saved <code>mcpConnections</code> for remote MCP services such as Context7. Keep the vendor endpoint as the
+          real MCP URL, for example <code>https://mcp.context7.com/mcp</code>. Legacy <code>mcpServers</code> is for shared hub
+          servers, not for remote services with per-connection credentials. When debugging, run <code>opencode mcp list</code>
+          inside the runtime pod to confirm the generated local proxy URL and final connection status.
+        </Callout>
       </div>
 
       <div id="mcp-hub">

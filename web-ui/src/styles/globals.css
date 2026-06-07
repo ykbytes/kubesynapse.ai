@@ -343,6 +343,21 @@
   }
 }
 
+/* ── Mesh gradient wave animation (landing page atmosphere) ── */
+@property --wave-1 { syntax: '<color>'; inherits: false; initial-value: oklch(0.708 0.101 188 / 0.035); }
+@property --wave-2 { syntax: '<color>'; inherits: false; initial-value: oklch(0.742 0.132 233 / 0.025); }
+@property --wave-3 { syntax: '<color>'; inherits: false; initial-value: oklch(0.68 0.15 280 / 0.02); }
+@property --wave-4 { syntax: '<color>'; inherits: false; initial-value: oklch(0.72 0.12 200 / 0.015); }
+
+@keyframes mesh-wave {
+  0%, 100%  { --wave-1: oklch(0.708 0.101 188 / 0.035); --wave-2: oklch(0.742 0.132 233 / 0.025); }
+  25%       { --wave-1: oklch(0.68 0.15 280 / 0.03);   --wave-3: oklch(0.72 0.12 200 / 0.02); }
+  50%       { --wave-2: oklch(0.76 0.11 150 / 0.025); --wave-4: oklch(0.708 0.101 188 / 0.02); }
+  75%       { --wave-3: oklch(0.708 0.101 188 / 0.03); --wave-4: oklch(0.742 0.132 233 / 0.02); }
+}
+
+.mesh-animated { animation: mesh-wave 28s ease-in-out infinite; }
+
 @theme {
   --color-background: oklch(0.164 0.007 264);
   --color-foreground: oklch(0.958 0.004 264);

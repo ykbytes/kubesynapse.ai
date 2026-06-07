@@ -152,6 +152,10 @@ spec:
               value: "{{ .Values.mistralVibeRuntime.image.repository }}:{{ .Values.mistralVibeRuntime.image.tag }}"
             - name: MISTRAL_VIBE_RUNTIME_IMAGE_PULL_POLICY
               value: {{ .Values.mistralVibeRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
+            - name: CREDENTIAL_PROXY_IMAGE
+              value: "{{ .Values.credentialProxy.image.repository }}:{{ .Values.credentialProxy.image.tag }}"
+            - name: CREDENTIAL_PROXY_IMAGE_PULL_POLICY
+              value: {{ .Values.credentialProxy.image.pullPolicy | default "IfNotPresent" | quote }}
             - name: OPENCODE_DEFAULT_PROVIDER
               value: {{ .Values.opencodeRuntime.provider | default "litellm" | quote }}
             - name: OPENCODE_RUNTIME_EXTRA_ENV_JSON
@@ -213,15 +217,19 @@ spec:
                 secretKeyRef:
                   name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
                   key: LITELLM_MASTER_KEY
-                  optional: true
+                  optional: false
             - name: DEFAULT_API_GATEWAY_SHARED_TOKEN
-              value: {{ include "kubesynapse.secretValue" (dict "value" .Values.platformSecrets.native.apiGatewaySharedToken "default" "your-bearer-token-here" "secretData" dict "key" "API_GATEWAY_SHARED_TOKEN") | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: API_GATEWAY_SHARED_TOKEN
+                  optional: false
             - name: API_GATEWAY_SHARED_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
                   key: API_GATEWAY_SHARED_TOKEN
-                  optional: true
+                  optional: false
             - name: API_GATEWAY_INTERNAL_URL
               value: {{ printf "http://%s-api-gateway.%s.svc.cluster.local:8080" (include "kubesynapse.fullname" .) .Release.Namespace | quote }}
             - name: AGENT_HITL_MODE

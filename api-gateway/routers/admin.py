@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from typing import Any, cast
 
+import httpx
+
 # Re-import all shared symbols from the gateway core
 from _core import *
 from _core import _SHUTDOWN
@@ -374,7 +376,7 @@ def health() -> dict[str, Any]:
 
 
 @router.get("/ready")
-def ready(response: Response) -> dict[str, Any]:
+async def ready(response: Response) -> dict[str, Any]:
     if _SHUTDOWN.is_set():
         response.status_code = 503
         return {"status": "shutting-down", "gateway": "kubesynapse"}
@@ -389,6 +391,15 @@ def ready(response: Response) -> dict[str, Any]:
         checks["database"] = "ok"
     except Exception:
         checks["database"] = "error"
+    litellm_headers: dict[str, str] = {}
+    if LITELLM_MASTER_KEY:
+        litellm_headers["Authorization"] = f"Bearer {LITELLM_MASTER_KEY}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
+            readiness_response = await client.get(f"{LITELLM_INTERNAL_URL.rstrip('/')}/v1/models", headers=litellm_headers)
+        checks["litellm"] = "ok" if readiness_response.status_code == 200 else "error"
+    except Exception:
+        checks["litellm"] = "error"
     all_ok = all(v == "ok" for v in checks.values())
     if not all_ok:
         response.status_code = 503

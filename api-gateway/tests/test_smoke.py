@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
+from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import trace_store
@@ -35,6 +36,25 @@ class TestHealthEndpoints:
         assert response.status_code in {200, 503}
         data = response.json()
         assert "status" in data
+
+    def test_ready_returns_503_when_litellm_is_unavailable(self, client: TestClient) -> None:
+        """LiteLLM failures should degrade readiness."""
+
+        class _FailingAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, *args, **kwargs):
+                raise RuntimeError("litellm unavailable")
+
+        with patch("routers.admin.httpx.AsyncClient", return_value=_FailingAsyncClient()):
+            response = client.get("/api/ready")
+
+        assert response.status_code == 503
+        assert response.json()["checks"]["litellm"] == "error"
 
 
 class TestAuthMiddleware:
@@ -75,8 +95,37 @@ class TestAgentCRUD:
 
     def test_get_agent_by_name_with_auth(self, client: TestClient, auth_headers: dict) -> None:
         """Authenticated requests to get an agent should not return 401."""
-        response = client.get("/api/agents/nonexistent-agent", headers=auth_headers)
-        assert response.status_code in {200, 404, 500}
+        with patch(
+            "routers.agents.read_agent",
+            return_value={
+                "metadata": {"name": "nonexistent-agent", "namespace": "default"},
+                "spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}},
+            },
+        ):
+            response = client.get("/api/agents/nonexistent-agent", headers=auth_headers)
+        assert response.status_code == 200
+
+
+class TestIncidentEndpoints:
+    """Smoke tests for incident auth boundaries."""
+
+    def test_list_incidents_without_auth_returns_401(self, client: TestClient) -> None:
+        response = client.get("/api/incidents")
+        assert response.status_code == 401
+
+    def test_list_incidents_with_auth_returns_200(self, client: TestClient, auth_headers: dict) -> None:
+        with patch("routers.incidents.list_incidents", return_value=[]):
+            response = client.get("/api/incidents", headers=auth_headers)
+
+        assert response.status_code == 200
+        assert response.json()["incidents"] == []
+
+    def test_alertmanager_webhook_remains_public(self, client: TestClient) -> None:
+        with patch("routers.incidents.create_incident", side_effect=ValueError("skip")):
+            response = client.post("/api/webhooks/alertmanager", json={"alerts": []})
+
+        assert response.status_code == 200
+        assert response.json()["total"] == 0
 
 
 class TestPrometheusMetrics:

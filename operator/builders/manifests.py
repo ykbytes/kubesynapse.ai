@@ -1002,7 +1002,7 @@ def _build_credential_proxy_container(
                 "secretKeyRef": {
                     "name": SECRET_NAME,
                     "key": "LITELLM_MASTER_KEY",
-                    "optional": True,
+                    "optional": False,
                 }
             },
         },
@@ -1055,7 +1055,7 @@ def _build_credential_proxy_container(
                 "secretKeyRef": {
                     "name": SECRET_NAME,
                     "key": "API_GATEWAY_SHARED_TOKEN",
-                    "optional": True,
+                    "optional": False,
                 }
             },
         }

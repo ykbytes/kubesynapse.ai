@@ -28,6 +28,10 @@ This file gives AI coding agents the minimum repo-specific context needed to wor
 
 `operator/controllers/webhook_controller.py` had a module-level call to `_start_nats_subscriber()` (line 791) that used `loop.run_until_complete(_listen())` when the asyncio loop was not yet running. Since `_listen()` contains `while True: await asyncio.sleep(60)` (infinite loop), `run_until_complete` blocks the import **indefinitely**, preventing Kopf from ever starting its event loop. Fix: changed to `loop.create_task(_listen())` which schedules the coroutine without blocking. If this pattern is used elsewhere, always prefer `create_task` over `run_until_complete` for infinite coroutines at module level.
 
+## Critical Credential-Proxy Fix (June 2026)
+
+`credential-proxy/main.go` reverse proxy used `httputil.NewSingleHostReverseProxy` which appends the incoming path onto the target URL. When a remote MCP target already ended with a concrete path (`/mcp`), a local proxy request to `/mcp` was forwarded as `/mcp/mcp`, returning 404. Fix: the `Director` function was changed to capture the original incoming path (`originalPath`) before the `originalDirector` rewrites it, then conditionally map `/mcp`-prefixed requests to the target's full path using a `joinURLPath` helper that avoids double-slash. If `httputil.ReverseProxy` director logic is used for targets with a concrete path suffix, always save `req.URL.Path` before calling `originalDirector(req)`.
+
 ## Repo Map
 
 - [api-gateway/](api-gateway/) FastAPI public surface: auth, CRUD, invoke, A2A, SSE, traces.

@@ -468,7 +468,7 @@ async def _generic_exception_handler(request: Request, exc: Exception) -> JSONRe
     body = build_error_response(
         code=ErrorCode.INTERNAL_ERROR,
         message="An unexpected error occurred",
-        detail=str(exc) if not isinstance(exc, HTTPException) else None,
+        detail=None,
         request_id=getattr(request.state, "request_id", None),
     )
     return JSONResponse(status_code=500, content=body)

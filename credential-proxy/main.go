@@ -73,7 +73,16 @@ func (p *Proxy) Start() error {
 
 		originalDirector := proxy.Director
 		proxy.Director = func(req *http.Request) {
+			originalPath := req.URL.Path
 			originalDirector(req)
+			// Preserve the upstream endpoint path when the target already includes a
+			// concrete route such as /mcp. Otherwise local proxy requests to /mcp get
+			// forwarded as /mcp/mcp and remote MCP servers return 404.
+			if target.Path != "" && target.Path != "/" && strings.HasPrefix(originalPath, "/mcp") {
+				suffix := strings.TrimPrefix(originalPath, "/mcp")
+				req.URL.Path = joinURLPath(target.Path, suffix)
+				req.URL.RawPath = target.EscapedPath()
+			}
 			// Set the Host header to match the target host (required by some APIs like GitHub Copilot)
 			req.Host = target.Host
 			p.injectAuth(req, route)
@@ -189,6 +198,23 @@ func loadRoutes() ([]Route, error) {
 
 func routeStrOrEmpty(value string) string {
 	return value
+}
+
+func joinURLPath(base string, suffix string) string {
+	base = strings.TrimSuffix(base, "/")
+	if suffix == "" || suffix == "/" {
+		if base == "" {
+			return "/"
+		}
+		return base
+	}
+	if !strings.HasPrefix(suffix, "/") {
+		suffix = "/" + suffix
+	}
+	if base == "" {
+		return suffix
+	}
+	return base + suffix
 }
 
 func main() {

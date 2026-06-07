@@ -103,3 +103,19 @@ class TestJwtSecurity:
 
         with pytest.raises(ValueError, match="none"):
             jwt_utils.decode_access_token(token)
+
+    def test_shared_token_is_not_used_as_jwt_fallback(self) -> None:
+        """JWT signing must not reuse API_GATEWAY_SHARED_TOKEN."""
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "JWT_SECRET": "",
+                    "API_GATEWAY_SHARED_TOKEN": "shared-token-only",
+                    "REQUIRE_JWT_SECRET": "1",
+                },
+                clear=False,
+            ),
+            pytest.raises(SystemExit, match="JWT_SECRET must be set"),
+        ):
+            jwt_utils._load_keys()

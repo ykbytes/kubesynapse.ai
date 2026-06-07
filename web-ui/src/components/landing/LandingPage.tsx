@@ -799,30 +799,8 @@ function AnimatedCounter({ target, suffix = "" }: { target: number; suffix?: str
 function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
   return (
     <section className="relative overflow-hidden px-4 pb-16 pt-12 sm:px-6 md:pb-24 md:pt-24">
-      {/* Static atmosphere */}
-      <StaticAtmosphere />
-      {/* Background grid */}
-      <div
-        className="pointer-events-none absolute inset-0 opacity-[0.02]"
-        style={{
-          backgroundImage:
-            "linear-gradient(to right, oklch(0.958 0.004 264) 1px, transparent 1px), linear-gradient(to bottom, oklch(0.958 0.004 264) 1px, transparent 1px)",
-          backgroundSize: "40px 40px",
-        }}
-      />
-      {/* Animated gradient orbs */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div
-          className="absolute left-1/4 top-0 h-[500px] w-[500px] rounded-full bg-[oklch(0.708_0.101_188/0.07)] blur-[120px] motion-safe:animate-[float-orb-1_18s_ease-in-out_infinite]"
-        />
-        <div
-          className="absolute right-1/4 top-1/3 h-[400px] w-[400px] rounded-full bg-[oklch(0.742_0.132_233/0.06)] blur-[100px] motion-safe:animate-[float-orb-2_22s_ease-in-out_infinite]"
-        />
-        <div
-          className="absolute left-1/2 -translate-x-1/2 -translate-y-1/3 h-[420px] w-[min(800px,100vw)] rounded-full bg-[oklch(0.708_0.101_188/0.08)] blur-[100px] sm:h-[600px]"
-        />
-      </div>
-
+      {/* Static atmosphere with hero orbs */}
+      <StaticAtmosphere hero={true} />
       <div className="relative mx-auto max-w-5xl text-center">
         <motion.div
           initial={{ opacity: 0, y: 16 }}

@@ -746,6 +746,7 @@ helm upgrade KubeSynapse ... --set apiGateway.auth.cookieSecure=false
 - Agent says "I don't have access to that tool"
 - MCP sidecar pod not running or not reachable
 - `mcp/connections` endpoint shows `unhealthy`
+- `opencode mcp list` shows a proxy URL like `http://127.0.0.1:4011/mcp` failing with `404`
 
 ### Diagnosis
 
@@ -758,6 +759,12 @@ kubectl logs -n <namespace> <agent-pod> -c <mcp-sidecar>
 
 # Validate MCP connection via API
 curl -X POST http://localhost:8080/api/v1/mcp/connections/<id>/validate
+
+# Inspect the runtime-side MCP config inside the agent pod
+kubectl exec -n <namespace> <agent-pod> -c agent-runtime -- opencode mcp list
+
+# Inspect the structured MCP payload passed by the operator
+kubectl exec -n <namespace> <agent-pod> -c agent-runtime -- printenv OPENCODE_MCP_CONNECTIONS_JSON
 ```
 
 Common causes:
@@ -768,6 +775,7 @@ Common causes:
 | **Sidecar crash** | `CrashLoopBackOff` on sidecar container |
 | **Connection misconfigured** | `connection refused` or `invalid auth` |
 | **Policy blocks MCP server** | `MCP server "xyz" not in allowedMcpServers` |
+| **Remote MCP proxied to wrong path** | Proxy listener `127.0.0.1:4011+` returns `404` even though the saved vendor URL already ends with `/mcp` |
 
 ### Fix
 
@@ -806,6 +814,15 @@ kubectl patch agentpolicy <policy-name> -n <namespace> --type merge \
 - Validate MCP connections before attaching to agents
 - Use `AgentPolicy` to whitelist only required MCP servers
 - Monitor sidecar health with liveness probes
+- For remote MCP services, prefer saved `mcpConnections` over legacy `mcpServers` when credentials or custom headers are involved.
+- Keep the real vendor endpoint only in the saved connection, for example `https://mcp.context7.com/mcp`. Do not append another `/mcp` layer in proxy wrappers.
+
+### Correct MCP Usage In Agents
+
+- Use `mcpServers` for legacy shared hub servers only.
+- Use `mcpConnections` for remote services like Context7 and Microsoft Learn.
+- When both are present, OpenCode uses the structured `OPENCODE_MCP_CONNECTIONS_JSON` payload instead of the legacy `MCP_SERVERS` list.
+- Verify inside the runtime with `opencode mcp list` if a tool appears unavailable.
 
 ---
 

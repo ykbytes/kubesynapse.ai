@@ -52,6 +52,49 @@ ApiTypeError = getattr(kubernetes.client, "ApiTypeError", TypeError)
 
 logger = logging.getLogger("operator.services")
 
+_RUNTIME_SECRET_MANUAL_OVERRIDE_ANNOTATION = "kubesynapse.ai/secret-manual-override"
+
+
+def _record_runtime_secret_override_event(namespace: str, owner_name: str) -> None:
+    core_api = kubernetes.client.CoreV1Api()
+    event_cls = getattr(kubernetes.client, "CoreV1Event", None)
+    object_meta_cls = getattr(kubernetes.client, "V1ObjectMeta", None)
+    object_ref_cls = getattr(kubernetes.client, "V1ObjectReference", None)
+    if event_cls is None or object_meta_cls is None or object_ref_cls is None:
+        logger.debug("Kubernetes event classes unavailable; skipping runtime secret override event")
+        return
+
+    now = _datetime.now(_UTC)
+    event = event_cls(
+        metadata=object_meta_cls(
+            generate_name=f"{SECRET_NAME}-",
+            namespace=namespace,
+            labels={
+                "kubesynapse.ai/owner": owner_name,
+                "kubesynapse.ai/event-type": "Warning",
+            },
+        ),
+        involved_object=object_ref_cls(
+            api_version="v1",
+            kind="Secret",
+            name=SECRET_NAME,
+            namespace=namespace,
+        ),
+        type="Warning",
+        reason="RuntimeSecretManualOverride",
+        message=(
+            f"Skipped reconciliation for secret '{SECRET_NAME}' in namespace '{namespace}' because annotation "
+            f"'{_RUNTIME_SECRET_MANUAL_OVERRIDE_ANNOTATION}=true' is set."
+        ),
+        first_timestamp=now,
+        last_timestamp=now,
+        count=1,
+        action="SkipSecretReconcile",
+        reporting_component="kubesynapse-operator",
+        reporting_instance="kubesynapse-operator",
+    )
+    core_api.create_namespaced_event(namespace=namespace, body=event)
+
 
 # ---------------------------------------------------------------------------
 # §7.2 — Exponential backoff with circuit breaker for K8s API calls
@@ -701,6 +744,28 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
         "type": "Opaque",
         "stringData": string_data,
     }
+    core_api = kubernetes.client.CoreV1Api()
+    try:
+        existing_secret = _sanitize_kube_resource(core_api.read_namespaced_secret(name=SECRET_NAME, namespace=namespace))
+    except ApiException as exc:
+        if exc.status != 404:
+            raise
+        existing_secret = None
+    if isinstance(existing_secret, dict):
+        annotations = (existing_secret.get("metadata") or {}).get("annotations") or {}
+        if str(annotations.get(_RUNTIME_SECRET_MANUAL_OVERRIDE_ANNOTATION) or "").strip().lower() == "true":
+            logger.warning(
+                "Secret '%s/%s' has manual override annotation; skipping reconciliation",
+                namespace,
+                SECRET_NAME,
+            )
+            try:
+                _record_runtime_secret_override_event(namespace, owner_name)
+            except ApiException as exc:
+                if exc.status != 403:
+                    logger.warning("Failed to record runtime secret override event for %s/%s: %s", namespace, SECRET_NAME, describe_api_exception(exc))
+            _ensure_runtime_namespace_immutable_config_maps(namespace, logger)
+            return
     ensure_secret(namespace, secret_manifest)
     logger.info("Secret '%s' provisioned for namespace '%s'", SECRET_NAME, namespace)
     _ensure_runtime_namespace_immutable_config_maps(namespace, logger)

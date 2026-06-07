@@ -2,21 +2,30 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from auth_store import (
     add_incident_timeline_event,
+    api_rate_limit_key,
+    api_rate_limited,
     create_incident,
     get_incident,
     get_incident_by_fingerprint,
     list_incidents,
+    normalize_namespaces,
     update_incident_status,
     upsert_incident,
 )
+from auth_middleware import ensure_namespace_access, request_client_ip, verify_token
+from webhook_security import verify_provider_signature
 
 router = APIRouter(tags=["incidents"])
+
+_ALERTMANAGER_WEBHOOK_SECRET = os.getenv("ALERTMANAGER_WEBHOOK_SECRET", "").strip()
+_INCIDENT_RATE_LIMIT_PER_MINUTE = max(int(os.getenv("INCIDENT_API_RATE_LIMIT_PER_MINUTE", "60")), 1)
 
 
 def _ns(namespace: str | None = None) -> str:
@@ -29,15 +38,57 @@ def _incident_to_response(inc: dict[str, Any]) -> dict[str, Any]:
     return inc
 
 
+def _incident_rate_key(request: Request, user: dict[str, Any] | None = None) -> str:
+    identifier = request_client_ip(request) or str((user or {}).get("sub") or "anonymous")
+    return api_rate_limit_key("incidents", identifier)
+
+
+def _enforce_incident_rate_limit(request: Request, user: dict[str, Any] | None = None) -> None:
+    rate_key = _incident_rate_key(request, user)
+    if api_rate_limited(rate_key, max_per_minute=_INCIDENT_RATE_LIMIT_PER_MINUTE):
+        raise HTTPException(status_code=429, detail="Too many incident API requests. Please retry shortly.")
+
+
+def _authorized_incident_namespaces(user: dict[str, Any]) -> list[str] | None:
+    if str(user.get("role") or "viewer") == "admin":
+        return None
+    allowed = normalize_namespaces(user.get("allowed_namespaces") or [])
+    return allowed or []
+
+
+def _filter_incidents_for_user(items: list[dict[str, Any]], user: dict[str, Any]) -> list[dict[str, Any]]:
+    allowed = _authorized_incident_namespaces(user)
+    if allowed is None or "*" in allowed:
+        return items
+    allowed_set = set(allowed)
+    return [item for item in items if str(item.get("namespace") or "default") in allowed_set]
+
+
+async def _verify_alertmanager_signature(request: Request) -> None:
+    if not _ALERTMANAGER_WEBHOOK_SECRET:
+        return
+    signature = request.headers.get("x-alertmanager-signature", "").strip()
+    if not signature:
+        raise HTTPException(status_code=401, detail="Missing alertmanager signature")
+    raw_body = await request.body()
+    if not verify_provider_signature("generic", raw_body, signature, _ALERTMANAGER_WEBHOOK_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid alertmanager signature")
+
+
 @router.get("/incidents")
 async def api_list_incidents(
+    request: Request,
     namespace: str | None = Query(None),
     status: str | None = Query(None),
     severity: str | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    user: dict[str, Any] = Depends(verify_token),
 ) -> dict[str, Any]:
     """List incidents with optional filters."""
+    _enforce_incident_rate_limit(request, user)
+    if namespace:
+        ensure_namespace_access(user, namespace)
     try:
         results = list_incidents(
             namespace=namespace,
@@ -46,31 +97,40 @@ async def api_list_incidents(
             limit=limit,
             offset=offset,
         )
+        results = _filter_incidents_for_user(results, user)
         return {"incidents": [_incident_to_response(r) for r in results], "total": len(results)}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid incident list filters") from exc
 
 
 @router.get("/incidents/{name}")
 async def api_get_incident(
+    request: Request,
     name: str,
     namespace: str | None = Query(None),
+    user: dict[str, Any] = Depends(verify_token),
 ) -> dict[str, Any]:
     """Get a single incident by name."""
+    _enforce_incident_rate_limit(request, user)
+    ensure_namespace_access(user, _ns(namespace))
     try:
         inc = get_incident(namespace=_ns(namespace), name=name)
         return _incident_to_response(inc)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Incident not found") from exc
 
 
 @router.post("/incidents")
 async def api_create_incident(
+    request: Request,
     body: dict[str, Any] = Body(...),
     namespace: str | None = Query(None),
+    user: dict[str, Any] = Depends(verify_token),
 ) -> dict[str, Any]:
     """Create a new incident manually."""
+    _enforce_incident_rate_limit(request, user)
     ns = _ns(body.get("namespace") or namespace)
+    ensure_namespace_access(user, ns, "operator")
     name = body.get("name", "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Field 'name' is required")
@@ -92,18 +152,22 @@ async def api_create_incident(
             workflow_ref_namespace=body.get("workflow_ref", {}).get("namespace") if body.get("workflow_ref") else None,
         )
         return _incident_to_response(inc)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid incident payload") from exc
 
 
 @router.put("/incidents/{name}")
 async def api_upsert_incident(
+    request: Request,
     name: str,
     body: dict[str, Any] = Body(...),
     namespace: str | None = Query(None),
+    user: dict[str, Any] = Depends(verify_token),
 ) -> dict[str, Any]:
     """Create or update an incident by name — idempotent upsert."""
+    _enforce_incident_rate_limit(request, user)
     ns = _ns(body.get("namespace") or namespace)
+    ensure_namespace_access(user, ns, "operator")
     if not name.strip():
         raise HTTPException(status_code=400, detail="Field 'name' is required")
 
@@ -125,18 +189,22 @@ async def api_upsert_incident(
             workflow_ref_namespace=body.get("workflow_ref", {}).get("namespace") if body.get("workflow_ref") else None,
         )
         return _incident_to_response(inc)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid incident payload") from exc
 
 
 @router.patch("/incidents/{name}")
 async def api_update_incident(
+    request: Request,
     name: str,
     body: dict[str, Any] = Body(...),
     namespace: str | None = Query(None),
+    user: dict[str, Any] = Depends(verify_token),
 ) -> dict[str, Any]:
     """Update incident status or metadata."""
+    _enforce_incident_rate_limit(request, user)
     ns = _ns(body.get("namespace") or namespace)
+    ensure_namespace_access(user, ns, "operator")
     target_status = body.get("status", "")
     if target_status:
         try:
@@ -148,8 +216,8 @@ async def api_update_incident(
                 workflow_run_id=body.get("workflow_run_id"),
             )
             return _incident_to_response(inc)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid incident status update") from exc
 
     # No status change — just add a timeline event if message provided
     if body.get("message"):
@@ -161,25 +229,29 @@ async def api_update_incident(
                 message=body["message"],
             )
             return _incident_to_response(inc)
-        except ValueError as e:
-            raise HTTPException(status_code=404, detail=str(e)) from e
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Incident not found") from exc
 
     # Return current state
     try:
         inc = get_incident(namespace=ns, name=name)
         return _incident_to_response(inc)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Incident not found") from exc
 
 
 @router.post("/incidents/{name}/escalate")
 async def api_escalate_incident(
+    request: Request,
     name: str,
     body: dict[str, Any] = Body(...),
     namespace: str | None = Query(None),
+    user: dict[str, Any] = Depends(verify_token),
 ) -> dict[str, Any]:
     """Manually escalate an incident."""
+    _enforce_incident_rate_limit(request, user)
     ns = _ns(body.get("namespace") or namespace)
+    ensure_namespace_access(user, ns, "operator")
     try:
         inc = update_incident_status(
             namespace=ns,
@@ -188,21 +260,25 @@ async def api_escalate_incident(
             message=body.get("message", "Manually escalated"),
         )
         return _incident_to_response(inc)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Incident could not be escalated") from exc
 
 
 @router.get("/incidents/{name}/timeline")
 async def api_incident_timeline(
+    request: Request,
     name: str,
     namespace: str | None = Query(None),
+    user: dict[str, Any] = Depends(verify_token),
 ) -> dict[str, Any]:
     """Get the timeline for an incident."""
+    _enforce_incident_rate_limit(request, user)
+    ensure_namespace_access(user, _ns(namespace))
     try:
         inc = get_incident(namespace=_ns(namespace), name=name)
         return {"timeline": inc.get("timeline", [])}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Incident not found") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -292,12 +368,13 @@ def _alertmanager_payload_to_incidents(payload: dict[str, Any]) -> list[dict[str
 async def api_alertmanager_webhook(
     request: Request,
     namespace: str | None = Query(None),
+    _: None = Depends(_verify_alertmanager_signature),
 ) -> dict[str, Any]:
     """Receive Alertmanager v4 webhook payload and create/update incidents."""
     try:
         payload = await request.json()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid JSON payload: {e}") from e
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
 
     ns = _ns(namespace)
     incidents = _alertmanager_payload_to_incidents(payload)
