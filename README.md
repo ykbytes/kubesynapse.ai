@@ -1,10 +1,30 @@
 <p align="center">
-  <picture>
-    <img alt="KubeSynapse" src="https://img.shields.io/badge/KubeSynapse-Kubernetes--native%20AI%20operations%20platform-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white" height="48">
-  </picture>
+  <svg viewBox="0 0 1400 360" width="520" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="KubeSynapse">
+    <defs>
+      <linearGradient id="ks-badgeGrad-readme" x1="80" y1="70" x2="310" y2="295" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#0B7CFF"/>
+        <stop offset="0.52" stop-color="#2F5BFF"/>
+        <stop offset="1" stop-color="#7A3FF2"/>
+      </linearGradient>
+      <linearGradient id="ks-synapseGrad-readme" x1="620" y1="150" x2="1235" y2="150" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#0B7CFF"/>
+        <stop offset="0.58" stop-color="#2F5BFF"/>
+        <stop offset="1" stop-color="#7A3FF2"/>
+      </linearGradient>
+    </defs>
+    <path d="M170 36L278 98C292 106 300 121 300 136V224C300 239 292 254 278 262L170 324C156 332 139 332 126 324L18 262C4 254 -4 239 -4 224V136C-4 121 4 106 18 98L126 36C139 28 156 28 170 36Z" transform="translate(74 0)" fill="url(#ks-badgeGrad-readme)"/>
+    <path d="M188 112V248" stroke="#FFFFFF" stroke-width="26" stroke-linecap="round"/>
+    <path d="M259 104L199 171" stroke="#FFFFFF" stroke-width="24" stroke-linecap="round"/>
+    <path d="M199 189L260 256" stroke="#FFFFFF" stroke-width="24" stroke-linecap="round"/>
+    <circle cx="246" cy="180" r="13" fill="#FFFFFF"/>
+    <circle cx="293" cy="146" r="13" fill="#FFFFFF"/>
+    <circle cx="294" cy="214" r="13" fill="#FFFFFF"/>
+    <path d="M257 174L281 155" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round"/>
+    <path d="M257 186L282 205" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round"/>
+    <text x="390" y="226" fill="#FFFFFF" font-family="Inter, Avenir Next, Segoe UI, Arial, sans-serif" font-size="116" font-weight="800" letter-spacing="-5">kube</text>
+    <text x="622" y="226" fill="url(#ks-synapseGrad-readme)" font-family="Inter, Avenir Next, Segoe UI, Arial, sans-serif" font-size="116" font-weight="800" letter-spacing="-5">synapse</text>
+  </svg>
 </p>
-
-<h1 align="center">KubeSynapse</h1>
 
 <p align="center">
   <strong>Ship AI agents the same way you ship everything else — as Kubernetes resources.</strong>
@@ -121,10 +141,19 @@ Agent runtimes ship with defense-in-depth across four layers:
 
 [Learn more about the security model →](docs/architecture-overview.md#10-security-model)
 
-- 13 CRDs model every platform concern: agents, workflows, policies, approvals, tenants, MCP connections, webhooks, observability targets, and incidents
-- OpenCode runtime for production workloads (Pi and Mistral Vibe available in alpha)
-- Model calls proxy through LiteLLM with cost tracking and fallback
-- Persistent workspace state on PVC with session checkpointing
+Recent security hardening:
+
+- **JWT_SECRET decoupled** — `JWT_SECRET` is now a dedicated required secret for JWT signing, no longer falls back to `API_GATEWAY_SHARED_TOKEN`. Set it via `--set platformSecrets.native.jwtSecret=$(openssl rand -hex 32)`.
+- **Chart secrets hardened** — `LITELLM_MASTER_KEY` and `API_GATEWAY_SHARED_TOKEN` are now `optional: false` in the chart — the gateway and operator refuse to start without them. No silent fallback to empty strings.
+- **Credential-proxy path fix** — Remote MCP targets with concrete path suffixes (e.g., `https://host.com/mcp`) no longer double-append `/mcp` on proxy requests. See `credential-proxy/main.go` director logic for the fix.
+- **Manual-override annotation** — Annotate a namespace-local runtime secret with `kubesynapse.ai/secret-manual-override: "true"` to prevent the operator from overwriting it during reconciliation. Keeps migration and edge-case sidecar configs stable.
+
+### Platform at a glance
+
+- **13 CRDs** model every platform concern: agents, workflows, policies, approvals, tenants, MCP connections, webhooks (provider-signed, claim-dispatched), observability targets, and incidents (Alertmanager lifecycle)
+- **OpenCode runtime** for production workloads (Pi and Mistral Vibe available in alpha)
+- **LiteLLM proxy** for model calls with cost tracking and provider fallback
+- **Persistent workspace state** on PVC with session checkpointing
 
 ### Orchestrate multi-step workflows
 
@@ -155,6 +184,30 @@ The Execution Observatory captures the full lifecycle of every agent invocation 
 - **Idempotent run history** — the operator's enqueue path now does a live-status guard before creating a worker Job, preventing duplicate run records when a trigger fans out into a spec change + status patch.
 
 Full data model, troubleshooting recipes, and the trace payload schema live in [`docs/observability-explained.md`](docs/observability-explained.md).
+
+### Manage incidents
+
+KubeSynapse has a built-in incident management system driven by the `AgentIncident` CRD, the Alertmanager webhook receiver, and the operator's incident lifecycle controller.
+
+- **Alertmanager integration** — Alertmanager POSTs to `POST /api/v1/webhooks/alertmanager` on the gateway, which upserts an `AgentIncident` record and creates the corresponding Kubernetes CR
+- **Full state machine** — incidents transition through `firing → acknowledged → diagnosing → remediating → resolved → closed`, with configurable escalation timers per severity (`15m` critical, `30m` warning, `1h` info)
+- **Auto-remediation** — incidents can trigger linked `AgentWorkflow` runs automatically on status transitions via `workflowRef`
+- **Signal Watch integration** — the operator's anomaly detection controller (`signal_watch.py`) proactively creates incidents when it detects anomalous patterns in execution traces
+- **REST API surface** — `GET/POST /api/v1/incidents`, `PUT/PATCH /api/v1/incidents/{name}`, `POST /api/v1/incidents/{name}/escalate`, `GET /api/v1/incidents/{name}/timeline`
+- **UI** — dedicated **Incidents** tab within the Intelligence workspace for viewing and managing incident state
+
+### Receive and dispatch webhooks
+
+Webhooks are first-class platform resources with provider-specific signature verification, claim-based dispatch, and full lineage tracking.
+
+- **Provider-specific HMAC verification** — GitHub, Slack, Stripe, PagerDuty, Grafana, or generic HMAC-SHA256. Falls back cleanly for unknown providers.
+- **API key authentication** — optional `X-API-Key` header verification per webhook receiver
+- **Key rotation** — `X-KubeSynapse-Key-Id` header support for multiple active secrets per receiver
+- **Replay attack prevention** — configurable timestamp window validation
+- **Defense-in-depth rate limiting** — Redis-backed + DB counting for concurrent invocation caps and payload size limits
+- **Claim-based dispatch** — the operator atomically claims each trigger execution via compare-and-set, preventing duplicate dispatches when multiple operator replicas pick up the same NATS event
+- **Dead-letter replay** — failed or dead-lettered trigger executions can be replayed through the gateway API without losing lineage
+- **Lineage tracking** — every dispatch records its path (`nats`, `http`, `operator`), workflow run ID, job name, session ID, and operator instance for end-to-end traceability
 
 ### Secure and govern
 
@@ -212,9 +265,19 @@ Schema changes use Alembic migrations, not ad-hoc `CREATE TABLE` calls. Backups 
 
 A separate `collector` sidecar is available for intelligence workflows and is counted separately from the 10 bundled tool sidecars above.
 
+### Public Landing Page
+
+An optimized public-facing site is deployed alongside the platform at [kubesynapse.ai](https://kubesynapse.ai):
+
+- **Static backgrounds** — removes animated mesh gradients for peak Lighthouse performance
+- **Branded logo** — icon + HTML text wordmark (no external image dependencies)
+- **Documentation panel** — interactive docs surfacing the full API reference
+- **SEO-optimized** — structured data (JSON-LD), Open Graph, Twitter cards, sitemap
+- **Build** — standalone `vite.config.public.ts` entry point; served by the same Nginx that proxies `/api` to the gateway
+
 ### UI Surfaces
 
-**Chat Workbench** — direct agent interaction, SSE streaming, saved sessions, memory-backed continuity. **Team View** — explicit agent-to-agent collaboration. **Workflow Composer** — visual DAG editing, run history, inline approvals. **Execution Observatory** — overview, step inspection, logs, models and tools, compare, HTML/JSON export. **Catalog** — MCP registry and skills. **Intelligence** — observability resources, collector-driven flows, and incident lifecycle management.
+**Chat Workbench** — direct agent interaction, SSE streaming, saved sessions, memory-backed continuity. **Team View** — explicit agent-to-agent collaboration. **Workflow Composer** — visual DAG editing, run history, inline approvals. **Execution Observatory** — overview, step inspection, logs, models and tools, compare, HTML/JSON export. **Catalog** — MCP registry and skills. **Intelligence** — observability resources, collector-driven flows, and incident lifecycle management (Incidents tab).
 
 <br>
 
@@ -432,6 +495,7 @@ Read [`cli/README.md`](cli/README.md) for the full command surface.
 | Deployment guide | [`deploy/README.md`](deploy/README.md) |
 | API reference | [`docs/api-reference.md`](docs/api-reference.md) |
 | Troubleshooting | [`docs/troubleshooting.md`](docs/troubleshooting.md) |
+| Secrets management | [`docs/secrets-management.md`](docs/secrets-management.md) |
 
 <br>
 
