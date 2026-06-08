@@ -1,18 +1,13 @@
 <p align="center">
-  <svg viewBox="0 0 1400 360" width="520" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="KubeSynapse">
+  <svg viewBox="0 0 370 360" width="100" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="KubeSynapse icon">
     <defs>
-      <linearGradient id="ks-badgeGrad-readme" x1="80" y1="70" x2="310" y2="295" gradientUnits="userSpaceOnUse">
+      <linearGradient id="ks-badgeGrad-icon-readme" x1="80" y1="70" x2="310" y2="295" gradientUnits="userSpaceOnUse">
         <stop offset="0" stop-color="#0B7CFF"/>
         <stop offset="0.52" stop-color="#2F5BFF"/>
         <stop offset="1" stop-color="#7A3FF2"/>
       </linearGradient>
-      <linearGradient id="ks-synapseGrad-readme" x1="620" y1="150" x2="1235" y2="150" gradientUnits="userSpaceOnUse">
-        <stop offset="0" stop-color="#0B7CFF"/>
-        <stop offset="0.58" stop-color="#2F5BFF"/>
-        <stop offset="1" stop-color="#7A3FF2"/>
-      </linearGradient>
     </defs>
-    <path d="M170 36L278 98C292 106 300 121 300 136V224C300 239 292 254 278 262L170 324C156 332 139 332 126 324L18 262C4 254 -4 239 -4 224V136C-4 121 4 106 18 98L126 36C139 28 156 28 170 36Z" transform="translate(74 0)" fill="url(#ks-badgeGrad-readme)"/>
+    <path d="M170 36L278 98C292 106 300 121 300 136V224C300 239 292 254 278 262L170 324C156 332 139 332 126 324L18 262C4 254 -4 239 -4 224V136C-4 121 4 106 18 98L126 36C139 28 156 28 170 36Z" transform="translate(74 0)" fill="url(#ks-badgeGrad-icon-readme)"/>
     <path d="M188 112V248" stroke="#FFFFFF" stroke-width="26" stroke-linecap="round"/>
     <path d="M259 104L199 171" stroke="#FFFFFF" stroke-width="24" stroke-linecap="round"/>
     <path d="M199 189L260 256" stroke="#FFFFFF" stroke-width="24" stroke-linecap="round"/>
@@ -21,10 +16,10 @@
     <circle cx="294" cy="214" r="13" fill="#FFFFFF"/>
     <path d="M257 174L281 155" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round"/>
     <path d="M257 186L282 205" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round"/>
-    <text x="390" y="226" fill="#FFFFFF" font-family="Inter, Avenir Next, Segoe UI, Arial, sans-serif" font-size="116" font-weight="800" letter-spacing="-5">kube</text>
-    <text x="622" y="226" fill="url(#ks-synapseGrad-readme)" font-family="Inter, Avenir Next, Segoe UI, Arial, sans-serif" font-size="116" font-weight="800" letter-spacing="-5">synapse</text>
   </svg>
 </p>
+
+<h1 align="center" style="color: #0B7CFF;">KubeSynapse</h1>
 
 <p align="center">
   <strong>Ship AI agents the same way you ship everything else — as Kubernetes resources.</strong>
