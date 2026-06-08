@@ -112,17 +112,7 @@
 }
 
 /* ── Landing page: floating orbs ── */
-@keyframes float-orb-1 {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(30px, -20px) scale(1.05); }
-  66% { transform: translate(-20px, 15px) scale(0.95); }
-}
-
-@keyframes float-orb-2 {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(-25px, 20px) scale(0.97); }
-  66% { transform: translate(15px, -25px) scale(1.03); }
-}
+/* float-orb animations removed for performance — static blurred orbs are used instead */
 
 @keyframes rotate-gradient {
   0%   { transform: rotate(0deg); }
@@ -343,20 +333,7 @@
   }
 }
 
-/* ── Mesh gradient wave animation (landing page atmosphere) ── */
-@property --wave-1 { syntax: '<color>'; inherits: false; initial-value: oklch(0.708 0.101 188 / 0.035); }
-@property --wave-2 { syntax: '<color>'; inherits: false; initial-value: oklch(0.742 0.132 233 / 0.025); }
-@property --wave-3 { syntax: '<color>'; inherits: false; initial-value: oklch(0.68 0.15 280 / 0.02); }
-@property --wave-4 { syntax: '<color>'; inherits: false; initial-value: oklch(0.72 0.12 200 / 0.015); }
-
-@keyframes mesh-wave {
-  0%, 100%  { --wave-1: oklch(0.708 0.101 188 / 0.035); --wave-2: oklch(0.742 0.132 233 / 0.025); }
-  25%       { --wave-1: oklch(0.68 0.15 280 / 0.03);   --wave-3: oklch(0.72 0.12 200 / 0.02); }
-  50%       { --wave-2: oklch(0.76 0.11 150 / 0.025); --wave-4: oklch(0.708 0.101 188 / 0.02); }
-  75%       { --wave-3: oklch(0.708 0.101 188 / 0.03); --wave-4: oklch(0.742 0.132 233 / 0.02); }
-}
-
-.mesh-animated { animation: mesh-wave 28s ease-in-out infinite; }
+/* ── Mesh gradient (static — no animation for performance) ── */
 
 @theme {
   --color-background: oklch(0.164 0.007 264);
@@ -847,10 +824,7 @@ body::after {
 }
 
 /* Parallax orb — moves slower than scroll */
-.parallax-orb {
-  will-change: transform;
-  transition: transform 0.1s linear;
-}
+/* parallax-orb removed for performance */
 
 /* Hero magnetic lock — subtle scroll-triggered scale */
 @keyframes hero-magnetic {

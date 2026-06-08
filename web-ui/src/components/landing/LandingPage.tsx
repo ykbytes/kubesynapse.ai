@@ -631,18 +631,8 @@ function Navbar({
       }`}
     >
       <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3.5 sm:px-6">
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[oklch(0.708_0.101_188)] text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)]">
-            <KubeSynapseLogo className="h-5 w-5" animated />
-          </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-lg font-bold tracking-tight text-[oklch(0.958_0.004_264)]">
-              {BRAND.name}
-            </span>
-            <span className="hidden text-xs font-medium text-[oklch(0.72_0.01_264)] sm:inline">
-              {BRAND.tagline}
-            </span>
-          </div>
+        <div className="flex items-center">
+          <KubeSynapseLogo wordmark className="h-10 sm:h-11" />
         </div>
 
         <div className="hidden items-center gap-8 text-sm font-medium text-[oklch(0.82_0.01_264)] md:flex">
@@ -942,7 +932,6 @@ function EcosystemCloud() {
 
   return (
     <section className="border-y border-[oklch(0.35_0.01_264)] bg-[oklch(0.19_0.01_264)] px-4 py-10 sm:px-6">
-      <StaticAtmosphere />
       <div className="mx-auto max-w-6xl">
         <p className="mb-6 text-center text-xs font-semibold uppercase tracking-widest text-[oklch(0.68_0.01_264)]">
           Built for the Kubernetes Ecosystem
@@ -1112,7 +1101,6 @@ function SecuritySection() {
 
   return (
     <section id="security" className="relative overflow-hidden px-4 py-20 sm:px-6 md:py-28" ref={ref}>
-      <StaticAtmosphere />
       <div className="absolute inset-0 bg-gradient-to-b from-[oklch(0.18_0.02_264)] via-[oklch(0.19_0.01_264)] to-[oklch(0.20_0.01_264)]" />
 
       <div className="relative mx-auto max-w-5xl">
@@ -1270,7 +1258,6 @@ function UIPreviewSection() {
 
   return (
     <section ref={ref} className="relative overflow-hidden py-20">
-      <StaticAtmosphere />
       <div className="absolute inset-0 bg-gradient-to-b from-[oklch(0.10_0.012_264)] via-[oklch(0.13_0.012_264)] to-[oklch(0.15_0.012_264)]" />
 
       <div className="relative mx-auto max-w-7xl px-6">
@@ -1354,12 +1341,9 @@ function ConsoleShowcase({ activeTab }: { activeTab: "composer" | "workflow" | "
           <div className="flex w-56 flex-col border-r border-[oklch(0.32_0.014_264)] bg-[oklch(0.15_0.012_264)]">
             {/* Brand */}
             <div className="flex items-center gap-2.5 px-3 py-3 border-b border-[oklch(0.32_0.014_264)]">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[oklch(0.708_0.101_188)]">
-                <KubeSynapseLogo className="h-4 w-4" />
-              </div>
+              <KubeSynapseLogo className="h-7 w-7" />
               <div>
                 <span className="text-sm font-bold text-[oklch(0.99_0.004_264)]">KubeSynapse</span>
-                <span className="ml-1.5 text-[9px] text-[oklch(0.78_0.012_264)]">AI Agent Platform</span>
               </div>
             </div>
 
@@ -3066,7 +3050,6 @@ function FeaturesSection() {
 
   return (
     <section className="px-4 py-16 sm:px-6 md:py-24" ref={ref}>
-      <StaticAtmosphere />
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
@@ -3138,7 +3121,6 @@ function TrustBar() {
 
   return (
     <section ref={ref} className="border-y border-[oklch(0.32_0.01_264)] bg-[oklch(0.20_0.01_264)] py-8">
-      <StaticAtmosphere />
       <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-center gap-x-8 gap-y-2 px-4">
         {items.map((item, i) => {
           const Icon = item.icon;
@@ -3295,7 +3277,6 @@ function HowItWorks() {
 
   return (
     <section className="px-4 py-20 sm:px-6 md:py-28" ref={ref}>
-      <StaticAtmosphere />
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
@@ -3418,7 +3399,6 @@ function ArchitectureSection() {
 
   return (
     <section id="architecture" className="border-y border-[oklch(0.35_0.01_264)] bg-[oklch(0.19_0.01_264)] px-4 py-20 sm:px-6 md:py-28" ref={ref}>
-      <StaticAtmosphere />
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
@@ -3580,7 +3560,6 @@ function WhySection() {
 
   return (
     <section className="border-y border-[oklch(0.35_0.01_264)] bg-[oklch(0.19_0.01_264)] px-4 py-20 sm:px-6 md:py-28" ref={ref}>
-      <StaticAtmosphere />
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
@@ -3709,7 +3688,6 @@ function KubeMatrix() {
 function BottomCTA() {
   return (
     <section className="relative px-4 py-20 sm:px-6 md:py-28 overflow-hidden">
-      <StaticAtmosphere />
       <KubeMatrix />
       <div className="relative mx-auto max-w-4xl text-center" style={{ zIndex: 2 }}>
         <motion.div
@@ -3725,8 +3703,8 @@ function BottomCTA() {
           </div>
 
           <div className="relative">
-            <div className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-[oklch(0.708_0.101_188)] text-[oklch(0.158_0.007_264)] shadow-lg shadow-[oklch(0.708_0.101_188/0.3)]">
-              <KubeSynapseLogo className="h-6 w-6" animated />
+            <div className="mx-auto mb-5 flex h-12 w-12 items-center justify-center">
+              <KubeSynapseLogo className="h-12 w-12" />
             </div>
             <h2 className="text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-3xl md:text-4xl">
               Ready to <span className="text-[oklch(0.708_0.101_188)]">Automate</span>?
@@ -3789,13 +3767,11 @@ function BottomCTA() {
 function Footer() {
   return (
     <footer className="border-t border-[oklch(0.35_0.01_264)] bg-[oklch(0.18_0.01_264)] px-4 py-10 sm:px-6">
-      <StaticAtmosphere />
       <div className="mx-auto max-w-7xl">
         <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
           <div className="sm:col-span-2 lg:col-span-1">
             <div className="flex items-center gap-2">
-              <KubeSynapseLogo className="h-5 w-5 text-[oklch(0.708_0.101_188)]" />
-              <span className="text-sm font-bold text-[oklch(0.958_0.004_264)]">{BRAND.name}</span>
+              <KubeSynapseLogo wordmark className="h-8" />
             </div>
             <p className="mt-2 max-w-sm text-xs leading-relaxed text-[oklch(0.72_0.01_264)]">
               The AI-powered command center for Kubernetes operations.
