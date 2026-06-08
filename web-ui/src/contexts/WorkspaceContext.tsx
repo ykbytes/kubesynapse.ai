@@ -305,6 +305,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     admin: 0,
     docs: 0,
     webhooks: 0,
+    incidents: 0,
   }), [agents.length, workflows.length, policies.length]);
 
   const sidebarItems = useMemo<SidebarResourceItem[]>(() =>

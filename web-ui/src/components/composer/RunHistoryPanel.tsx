@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { downloadWorkflowRunTraceExport, fetchWorkflowRuns, type WorkflowRunRecord } from "@/lib/api";
 import { useConnection } from "@/contexts/ConnectionContext";
+import { useTheme } from "@/contexts/ThemeContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { History, RefreshCw, CheckCircle2, XCircle, Clock, Loader2, ChevronRight, Download } from "lucide-react";
+import { History, RefreshCw, CheckCircle2, XCircle, Clock, Loader2, ChevronRight, Download, Timer, Maximize2, Minimize2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
@@ -103,6 +104,8 @@ interface RunHistoryPanelProps {
   onToggle?: () => void;
   collapsible?: boolean;
   onSelectRun?: (run: WorkflowRunRecord | null) => void;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -115,8 +118,38 @@ export function RunHistoryPanel({
   onToggle,
   collapsible = true,
   onSelectRun,
+  expanded: expandedProp,
+  onExpandedChange,
 }: RunHistoryPanelProps) {
   const { token, namespace } = useConnection();
+  const { theme } = useTheme();
+  const [localExpanded, setLocalExpanded] = useState(false);
+  const expanded = expandedProp ?? localExpanded;
+
+  useEffect(() => {
+    setLocalExpanded(false);
+  }, [workflowName]);
+
+  useEffect(() => {
+    if (collapsed) setLocalExpanded(false);
+  }, [collapsed]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onExpandedChange ? onExpandedChange(false) : setLocalExpanded(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [expanded, onExpandedChange]);
+
+  const handleToggleExpand = useCallback(() => {
+    const next = !expanded;
+    onExpandedChange ? onExpandedChange(next) : setLocalExpanded(next);
+  }, [expanded, onExpandedChange]);
+
   const [runs, setRuns] = useState<WorkflowRunRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
@@ -187,18 +220,32 @@ export function RunHistoryPanel({
   }
 
   /* Full sidebar */
-  return (
-    <div className="flex h-full flex-col rounded-xl border border-border/60 bg-background/70">
+  const panel = (
+    <div className={cn(
+      "flex flex-col overflow-hidden border-border/70 bg-card text-card-foreground",
+      expanded
+        ? "fixed inset-x-4 bottom-4 top-16 z-50 rounded-xl border shadow-2xl shadow-black/20"
+        : "h-full rounded-none border-0 bg-transparent",
+    )}>
       {/* Header */}
-      <div className="flex items-center justify-between gap-2 border-b border-border/40 px-3 py-2.5">
+      <div className="flex items-center justify-between gap-2 border-b border-border/40 px-3 py-2 shrink-0">
         <div className="flex items-center gap-2">
           <History className="h-3.5 w-3.5 text-primary" />
-          <span className="text-xs font-semibold text-foreground">Runs</span>
+          <span className="text-xs font-semibold text-foreground">Run History</span>
           {sortedRuns.length > 0 && (
             <Badge variant="outline" className="h-5 px-1.5 text-[10px]">{sortedRuns.length}</Badge>
           )}
         </div>
         <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            onClick={handleToggleExpand}
+            title={expanded ? "Restore" : "Maximize"}
+          >
+            {expanded ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+          </Button>
           {collapsible && onToggle && (
             <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onToggle} title="Collapse">
               <ChevronRight className="h-3 w-3" />
@@ -210,62 +257,188 @@ export function RunHistoryPanel({
         </div>
       </div>
 
-      {/* Run list */}
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="space-y-1 p-2">
-          {sortedRuns.length === 0 && !loading && (
-            <div className="rounded-xl border border-dashed border-border/50 px-3 py-4 text-center text-[11px] text-muted-foreground">
-              No runs recorded yet.
-            </div>
-          )}
-          {loading && sortedRuns.length === 0 && (
-            <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading...
-            </div>
-          )}
-          {sortedRuns.map((run, index) => {
-            const isSelected = selectedRun?.id === run.id;
-            const dur = durationSeconds(run);
-            return (
-              <button
-                key={run.id}
-                type="button"
-                onClick={() => setSelectedRunId(run.id)}
-                className={cn(
-                  "w-full rounded-xl border px-3 py-2.5 text-left transition-all",
-                  isSelected
-                    ? "border-primary/30 bg-primary/10"
-                    : "border-transparent bg-transparent hover:border-border/40 hover:bg-muted/20",
-                )}
-              >
-                <div className="flex items-center gap-1.5">
-                  {phaseIcon(run.phase)}
-                  <Badge variant="outline" className={cn("h-[18px] border px-1.5 text-[9px] capitalize leading-none", phaseColor(run.phase))}>
-                    {run.phase}
-                  </Badge>
-                  <span className="text-[11px] font-medium text-foreground">Run {sortedRuns.length - index}</span>
-                  <span className="ml-auto text-[10px] text-muted-foreground">{formatRelative(run.created_at)}</span>
+      {/* Run list + selected detail — flex row */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        {/* Run list */}
+        <div className="w-1/2 min-w-0 border-r border-border/30 flex flex-col">
+          <ScrollArea className="flex-1">
+            <div className="space-y-1 p-2">
+              {sortedRuns.length === 0 && !loading && (
+                <div className="rounded-xl border border-dashed border-border/50 px-3 py-4 text-center text-[11px] text-muted-foreground">
+                  No runs recorded yet.
                 </div>
-                <div className="mt-1.5 flex items-center gap-2 text-[10px] text-muted-foreground">
-                  {run.run_id && <span className="font-mono truncate max-w-[7rem]">{run.run_id.slice(0, 14)}</span>}
-                  <span>{run.completed_steps ?? 0}/{run.total_steps ?? "?"} steps</span>
-                  {dur != null && <span>{formatDuration(dur)}</span>}
+              )}
+              {loading && sortedRuns.length === 0 && (
+                <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading...
                 </div>
-              </button>
-            );
-          })}
-        </div>
-      </ScrollArea>
+              )}
+              {sortedRuns.map((run, index) => {
+                const isSelected = selectedRun?.id === run.id;
+                const dur = durationSeconds(run);
+                const isTerminal = run.phase === "completed" || run.phase === "failed" || run.phase === "cancelled";
+                return (
+                  <button
+                    key={run.id}
+                    type="button"
+                    onClick={() => setSelectedRunId(run.id)}
+                    className={cn(
+                      "w-full rounded-lg border px-2.5 py-2 text-left transition-all",
+                      isSelected
+                        ? "border-primary/30 bg-primary/10"
+                        : "border-transparent bg-transparent hover:border-border/40 hover:bg-muted/20",
+                    )}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      {phaseIcon(run.phase)}
+                      <Badge variant="outline" className={cn("h-[18px] border px-1.5 text-[9px] capitalize leading-none", phaseColor(run.phase))}>
+                        {run.phase}
+                      </Badge>
+                      <span className="text-[11px] font-medium text-foreground">Run {sortedRuns.length - index}</span>
+                      <span className="ml-auto text-[10px] text-muted-foreground">{formatRelative(run.created_at)}</span>
+                    </div>
+                    <div className="mt-1.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+                      <span>{run.completed_steps ?? 0}/{run.total_steps ?? "?"} steps</span>
+                      {dur != null && (
+                        <span className="flex items-center gap-0.5">
+                          <Timer className="h-2.5 w-2.5" /> {formatDuration(dur)}
+                        </span>
+                      )}
+                      {run.failed_steps != null && run.failed_steps > 0 && (
+                        <span className="text-red-600 dark:text-red-400">{run.failed_steps} failed</span>
+                      )}
+                      {isTerminal && (
+                        <span className="ml-auto">
+                          {run.trace_available ? "trace ✓" : run.archived_log_available ? "logs ✓" : ""}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </ScrollArea>
 
-      {/* Footer */}
-      <div className="flex items-center gap-1 border-t border-border/40 px-2 py-2">
-        <Button variant="ghost" size="sm" className="h-7 flex-1 rounded-lg text-[10px]" onClick={handleExportHistory} disabled={sortedRuns.length === 0}>
-          <Download className="mr-1 h-3 w-3" /> History
-        </Button>
-        <Button variant="ghost" size="sm" className="h-7 flex-1 rounded-lg text-[10px]" onClick={handleExportSelectedRun} disabled={!selectedRun}>
-          <Download className="mr-1 h-3 w-3" /> Run
-        </Button>
+          {/* Footer */}
+          <div className="flex items-center gap-1 border-t border-border/40 px-2 py-2 shrink-0">
+            <Button variant="ghost" size="sm" className="h-7 flex-1 rounded-lg text-[10px]" onClick={handleExportHistory} disabled={sortedRuns.length === 0}>
+              <Download className="mr-1 h-3 w-3" /> History
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7 flex-1 rounded-lg text-[10px]" onClick={handleExportSelectedRun} disabled={!selectedRun}>
+              <Download className="mr-1 h-3 w-3" /> Run
+            </Button>
+          </div>
+        </div>
+
+        {/* Selected run detail */}
+        <div className="w-1/2 min-w-0 flex flex-col">
+          {selectedRun ? (
+            <>
+              <div className="border-b border-border/30 px-3 py-2 shrink-0">
+                <div className="flex items-center gap-2">
+                  {phaseIcon(selectedRun.phase)}
+                  <Badge variant="outline" className={cn("h-[18px] border px-1.5 text-[9px] capitalize", phaseColor(selectedRun.phase))}>
+                    {selectedRun.phase}
+                  </Badge>
+                  <span className="text-xs font-medium text-foreground">
+                    Run #{sortedRuns.findIndex((r) => r.id === selectedRun.id) + 1}
+                  </span>
+                  {selectedRun.run_id && (
+                    <span className="text-[9px] font-mono text-muted-foreground truncate ml-auto max-w-[120px]">
+                      {selectedRun.run_id.slice(0, 20)}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <ScrollArea className="flex-1">
+                <div className="space-y-2 p-3">
+                  {/* Timing */}
+                  <div className="rounded-lg border border-border/40 bg-background/60 p-2.5 space-y-1.5">
+                    <div className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60">Timing</div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                      <span className="text-muted-foreground">Started</span>
+                      <span className="text-right font-mono">{formatTimestampFull(selectedRun.started_at)}</span>
+                      <span className="text-muted-foreground">Completed</span>
+                      <span className="text-right font-mono">{formatTimestampFull(selectedRun.completed_at) || "—"}</span>
+                      <span className="text-muted-foreground">Duration</span>
+                      <span className="text-right font-mono">{formatDuration(durationSeconds(selectedRun))}</span>
+                    </div>
+                  </div>
+
+                  {/* Progress */}
+                  <div className="rounded-lg border border-border/40 bg-background/60 p-2.5 space-y-1.5">
+                    <div className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60">Progress</div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                      <span className="text-muted-foreground">Steps completed</span>
+                      <span className="text-right font-mono">{selectedRun.completed_steps ?? 0}/{selectedRun.total_steps ?? "?"}</span>
+                      <span className="text-muted-foreground">Steps failed</span>
+                      <span className="text-right font-mono">{selectedRun.failed_steps ?? 0}</span>
+                    </div>
+                    {(selectedRun.total_steps ?? 0) > 0 && (
+                      <div className="h-1 w-full rounded-full bg-muted/50 overflow-hidden">
+                        <div
+                          className={cn(
+                            "h-full rounded-full transition-all",
+                            selectedRun.phase === "completed" ? "bg-emerald-500" : selectedRun.phase === "failed" ? "bg-red-500" : "bg-amber-500",
+                          )}
+                          style={{ width: `${Math.round(((selectedRun.completed_steps ?? 0) / (selectedRun.total_steps ?? 1)) * 100)}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Data availability */}
+                  <div className="rounded-lg border border-border/40 bg-background/60 p-2.5 space-y-1.5">
+                    <div className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60">Data</div>
+                    <div className="flex flex-wrap gap-1">
+                      <DataChip available={selectedRun.trace_available} label="Trace" />
+                      <DataChip available={selectedRun.archived_log_available} label="Logs" />
+                      <DataChip available={selectedRun.journal_available} label="Journal" />
+                    </div>
+                    {selectedRun.input_text && (
+                      <div className="mt-1">
+                        <div className="text-[9px] text-muted-foreground/60 mb-0.5">Input</div>
+                        <p className="text-[10px] text-muted-foreground line-clamp-3 leading-relaxed">{selectedRun.input_text}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </ScrollArea>
+            </>
+          ) : (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="text-center text-muted-foreground/60">
+                <Clock className="h-6 w-6 mx-auto mb-2 opacity-40" />
+                <p className="text-[10px]">Select a run to view details</p>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
+  );
+
+  return expanded ? (
+    <>
+      <div className={cn(
+        "fixed inset-0 z-40 backdrop-blur-sm",
+        theme === "light" ? "bg-black/20" : "bg-black/55",
+      )} onClick={() => onExpandedChange ? onExpandedChange(false) : setLocalExpanded(false)} aria-hidden="true" />
+      {panel}
+    </>
+  ) : panel;
+}
+
+function DataChip({ available, label }: { available: boolean; label: string }) {
+  return (
+    <span className={cn(
+      "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] leading-none",
+      available
+        ? "text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
+        : "text-muted-foreground/60 bg-muted/40 border-border/50",
+    )}>
+      {available ? <CheckCircle2 className="h-2.5 w-2.5" /> : <XCircle className="h-2.5 w-2.5" />}
+      {label}
+    </span>
   );
 }

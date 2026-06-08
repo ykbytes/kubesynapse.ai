@@ -154,6 +154,34 @@ kubectl get secret kubesynapse-platform-secrets -n kubesynapse -o jsonpath='{.da
 kubectl describe pod -l app.kubernetes.io/name=kubesynapse-api-gateway -n kubesynapse | grep OPENAI_API_KEY
 ```
 
+### KubeSynapse Runtime Namespace Secret Behavior
+
+The chart's core platform secret is `kubesynapse-llm-api-keys` in the `kubesynapse`
+namespace, but runtime pods do not read that secret across namespace boundaries.
+The operator provisions a namespace-local secret with the same name into each agent
+namespace and seeds it from `DEFAULT_LITELLM_MASTER_KEY` and
+`DEFAULT_API_GATEWAY_SHARED_TOKEN` or from an `ExternalSecret` when
+`SECRET_PROVISIONING_MODE=external-secrets`.
+
+This matters for auth-sensitive values:
+
+- `LITELLM_MASTER_KEY`
+- `API_GATEWAY_SHARED_TOKEN`
+
+If the `kubesynapse` and runtime-namespace copies drift, the API gateway and sandbox
+`credential-proxy` sidecars can send stale or invalid bearer tokens even though the
+platform namespace secret looks correct.
+
+Verify both scopes when debugging auth:
+
+```bash
+kubectl get secret kubesynapse-llm-api-keys -n kubesynapse -o jsonpath='{.data.LITELLM_MASTER_KEY}' | base64 -d
+kubectl get secret kubesynapse-llm-api-keys -n default -o jsonpath='{.data.LITELLM_MASTER_KEY}' | base64 -d
+```
+
+After changing secret-backed runtime auth values, restart the gateway and recreate the
+affected sandbox pods so they reload their environment variables.
+
 ---
 
 ## Approach 2: HashiCorp Vault CSI Provider
@@ -420,3 +448,4 @@ All secrets consumed by KubeSynapse components:
 4. **Restrict secret access.** KubeSynapse's RBAC limits which SAs can read secrets (see [RBAC Matrix](rbac-matrix.md)).
 5. **Audit secret access.** Enable Kubernetes audit logging for Secret reads.
 6. **Use namespace isolation.** Place KubeSynapse in its own namespace and use NetworkPolicies.
+7. **Check namespace-local runtime copies.** When rotating `LITELLM_MASTER_KEY` or `API_GATEWAY_SHARED_TOKEN`, update every namespace-local `kubesynapse-llm-api-keys` secret that runtime pods consume, not just the platform namespace copy.

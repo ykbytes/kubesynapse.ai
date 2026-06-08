@@ -50,13 +50,13 @@ What it does:
 - injects `catalog/skills-catalog.json` so the `Catalog > Skills` tab is populated
 - prints the bootstrap admin credentials and useful port-forward commands
 
-The main chart installs 12 CRDs, including agents, workflows, policies, approvals, tenants, MCP connections, webhook receivers, workflow triggers, and observability resources.
+The main chart installs 13 CRDs, including agents, workflows, policies, approvals, tenants, MCP connections, webhook receivers, workflow triggers, observability resources, and incidents.
 
 If you prefer a manual path, see:
 
 - [`deploy/README.md`](../deploy/README.md)
 - [`charts/kubesynapse/README.md`](../charts/kubesynapse/README.md)
-- [`INSTALL.md`](../INSTALL.md)
+- [`docs/operator-guide.md`](operator-guide.md)
 
 ---
 

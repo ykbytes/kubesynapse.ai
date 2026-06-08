@@ -7,18 +7,30 @@ This file gives AI coding agents the minimum repo-specific context needed to wor
 - Product and current architecture: [README.md](README.md), [docs/architecture-overview.md](docs/architecture-overview.md), [docs/architecture.md](docs/architecture.md)
 - Deployment and chart behavior: [charts/kubesynapse/README.md](charts/kubesynapse/README.md), [charts/kubesynapse/values.yaml](charts/kubesynapse/values.yaml), [charts/kubesynapse/values.schema.json](charts/kubesynapse/values.schema.json), [docs/configuration-reference.md](docs/configuration-reference.md), [deploy/README.md](deploy/README.md)
 - Component docs: [api-gateway/README.md](api-gateway/README.md), [operator/README.md](operator/README.md), [web-ui/README.md](web-ui/README.md), [opencode-runtime/README.md](opencode-runtime/README.md), [mcp-sidecars/README.md](mcp-sidecars/README.md), [cli/README.md](cli/README.md)
+- Smoke test scripts: [scripts/incidents/README.md](scripts/incidents/README.md)
 
 ## Architecture Truths
 
 - Kubernetes CRDs are the control-plane source of truth.
-- Treat the API gateway as a substantial backend, not a thin proxy. It owns auth, CRUD, invoke routing, A2A, SSE, traces, and UI-facing metadata.
-- Treat the operator as the active control-plane engine. It reconciles agents into runtime StatefulSets and workflows into Jobs.
-- OpenCode is the production runtime. Pi and Mistral Vibe are available in alpha but not recommended for production and should not be featured in user-facing materials.
+- The API gateway is a substantial backend. It owns auth, CRUD, invoke routing, A2A, SSE, traces, incident management, and UI-facing metadata.
+- The operator is the active control-plane engine. It reconciles agents into runtime StatefulSets, workflows into Jobs, incidents into lifecycle states.
+- OpenCode is the production runtime. Pi and Mistral Vibe are alpha-only.
 - Workflow detail lives mainly in worker artifacts and logs; CRD status is summary-level.
 - MCP exists in two forms: per-agent sidecars and the shared MCP hub.
 - Run intelligence is built into the platform: runtime events flow into the gateway trace store, then into signal watch and system-agent driven analysis.
-- The durable Observatory tool payloads shown in the UI come from runtime-extracted final `tool_calls`, not from transient runtime status events.
-- OpenCode currently caps extracted tool outputs at 40,000 characters before they enter the trace pipeline.
+- The durable Observatory tool payloads come from runtime-extracted final tool_calls, not from transient runtime status events.
+- OpenCode caps extracted tool outputs at 40,000 characters before trace pipeline entry.
+- Incident management flow: Alertmanager webhook (POST /api/v1/webhooks/alertmanager) → gateway CRUD → operator incident lifecycle controller.
+- Workflow runs are safest with a single-agent pattern (same agentRef across steps, sessionGroup, autoRetry). Multi-agent workflows can stall with mismatched runtime configs.
+- Scripts for alerting, workflow trigger, and report generation live in scripts/incidents/.
+
+## Critical Operator Fix (June 2026)
+
+`operator/controllers/webhook_controller.py` had a module-level call to `_start_nats_subscriber()` (line 791) that used `loop.run_until_complete(_listen())` when the asyncio loop was not yet running. Since `_listen()` contains `while True: await asyncio.sleep(60)` (infinite loop), `run_until_complete` blocks the import **indefinitely**, preventing Kopf from ever starting its event loop. Fix: changed to `loop.create_task(_listen())` which schedules the coroutine without blocking. If this pattern is used elsewhere, always prefer `create_task` over `run_until_complete` for infinite coroutines at module level.
+
+## Critical Credential-Proxy Fix (June 2026)
+
+`credential-proxy/main.go` reverse proxy used `httputil.NewSingleHostReverseProxy` which appends the incoming path onto the target URL. When a remote MCP target already ended with a concrete path (`/mcp`), a local proxy request to `/mcp` was forwarded as `/mcp/mcp`, returning 404. Fix: the `Director` function was changed to capture the original incoming path (`originalPath`) before the `originalDirector` rewrites it, then conditionally map `/mcp`-prefixed requests to the target's full path using a `joinURLPath` helper that avoids double-slash. If `httputil.ReverseProxy` director logic is used for targets with a concrete path suffix, always save `req.URL.Path` before calling `originalDirector(req)`.
 
 ## Repo Map
 

@@ -186,13 +186,48 @@ def _completed_timestamp(phase: str, status: dict[str, Any]) -> datetime | None:
 
 
 def init_database() -> None:
-    """Run Alembic migrations to create or upgrade the database schema."""
+    """Run Alembic migrations to create or upgrade the database schema.
+
+    Retries transient DB failures (OperationalError) with exponential backoff
+    instead of falling back to ``create_all()``, which would skip ALTER TABLE
+    operations that Alembic would have applied.
+    """
     if not STATE_DB_ENABLED:
         logger.info("State database mirroring is disabled.")
         return
 
     alembic_ini = Path(__file__).resolve().parent / "alembic.ini"
-    if alembic_ini.is_file():
+    if not alembic_ini.is_file():
+        Base.metadata.create_all(bind=ENGINE)
+        logger.info("Database schema is up to date (via create_all, no alembic.ini).")
+        return
+
+    import time as _time
+
+    def _is_transient(exc: BaseException | None) -> bool:
+        if exc is None:
+            return False
+        msg = str(exc).lower()
+        return any(
+            keyword in msg
+            for keyword in [
+                "connection refused",
+                "could not connect",
+                "connection reset",
+                "timeout",
+                "temporarily unavailable",
+                "server closed connection",
+                "terminating connection",
+                "no route to host",
+                "ssl",
+                "eof",
+                "deadlock detected",
+            ]
+        ) or isinstance(exc, (ConnectionError, TimeoutError))
+
+    max_retries = 5
+
+    for attempt in range(max_retries):
         try:
             from alembic import command as alembic_command
             from alembic.config import Config as AlembicConfig
@@ -208,11 +243,23 @@ def init_database() -> None:
             alembic_command.upgrade(cfg, "head")
             logger.info("Database schema is up to date (via Alembic).")
             return
-        except Exception:
-            logger.warning("Alembic migration failed, falling back to create_all().", exc_info=True)
+        except Exception as exc:
+            if _is_transient(exc) and attempt < max_retries - 1:
+                backoff = 2 ** attempt
+                logger.warning(
+                    "Alembic migration transient error (attempt %d/%d), retrying in %ds: %s",
+                    attempt + 1, max_retries, backoff, exc,
+                )
+                _time.sleep(backoff)
+                continue
+            if not _is_transient(exc):
+                logger.exception("Alembic migration failed with non-transient error, falling back to create_all().")
+                break
+            # Last attempt also failed transiently — fall through to create_all
 
+    # Fallback: create_all on persistent non-transient errors
     Base.metadata.create_all(bind=ENGINE)
-    logger.info("Database schema is up to date (via create_all).")
+    logger.warning("Database schema bootstrapped via create_all after Alembic failed.")
 
 
 @contextmanager

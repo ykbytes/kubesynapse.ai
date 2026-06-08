@@ -678,6 +678,51 @@ class OperatorManifestTests(unittest.TestCase):
             "pi-runtime-config",
         )
 
+    def test_runtime_namespace_secret_respects_manual_override_annotation(self) -> None:
+        logger = Mock()
+        core_api = Mock()
+        core_api.read_namespaced_secret.return_value = {
+            "metadata": {
+                "annotations": {
+                    "kubesynapse.ai/secret-manual-override": "true",
+                }
+            }
+        }
+
+        with (
+            patch.object(_services_k8s, "SECRET_PROVISIONING_MODE", "native"),
+            patch.object(_services_k8s, "DEFAULT_LITELLM_MASTER_KEY", "litellm-secret"),
+            patch.object(_services_k8s, "DEFAULT_API_GATEWAY_SHARED_TOKEN", "gateway-secret"),
+            patch.object(_services_k8s, "OPENCODE_IMMUTABLE_CONFIG", False),
+            patch.object(_services_k8s, "PI_IMMUTABLE_CONFIG", False),
+            patch.object(_services_k8s, "ensure_secret") as ensure_secret,
+            patch.object(_services_k8s.kubernetes.client, "CoreV1Api", return_value=core_api, create=True),
+        ):
+            _services_k8s.ensure_runtime_namespace_secret("tenant-a", "workspace-assistant", logger)
+
+        ensure_secret.assert_not_called()
+        core_api.create_namespaced_event.assert_called_once()
+
+    def test_credential_proxy_requires_runtime_auth_secrets(self) -> None:
+        with patch.object(_builders_manifests, "CREDENTIAL_PROXY_ENABLED", True):
+            manifest = _builders_manifests.create_agent_statefulset_manifest(
+                "test-agent",
+                "default",
+                {
+                    "model": "litellm/gpt-4",
+                    "runtime": {"kind": "opencode"},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Test.",
+                },
+                None,
+                {},
+            )
+
+        proxy_container = next(c for c in manifest["spec"]["template"]["spec"]["containers"] if c["name"] == "credential-proxy")
+        env_refs = {e["name"]: e.get("valueFrom") for e in proxy_container["env"] if "valueFrom" in e}
+        self.assertFalse(env_refs["LITELLM_MASTER_KEY"]["secretKeyRef"]["optional"])
+        self.assertFalse(env_refs["API_GATEWAY_SHARED_TOKEN"]["secretKeyRef"]["optional"])
+
     def test_agent_manifests_include_orphan_pruning_owner_labels(self) -> None:
         service_manifest = _builders_manifests.create_agent_service_manifest("workspace-assistant", "default")
         statefulset_manifest = _builders_manifests.create_agent_statefulset_manifest(

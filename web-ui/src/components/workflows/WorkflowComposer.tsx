@@ -47,6 +47,7 @@ import { WorkspaceFileBrowser } from "../workflows/WorkspaceFileBrowser";
 import { LiveActivityStream, useWorkflowActivities } from "../intelligence/LiveActivityStream";
 import { toast } from "sonner";
 import { AlertCircle, MousePointerClick } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 /* ── Static styles ── */
@@ -110,6 +111,7 @@ function ComposerCanvas({
   const [paletteCollapsed, setPaletteCollapsed] = useState(false);
   const [propertiesCollapsed, setPropertiesCollapsed] = useState(false);
   const [runHistoryCollapsed, setRunHistoryCollapsed] = useState(true);
+  const [runHistoryExpanded, setRunHistoryExpanded] = useState(false);
   const [filesCollapsed, setFilesCollapsed] = useState(true);
   const [livePanelCollapsed, setLivePanelCollapsed] = useState(true);
   const [layoutDirection, setLayoutDirection] = useState<LayoutDirection>(() => getCurrentDirection());
@@ -123,6 +125,22 @@ function ComposerCanvas({
     error: liveError,
     reconnect: liveReconnect,
   } = useWorkflowActivities(token, namespace, workflow?.name ?? null);
+
+  // Live summary stats
+  const { activeStepName, toolActivityCount, warningCount, errorCount } = useMemo(() => {
+    let activeStep = "";
+    let tools = 0;
+    let warnings = 0;
+    let errors = 0;
+    for (const a of activities) {
+      if (a.step) activeStep = a.step;
+      if (a.type === "warning") warnings += 1;
+      if (a.type === "error") errors += 1;
+      const d = a.details;
+      if (d.tool || d.tool_name) tools += 1;
+    }
+    return { activeStepName: activeStep, toolActivityCount: tools, warningCount: warnings, errorCount: errors };
+  }, [activities]);
 
   // Sync step states from workflow polling to node data
   useEffect(() => {
@@ -711,7 +729,29 @@ function ComposerCanvas({
 
         {/* Live Activity Panel */}
         {!livePanelCollapsed && workflow?.name && (
-          <div className="w-80 border-l bg-background shrink-0 flex flex-col">
+          <div className="w-96 border-l bg-background shrink-0 flex flex-col">
+            {/* Live run summary */}
+            <div className="px-3 py-2 border-b shrink-0 bg-muted/20">
+              <div className="flex items-center gap-2 text-[10px]">
+                <div className={cn(
+                  "h-1.5 w-1.5 rounded-full shrink-0",
+                  isActive ? "bg-emerald-500 animate-pulse" : isConnected ? "bg-sky-500" : "bg-red-500",
+                )} />
+                <span className="font-semibold text-foreground">{workflow.name}</span>
+                {livePhase && (
+                  <Badge variant="outline" className="text-[9px] h-4 px-1">{livePhase}</Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-2 mt-1 text-[9px] text-muted-foreground">
+                {isActive && activeStepName && (
+                  <span>Current: {activeStepName}</span>
+                )}
+                <span>{activities.length} events</span>
+                {toolActivityCount > 0 && <span>{toolActivityCount} tools</span>}
+                {warningCount > 0 && <span className="text-amber-400">{warningCount} warnings</span>}
+                {errorCount > 0 && <span className="text-red-400">{errorCount} errors</span>}
+              </div>
+            </div>
             <LiveActivityStream
               workflowName={workflow.name}
               activities={activities}
@@ -725,20 +765,31 @@ function ComposerCanvas({
         )}
       </div>
 
+      {/* Bottom panels — Files above Runs */}
       {!isNew && (
-        <RunHistoryPanel
-          workflowName={wfName}
-          collapsed={runHistoryCollapsed}
-          onToggle={() => setRunHistoryCollapsed((p) => !p)}
-        />
-      )}
+        <div className="border-t border-border/40 bg-background/60 shrink-0 max-h-[45vh] overflow-hidden flex flex-col">
+          {/* Workspace File Browser */}
+          {selectedNode?.data && "agentRef" in (selectedNode.data as object) && (
+            <div className={cn("shrink-0", filesCollapsed ? "" : "flex-1 min-h-0 overflow-hidden border-b border-border/20")}>
+              <WorkspaceFileBrowser
+                agentName={String((selectedNode.data as Record<string, unknown>).agentRef ?? "")}
+                collapsed={filesCollapsed}
+                onToggle={() => setFilesCollapsed((p) => !p)}
+              />
+            </div>
+          )}
 
-      {!isNew && selectedNode?.data && "agentRef" in (selectedNode.data as object) && (
-        <WorkspaceFileBrowser
-          agentName={String((selectedNode.data as Record<string, unknown>).agentRef ?? "")}
-          collapsed={filesCollapsed}
-          onToggle={() => setFilesCollapsed((p) => !p)}
-        />
+          {/* Run History */}
+          <div className={cn("shrink-0", runHistoryCollapsed ? "" : "flex-1 min-h-0 overflow-hidden")}>
+            <RunHistoryPanel
+              workflowName={wfName}
+              collapsed={runHistoryCollapsed}
+              onToggle={() => setRunHistoryCollapsed((p) => !p)}
+              expanded={runHistoryExpanded}
+              onExpandedChange={setRunHistoryExpanded}
+            />
+          </div>
+        </div>
       )}
     </div>
   );

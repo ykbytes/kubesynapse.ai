@@ -14,7 +14,10 @@ import {
   ShieldCheck,
   AlertTriangle,
   GitBranch,
+  FileText,
+  Wrench,
 } from "lucide-react";
+import { resolveToolMeta } from "@/lib/tool-utils";
 
 /* ── Runtime icon mapping ── */
 
@@ -82,37 +85,37 @@ function StatusBadge({ status }: { status?: string | null }) {
     completed: {
       icon: <CheckCircle2 className="h-3 w-3" />,
       label: "Done",
-      cls: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
+      cls: "text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
     },
     running: {
       icon: <LoaderCircle className="h-3 w-3 animate-spin" />,
       label: "Running",
-      cls: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+      cls: "text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/20",
     },
     failed: {
       icon: <XCircle className="h-3 w-3" />,
       label: "Failed",
-      cls: "text-red-400 bg-red-500/10 border-red-500/20",
+      cls: "text-red-600 dark:text-red-400 bg-red-500/10 border-red-500/20",
     },
     denied: {
       icon: <ShieldAlert className="h-3 w-3" />,
       label: "Denied",
-      cls: "text-red-400 bg-red-500/10 border-red-500/20",
+      cls: "text-red-600 dark:text-red-400 bg-red-500/10 border-red-500/20",
     },
     waiting_approval: {
       icon: <ShieldAlert className="h-3 w-3" />,
       label: "Approval",
-      cls: "text-orange-400 bg-orange-500/10 border-orange-500/20",
+      cls: "text-orange-600 dark:text-orange-400 bg-orange-500/10 border-orange-500/20",
     },
     continued: {
       icon: <AlertTriangle className="h-3 w-3" />,
       label: "Continued",
-      cls: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+      cls: "text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/20",
     },
     cancelled: {
       icon: <XCircle className="h-3 w-3" />,
       label: "Cancelled",
-      cls: "text-orange-400 bg-orange-500/10 border-orange-500/20",
+      cls: "text-orange-600 dark:text-orange-400 bg-orange-500/10 border-orange-500/20",
     },
     skipped: {
       icon: <Clock className="h-3 w-3" />,
@@ -269,7 +272,7 @@ export function AgentNode({ data, selected }: NodeProps<AgentStepNode>) {
         {/* Config indicator pills */}
         <div className="flex items-center gap-1 flex-wrap">
           {data.requireApproval && (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-orange-500/10 border border-orange-500/20 px-1.5 py-0.5 text-[9px] text-orange-400 font-medium">
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-orange-500/10 border border-orange-500/20 px-1.5 py-0.5 text-[9px] text-orange-600 dark:text-orange-400 font-medium">
               <UserCheck className="h-2.5 w-2.5" /> HITL
             </span>
           )}
@@ -297,8 +300,8 @@ export function AgentNode({ data, selected }: NodeProps<AgentStepNode>) {
             <span className={cn(
               "inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[9px] font-medium",
               data.stepState.verificationResult.passed
-                ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
-                : "bg-red-500/10 border-red-500/20 text-red-400",
+                ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400"
+                : "bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400",
             )}>
               <ShieldCheck className="h-2.5 w-2.5" /> {data.stepState.verificationResult.passed ? "Verified" : "Verify Failed"}
             </span>
@@ -307,27 +310,71 @@ export function AgentNode({ data, selected }: NodeProps<AgentStepNode>) {
             <span className={cn(
               "inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[9px] font-medium",
               data.stepState.reviewResult.approved
-                ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
-                : "bg-amber-500/10 border-amber-500/20 text-amber-400",
+                ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400"
+                : "bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-400",
             )}>
               <ShieldCheck className="h-2.5 w-2.5" /> {data.stepState.reviewResult.approved ? "Approved" : "Rejected"}
             </span>
           )}
           {data.stepState?.iterationFailures && data.stepState.iterationFailures.length > 0 && (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-red-500/10 border border-red-500/20 px-1.5 py-0.5 text-[9px] text-red-400 font-medium">
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-red-500/10 border border-red-500/20 px-1.5 py-0.5 text-[9px] text-red-600 dark:text-red-400 font-medium">
               <AlertTriangle className="h-2.5 w-2.5" /> {data.stepState.iterationFailures.length} failures
             </span>
           )}
         </div>
 
-        {/* Loop progress bar */}
+        {/* Execution summary strip */}
+        {data.stepState && (data.stepState.toolCallCount ?? 0) > 0 && (
+          <div className="flex items-center gap-2 text-[9px] text-muted-foreground border-t border-border/20 pt-1.5 mt-1">
+            <span className="flex items-center gap-0.5">
+              <Wrench className="h-2.5 w-2.5" />
+              {data.stepState.toolCallCount} tool{data.stepState.toolCallCount !== 1 ? "s" : ""}
+            </span>
+            {(data.stepState.artifactCount ?? 0) > 0 && (
+              <span className="flex items-center gap-0.5">
+                <FileText className="h-2.5 w-2.5" />
+                {data.stepState.artifactCount} file{data.stepState.artifactCount !== 1 ? "s" : ""}
+              </span>
+            )}
+            {data.stepState.latencyMs != null && (
+              <span className="font-mono tabular-nums">
+                {data.stepState.latencyMs < 1000
+                  ? `${data.stepState.latencyMs}ms`
+                  : `${(data.stepState.latencyMs / 1000).toFixed(1)}s`}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Dominant signal */}
+        {data.stepState?.warnings && data.stepState.warnings.length > 0 && (
+          <div className="mt-1">
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 text-[9px] text-amber-600 dark:text-amber-400 font-medium">
+              <AlertTriangle className="h-2.5 w-2.5" /> {data.stepState.warnings.length} warning{data.stepState.warnings.length !== 1 ? "s" : ""}
+            </span>
+          </div>
+        )}
+
+        {/* Current activity preview (when running) */}
+        {status === "running" && data.stepState?.toolCalls && data.stepState.toolCalls.length > 0 && (
+          <div className="flex items-center gap-1.5 text-[9px] text-primary/80 border-t border-border/20 pt-1 mt-1">
+            <LoaderCircle className="h-2.5 w-2.5 animate-spin shrink-0" />
+            <span className="truncate">
+              {(() => {
+                const last = data.stepState!.toolCalls![data.stepState!.toolCalls!.length - 1];
+                const meta = resolveToolMeta(last.tool);
+                return meta.label;
+              })()}
+            </span>
+          </div>
+        )}
         <LoopProgressBar data={data} />
         {/* Plan progress bar */}
         <PlanProgressBar data={data} />
 
         {/* Error preview */}
         {status === "failed" && data.stepState?.error && (
-          <p className="text-[9px] text-red-400 truncate" title={data.stepState.error}>
+          <p className="text-[9px] text-red-600 dark:text-red-400 truncate" title={data.stepState.error}>
             {data.stepState.error}
           </p>
         )}

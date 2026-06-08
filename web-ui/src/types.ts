@@ -242,7 +242,7 @@ export interface AgentInfo {
   runtime_kind?: RuntimeKind;
 }
 
-export type WorkspaceView = "agents" | "chat" | "workflows" | "catalog" | "composer" | "policies" | "intelligence" | "settings" | "admin" | "docs" | "webhooks";
+export type WorkspaceView = "agents" | "chat" | "workflows" | "catalog" | "composer" | "policies" | "intelligence" | "settings" | "admin" | "docs" | "webhooks" | "incidents";
 
 /* ── LLM Provider types ── */
 
@@ -925,6 +925,8 @@ export interface WorkflowStepArtifactSummary {
   status?: string | null;
   type?: string | null;
   preview?: string | null;
+  /** Preview of artifact content (from backend output/content field) */
+  content?: string | null;
 }
 
 export interface WorkflowStepToolCallSummary {
@@ -932,6 +934,18 @@ export interface WorkflowStepToolCallSummary {
   status?: string | null;
   inputPreview?: string | null;
   preview?: string | null;
+  /** Duration in milliseconds */
+  durationMs?: number | null;
+  /** Preview of tool output/result */
+  outputPreview?: string | null;
+  /** Single file path (for file operations) */
+  path?: string | null;
+  /** Multiple file paths (for batch operations) */
+  paths?: string[] | null;
+  /** Error message if tool call failed */
+  error?: string | null;
+  /** Extracted search query (for search tools) */
+  query?: string | null;
 }
 
 export interface WorkflowStepState {
@@ -1289,6 +1303,8 @@ export interface ExecutionListResponse {
 
 /* ── Webhook & Trigger types ── */
 
+export type WebhookProvider = "generic" | "github" | "slack" | "stripe" | "pagerduty" | "grafana";
+
 export interface WebhookReceiverInfo {
   id: number;
   namespace: string;
@@ -1298,6 +1314,11 @@ export interface WebhookReceiverInfo {
   rate_limit: number;
   max_payload_bytes: number;
   enabled: boolean;
+  provider: WebhookProvider;
+  api_key_enabled: boolean;
+  failure_count: number;
+  last_failure: string | null;
+  active_keys: number;
   created_at: string;
   updated_at: string;
 }
@@ -1312,6 +1333,8 @@ export interface WebhookInvocationInfo {
   signature_verified: boolean;
   status: string;
   matched_triggers: number;
+  provider?: string;
+  event_type?: string;
 }
 
 export interface WorkflowTriggerInfo {
@@ -1322,12 +1345,19 @@ export interface WorkflowTriggerInfo {
   source_ref: string;
   event_filter: Record<string, unknown>;
   workflow_ref: Record<string, string>;
+  agent_ref: Record<string, string>;
+  target_kind: string;
   payload_mapping: Record<string, string>;
   max_retries: number;
   backoff_seconds: number;
   enabled: boolean;
   execution_count: number;
+  dead_letter_count: number;
   last_triggered: string | null;
+  notifications: {
+    on_success?: string[];
+    on_failure?: string[];
+  };
 }
 
 export interface TriggerExecutionInfo {
@@ -1339,6 +1369,10 @@ export interface TriggerExecutionInfo {
   status: string;
   workflow_run_id: string | null;
   error_message: string | null;
+  attempt_count: number;
+  target_kind?: string;
+  agent_name?: string;
+  agent_namespace?: string;
 }
 
 /* ── Live Agent Activity Stream types ── */
@@ -1349,11 +1383,15 @@ export interface AgentActivity {
   id: string;
   timestamp: string;
   type: AgentActivityType;
+  severity?: string;
   event: string;
   agentRef: string;
   step: string;
   runId: string;
   message: string;
+  summary?: string;
+  tool?: string | null;
+  durationMs?: number | null;
   details: Record<string, unknown>;
   source: string;
 }
@@ -1364,4 +1402,40 @@ export interface ActivityStreamState {
   isActive: boolean;
   phase: string;
   error: string | null;
+}
+
+/* ── Incident Management types ── */
+
+export interface IncidentInfo {
+  id: number;
+  namespace: string;
+  name: string;
+  title: string;
+  description: string;
+  severity: "critical" | "warning" | "info";
+  source: "alertmanager" | "manual" | "k8s-event" | "webhook";
+  status: "firing" | "acknowledged" | "diagnosing" | "remediated" | "resolved" | "closed" | "escalated";
+  labels: Record<string, string>;
+  annotations: Record<string, string>;
+  assigned_agent: string | null;
+  escalation_timeout_minutes: number;
+  escalated: boolean;
+  auto_acknowledge: boolean;
+  acknowledged_at: string | null;
+  resolved_at: string | null;
+  closed_at: string | null;
+  escalated_at: string | null;
+  alertmanager_fingerprint: string | null;
+  workflow_ref_name: string | null;
+  workflow_ref_namespace: string | null;
+  workflow_run_id: string | null;
+  timeline: Array<{ timestamp: string; event: string; message: string }>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IncidentTimelineEvent {
+  timestamp: string;
+  event: string;
+  message: string;
 }

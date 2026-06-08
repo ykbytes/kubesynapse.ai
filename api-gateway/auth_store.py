@@ -1022,9 +1022,15 @@ class WebhookReceiverRow(Base):
     namespace = Column(String(128), nullable=False, index=True)
     name = Column(String(128), nullable=False, index=True)
     secret_ref = Column(String(253), nullable=False)
+    additional_secrets = Column(JSON, nullable=False, default=dict)
+    provider = Column(String(32), nullable=False, default="generic")
+    api_key_enabled = Column(Boolean, nullable=False, default=False)
     ip_allowlist = Column(JSON, nullable=False, default=list)
     rate_limit = Column(Integer, nullable=False, default=60)
+    max_concurrent = Column(Integer, nullable=False, default=0)
     max_payload_bytes = Column(Integer, nullable=False, default=1048576)
+    response_timeout_seconds = Column(Integer, nullable=False, default=30)
+    payload_schema = Column(JSON, nullable=True)
     enabled = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
@@ -1035,9 +1041,15 @@ class WebhookReceiverRow(Base):
             "namespace": self.namespace,
             "name": self.name,
             "secret_ref": self.secret_ref,
+            "additional_secrets": self.additional_secrets or {},
+            "provider": self.provider or "generic",
+            "api_key_enabled": self.api_key_enabled or False,
             "ip_allowlist": self.ip_allowlist or [],
             "rate_limit": self.rate_limit,
+            "max_concurrent": self.max_concurrent or 0,
             "max_payload_bytes": self.max_payload_bytes,
+            "response_timeout_seconds": self.response_timeout_seconds or 30,
+            "payload_schema": self.payload_schema,
             "enabled": self.enabled,
             "created_at": ensure_utc(self.created_at).isoformat() if self.created_at else None,
             "updated_at": ensure_utc(self.updated_at).isoformat() if self.updated_at else None,
@@ -1096,8 +1108,11 @@ class WorkflowTriggerRow(Base):
     source_kind = Column(String(64), nullable=False, default="WebhookReceiver")
     source_name = Column(String(128), nullable=False)
     event_filter_json = Column(JSON, nullable=True)
-    target_workflow_name = Column(String(128), nullable=False)
-    target_workflow_namespace = Column(String(128), nullable=False, default="default")
+    target_kind = Column(String(16), nullable=False, default="workflow")
+    target_workflow_name = Column(String(128), nullable=True)
+    target_workflow_namespace = Column(String(128), nullable=True, default="default")
+    target_agent_name = Column(String(128), nullable=True)
+    target_agent_namespace = Column(String(128), nullable=True)
     payload_mapping_json = Column(JSON, nullable=False, default=dict)
     retry_max_retries = Column(Integer, nullable=False, default=3)
     retry_backoff_seconds = Column(Integer, nullable=False, default=60)
@@ -1108,6 +1123,19 @@ class WorkflowTriggerRow(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 
     def to_dict(self) -> dict[str, Any]:
+        target_kind = (self.target_kind or "workflow").strip()
+        if target_kind == "agent":
+            workflow_ref: dict[str, str] = {}
+            agent_ref = {
+                "name": self.target_agent_name or "",
+                "namespace": self.target_agent_namespace or self.namespace,
+            }
+        else:
+            agent_ref = {}
+            workflow_ref = {
+                "name": self.target_workflow_name or "",
+                "namespace": self.target_workflow_namespace or self.namespace,
+            }
         return {
             "id": self.id,
             "namespace": self.namespace,
@@ -1116,12 +1144,9 @@ class WorkflowTriggerRow(Base):
             "source_name": self.source_name,
             "source_ref": self.source_name,
             "event_filter": self.event_filter_json,
-            "target_workflow_name": self.target_workflow_name,
-            "target_workflow_namespace": self.target_workflow_namespace,
-            "workflow_ref": {
-                "name": self.target_workflow_name,
-                "namespace": self.target_workflow_namespace,
-            },
+            "target_kind": target_kind,
+            "workflow_ref": workflow_ref,
+            "agent_ref": agent_ref,
             "payload_mapping": self.payload_mapping_json or {},
             "retry_max_retries": self.retry_max_retries,
             "retry_backoff_seconds": self.retry_backoff_seconds,
@@ -1143,8 +1168,11 @@ class TriggerExecutionRow(Base):
     trigger_name = Column(String(128), nullable=False, index=True)
     webhook_name = Column(String(128), nullable=False, default="")
     event_id = Column(String(128), nullable=False, index=True)
-    workflow_name = Column(String(128), nullable=False)
-    workflow_namespace = Column(String(128), nullable=False)
+    target_kind = Column(String(16), nullable=False, default="workflow")
+    workflow_name = Column(String(128), nullable=True)
+    workflow_namespace = Column(String(128), nullable=True)
+    agent_name = Column(String(128), nullable=True)
+    agent_namespace = Column(String(128), nullable=True)
     payload_json = Column(JSON, nullable=True)
     status = Column(String(32), nullable=False, default="pending")
     error_message = Column(String(1024), nullable=True)
@@ -1152,6 +1180,21 @@ class TriggerExecutionRow(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Claim/dispatch ownership
+    claimed_by = Column(String(128), nullable=True)
+    claim_source = Column(String(32), nullable=True)
+    claimed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Dispatch path
+    dispatch_path = Column(String(32), nullable=True)
+
+    # Lineage to downstream execution
+    workflow_run_id = Column(String(128), nullable=True)
+    workflow_generation = Column(Integer, nullable=True)
+    job_name = Column(String(256), nullable=True)
+    session_id = Column(String(128), nullable=True)
+    operator_instance = Column(String(128), nullable=True)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1161,8 +1204,11 @@ class TriggerExecutionRow(Base):
             "trigger_name": self.trigger_name,
             "event_id": self.event_id,
             "webhook_name": self.webhook_name,
+            "target_kind": self.target_kind or "workflow",
             "workflow_name": self.workflow_name,
             "workflow_namespace": self.workflow_namespace,
+            "agent_name": self.agent_name,
+            "agent_namespace": self.agent_namespace,
             "payload_json": self.payload_json,
             "status": self.status,
             "error_message": self.error_message,
@@ -1171,12 +1217,406 @@ class TriggerExecutionRow(Base):
             "executed_at": ensure_utc(self.created_at).isoformat() if self.created_at else None,
             "updated_at": ensure_utc(self.updated_at).isoformat() if self.updated_at else None,
             "completed_at": ensure_utc(self.completed_at).isoformat() if self.completed_at else None,
-            "workflow_run_id": None,
+            "workflow_run_id": self.workflow_run_id,
+            "claimed_by": self.claimed_by,
+            "claim_source": self.claim_source,
+            "claimed_at": ensure_utc(self.claimed_at).isoformat() if self.claimed_at else None,
+            "dispatch_path": self.dispatch_path,
+            "workflow_generation": self.workflow_generation,
+            "job_name": self.job_name,
+            "session_id": self.session_id,
+            "operator_instance": self.operator_instance,
         }
 
 
+# ---------------------------------------------------------------------------
+# Incident lifecycle
+# ---------------------------------------------------------------------------
+
+_INCIDENT_TRANSITIONS: dict[str, list[str]] = {
+    "firing": ["acknowledged", "resolved", "closed", "escalated"],
+    "acknowledged": ["diagnosing", "remediated", "resolved", "closed", "escalated"],
+    "diagnosing": ["remediated", "resolved", "closed", "escalated"],
+    "remediated": ["resolved", "closed", "escalated"],
+    "resolved": ["closed"],
+    "closed": [],
+    "escalated": ["acknowledged", "diagnosing", "remediated", "resolved", "closed"],
+}
+
+_INCIDENT_VALID_STATUSES = set(_INCIDENT_TRANSITIONS.keys())
+
+
+class IncidentRow(Base):
+    __tablename__ = "incidents"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    namespace = Column(String(128), nullable=False, default="default", index=True)
+    name = Column(String(128), nullable=False, index=True)
+    title = Column(String(512), nullable=False)
+    description = Column(String(4096), nullable=True, default="")
+    severity = Column(String(16), nullable=False, default="warning")
+    source = Column(String(32), nullable=False, default="manual")
+    status = Column(String(32), nullable=False, default="firing", index=True)
+    labels = Column(JSON, nullable=True, default=dict)
+    annotations = Column(JSON, nullable=True, default=dict)
+    assigned_agent = Column(String(128), nullable=True)
+    escalation_timeout_minutes = Column(Integer, nullable=False, default=15)
+    escalated = Column(Boolean, nullable=False, default=False)
+    auto_acknowledge = Column(Boolean, nullable=False, default=True)
+    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+    escalated_at = Column(DateTime(timezone=True), nullable=True)
+    alertmanager_fingerprint = Column(String(128), nullable=True, index=True)
+    workflow_ref_name = Column(String(128), nullable=True)
+    workflow_ref_namespace = Column(String(128), nullable=True)
+    workflow_run_id = Column(String(128), nullable=True)
+    timeline = Column(JSON, nullable=True, default=list)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+    __table_args__ = (
+        Index("ix_incidents_status_severity", "status", "severity"),
+        UniqueConstraint("namespace", "name", name="uq_incident_namespace_name"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "namespace": self.namespace,
+            "name": self.name,
+            "title": self.title,
+            "description": self.description or "",
+            "severity": self.severity,
+            "source": self.source,
+            "status": self.status,
+            "labels": self.labels or {},
+            "annotations": self.annotations or {},
+            "assigned_agent": self.assigned_agent,
+            "escalation_timeout_minutes": self.escalation_timeout_minutes,
+            "escalated": self.escalated,
+            "auto_acknowledge": self.auto_acknowledge,
+            "acknowledged_at": ensure_utc(self.acknowledged_at).isoformat() if self.acknowledged_at else None,
+            "resolved_at": ensure_utc(self.resolved_at).isoformat() if self.resolved_at else None,
+            "closed_at": ensure_utc(self.closed_at).isoformat() if self.closed_at else None,
+            "escalated_at": ensure_utc(self.escalated_at).isoformat() if self.escalated_at else None,
+            "alertmanager_fingerprint": self.alertmanager_fingerprint,
+            "workflow_ref_name": self.workflow_ref_name,
+            "workflow_ref_namespace": self.workflow_ref_namespace,
+            "workflow_run_id": self.workflow_run_id,
+            "timeline": self.timeline or [],
+            "created_at": ensure_utc(self.created_at).isoformat() if self.created_at else None,
+            "updated_at": ensure_utc(self.updated_at).isoformat() if self.updated_at else None,
+        }
+
+
+def _validate_incident_transition(current: str, target: str) -> str:
+    """Validate and return the target status, raising ValueError if invalid."""
+    normalized = target.strip().lower()
+    allowed = _INCIDENT_TRANSITIONS.get(current, [])
+    if normalized not in allowed:
+        raise ValueError(
+            f"Invalid incident status transition from '{current}' to '{normalized}'. "
+            f"Allowed transitions: {allowed}"
+        )
+    return normalized
+
+
+def create_incident(
+    namespace: str,
+    name: str,
+    title: str,
+    severity: str = "warning",
+    source: str = "manual",
+    description: str = "",
+    labels: dict[str, str] | None = None,
+    annotations: dict[str, str] | None = None,
+    assigned_agent: str | None = None,
+    escalation_timeout_minutes: int = 15,
+    auto_acknowledge: bool = True,
+    alertmanager_fingerprint: str | None = None,
+    workflow_ref_name: str | None = None,
+    workflow_ref_namespace: str | None = None,
+) -> dict[str, Any]:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    if not normalized_name:
+        raise ValueError("Incident name is required")
+    severity = str(severity or "warning").strip().lower()
+    if severity not in ("critical", "warning", "info"):
+        severity = "warning"
+
+    # Check for existing incident by (namespace, name)
+    with db_session() as session:
+        existing = (
+            session.query(IncidentRow)
+            .filter(
+                IncidentRow.namespace == normalized_ns,
+                IncidentRow.name == normalized_name,
+            )
+            .first()
+        )
+        if existing:
+            return existing.to_dict()
+
+        now = utc_now()
+        timeline_entry = {
+            "timestamp": now.isoformat(),
+            "event": "firing",
+            "message": f"Incident created via {source}",
+        }
+
+        row = IncidentRow(
+            namespace=normalized_ns,
+            name=normalized_name,
+            title=str(title or "").strip(),
+            description=str(description or "").strip(),
+            severity=severity,
+            source=str(source or "manual").strip().lower(),
+            status="firing",
+            labels=labels or {},
+            annotations=annotations or {},
+            assigned_agent=assigned_agent,
+            escalation_timeout_minutes=max(1, int(escalation_timeout_minutes)),
+            auto_acknowledge=bool(auto_acknowledge),
+            alertmanager_fingerprint=alertmanager_fingerprint,
+            workflow_ref_name=workflow_ref_name,
+            workflow_ref_namespace=workflow_ref_namespace,
+            timeline=[timeline_entry],
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(row)
+        session.flush()
+        return row.to_dict()
+
+
+def upsert_incident(
+    namespace: str,
+    name: str,
+    title: str,
+    severity: str = "warning",
+    source: str = "manual",
+    description: str = "",
+    labels: dict[str, str] | None = None,
+    annotations: dict[str, str] | None = None,
+    assigned_agent: str | None = None,
+    escalation_timeout_minutes: int = 15,
+    auto_acknowledge: bool = True,
+    alertmanager_fingerprint: str | None = None,
+    workflow_ref_name: str | None = None,
+    workflow_ref_namespace: str | None = None,
+) -> dict[str, Any]:
+    """Upsert an incident by (namespace, name) — idempotent for concurrent calls."""
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    if not normalized_name:
+        raise ValueError("Incident name is required")
+    severity = str(severity or "warning").strip().lower()
+    if severity not in ("critical", "warning", "info"):
+        severity = "warning"
+
+    with db_session() as session:
+        existing = (
+            session.query(IncidentRow)
+            .filter(
+                IncidentRow.namespace == normalized_ns,
+                IncidentRow.name == normalized_name,
+            )
+            .with_for_update(skip_locked=True)
+            .first()
+        )
+        if existing:
+            now = utc_now()
+            existing.title = str(title or "").strip() or existing.title
+            existing.description = str(description or "").strip()
+            existing.severity = severity
+            existing.source = str(source or "manual").strip().lower()
+            existing.labels = labels or existing.labels
+            existing.annotations = annotations or existing.annotations
+            existing.assigned_agent = assigned_agent or existing.assigned_agent
+            existing.escalation_timeout_minutes = max(1, int(escalation_timeout_minutes))
+            existing.alertmanager_fingerprint = alertmanager_fingerprint or existing.alertmanager_fingerprint
+            existing.workflow_ref_name = workflow_ref_name or existing.workflow_ref_name
+            existing.workflow_ref_namespace = workflow_ref_namespace or existing.workflow_ref_namespace
+            existing.updated_at = now
+            session.flush()
+            return existing.to_dict()
+
+        now = utc_now()
+        timeline_entry = {
+            "timestamp": now.isoformat(),
+            "event": "firing",
+            "message": f"Incident created via {source}",
+        }
+        row = IncidentRow(
+            namespace=normalized_ns,
+            name=normalized_name,
+            title=str(title or "").strip(),
+            description=str(description or "").strip(),
+            severity=severity,
+            source=str(source or "manual").strip().lower(),
+            status="firing",
+            labels=labels or {},
+            annotations=annotations or {},
+            assigned_agent=assigned_agent,
+            escalation_timeout_minutes=max(1, int(escalation_timeout_minutes)),
+            auto_acknowledge=bool(auto_acknowledge),
+            alertmanager_fingerprint=alertmanager_fingerprint,
+            workflow_ref_name=workflow_ref_name,
+            workflow_ref_namespace=workflow_ref_namespace,
+            timeline=[timeline_entry],
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(row)
+        session.flush()
+        return row.to_dict()
+
+
+def update_incident_status(
+    namespace: str,
+    name: str,
+    status: str,
+    message: str = "",
+    workflow_run_id: str | None = None,
+) -> dict[str, Any]:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    if not normalized_name:
+        raise ValueError("Incident name is required")
+
+    with db_session() as session:
+        row = (
+            session.query(IncidentRow)
+            .filter(
+                IncidentRow.namespace == normalized_ns,
+                IncidentRow.name == normalized_name,
+            )
+            .first()
+        )
+        if not row:
+            raise ValueError(f"Incident '{normalized_ns}/{normalized_name}' not found")
+
+        target = _validate_incident_transition(row.status, status)
+        now = utc_now()
+        timeline_event = {
+            "timestamp": now.isoformat(),
+            "event": target,
+            "message": str(message or f"Status changed to {target}"),
+        }
+
+        current_timeline = list(row.timeline or [])
+        current_timeline.append(timeline_event)
+
+        update_fields: dict[str, Any] = {
+            "status": target,
+            "updated_at": now,
+            "timeline": current_timeline,
+        }
+
+        if target == "acknowledged":
+            update_fields["acknowledged_at"] = now
+        elif target == "resolved":
+            update_fields["resolved_at"] = now
+        elif target == "closed":
+            update_fields["closed_at"] = now
+        elif target == "escalated":
+            update_fields["escalated"] = True
+            update_fields["escalated_at"] = now
+
+        if workflow_run_id:
+            update_fields["workflow_run_id"] = workflow_run_id
+
+        for key, value in update_fields.items():
+            setattr(row, key, value)
+
+        session.flush()
+        return row.to_dict()
+
+
+def list_incidents(
+    namespace: str | None = None,
+    status: str | None = None,
+    severity: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    with db_session() as session:
+        query = session.query(IncidentRow)
+        if namespace:
+            normalized_ns = str(namespace).strip() or "default"
+            query = query.filter(IncidentRow.namespace == normalized_ns)
+        if status:
+            query = query.filter(IncidentRow.status == str(status).strip().lower())
+        if severity:
+            query = query.filter(IncidentRow.severity == str(severity).strip().lower())
+        rows = (
+            query.order_by(IncidentRow.created_at.desc())
+            .limit(max(1, int(limit)))
+            .offset(max(0, int(offset)))
+            .all()
+        )
+        return [row.to_dict() for row in rows]
+
+
+def get_incident(namespace: str, name: str) -> dict[str, Any]:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    with db_session() as session:
+        row = (
+            session.query(IncidentRow)
+            .filter(
+                IncidentRow.namespace == normalized_ns,
+                IncidentRow.name == normalized_name,
+            )
+            .first()
+        )
+        if not row:
+            raise ValueError(f"Incident '{normalized_ns}/{normalized_name}' not found")
+        return row.to_dict()
+
+
+def get_incident_by_fingerprint(fingerprint: str) -> dict[str, Any] | None:
+    with db_session() as session:
+        row = (
+            session.query(IncidentRow)
+            .filter(IncidentRow.alertmanager_fingerprint == str(fingerprint).strip())
+            .order_by(IncidentRow.created_at.desc())
+            .first()
+        )
+        return row.to_dict() if row else None
+
+
+def add_incident_timeline_event(namespace: str, name: str, event: str, message: str) -> dict[str, Any]:
+    normalized_ns = str(namespace or "default").strip() or "default"
+    normalized_name = str(name or "").strip()
+    with db_session() as session:
+        row = (
+            session.query(IncidentRow)
+            .filter(
+                IncidentRow.namespace == normalized_ns,
+                IncidentRow.name == normalized_name,
+            )
+            .first()
+        )
+        if not row:
+            raise ValueError(f"Incident '{normalized_ns}/{normalized_name}' not found")
+        now = utc_now()
+        current_timeline = list(row.timeline or [])
+        current_timeline.append({
+            "timestamp": now.isoformat(),
+            "event": event,
+            "message": message,
+        })
+        row.timeline = current_timeline
+        row.updated_at = now
+        session.flush()
+        return row.to_dict()
+
+
 # Schema version tracking for migration integrity checks
-_SCHEMA_VERSION = 1  # Increment when schema changes require migration
+_SCHEMA_VERSION = 2  # Increment when schema changes require migration
 
 
 class SchemaVersion(Base):
@@ -1238,7 +1678,10 @@ def _verify_schema_version() -> None:
 def _ensure_intelligence_namespace_columns() -> None:
     with ENGINE.begin() as connection:
         inspector = inspect(connection)
+        existing_tables = set(inspector.get_table_names())
         for table_name in _INTELLIGENCE_NAMESPACE_TABLES:
+            if table_name not in existing_tables:
+                continue
             columns = {column["name"] for column in inspector.get_columns(table_name)}
             if "namespace" not in columns:
                 connection.execute(
@@ -1319,11 +1762,19 @@ def _ensure_webhook_trigger_tables() -> None:
                 logger.info("Added webhook_name column to trigger_executions")
 
 
+def _ensure_incident_table() -> None:
+    with ENGINE.begin() as connection:
+        inspector = inspect(connection)
+        if "incidents" not in inspector.get_table_names():
+            Base.metadata.create_all(bind=ENGINE, tables=[IncidentRow.__table__])
+            logger.info("Created incidents table")
+
+
 def init_database() -> None:
     # Preferred: Alembic migrations (production-ready, versioned schema changes)
     try:
         from migration_runner import run_migrations
-        run_migrations()
+        run_migrations(base=Base, engine=ENGINE)
     except ImportError:
         # Fallback: create_all() for environments without Alembic installed
         Base.metadata.create_all(bind=ENGINE)
@@ -1332,6 +1783,7 @@ def init_database() -> None:
     _ensure_workflow_run_archive_columns()
     _ensure_password_reset_token_table()
     _ensure_webhook_trigger_tables()
+    _ensure_incident_table()
     _verify_schema_version()
 
 
@@ -3252,9 +3704,15 @@ def create_webhook_receiver(
     namespace: str,
     name: str,
     secret_ref: str,
+    additional_secrets: dict[str, str] | None = None,
+    provider: str = "generic",
+    api_key_enabled: bool = False,
     ip_allowlist: list[str] | None = None,
     rate_limit: int = 60,
+    max_concurrent: int = 0,
     max_payload_bytes: int = 1048576,
+    response_timeout_seconds: int = 30,
+    payload_schema: dict[str, Any] | None = None,
     enabled: bool = True,
 ) -> dict[str, Any]:
     normalized_ns = str(namespace or "default").strip() or "default"
@@ -3267,9 +3725,15 @@ def create_webhook_receiver(
         namespace=normalized_ns,
         name=normalized_name,
         secret_ref=str(secret_ref).strip(),
+        additional_secrets=additional_secrets or {},
+        provider=str(provider or "generic").strip(),
+        api_key_enabled=bool(api_key_enabled),
         ip_allowlist=list(ip_allowlist) if ip_allowlist else [],
         rate_limit=max(1, int(rate_limit or 60)),
+        max_concurrent=max(0, int(max_concurrent or 0)),
         max_payload_bytes=max(1024, int(max_payload_bytes or 1048576)),
+        response_timeout_seconds=max(1, min(300, int(response_timeout_seconds or 30))),
+        payload_schema=payload_schema,
         enabled=bool(enabled),
     )
     with db_session() as session:
@@ -3285,9 +3749,15 @@ def update_webhook_receiver(
     namespace: str,
     name: str,
     secret_ref: str | None = None,
+    additional_secrets: dict[str, str] | None = None,
+    provider: str | None = None,
+    api_key_enabled: bool | None = None,
     ip_allowlist: list[str] | None = None,
     rate_limit: int | None = None,
+    max_concurrent: int | None = None,
     max_payload_bytes: int | None = None,
+    response_timeout_seconds: int | None = None,
+    payload_schema: dict[str, Any] | object | None = None,
     enabled: bool | None = None,
 ) -> dict[str, Any]:
     normalized_ns = str(namespace or "default").strip() or "default"
@@ -3302,12 +3772,24 @@ def update_webhook_receiver(
             raise ValueError(f"Webhook '{name}' not found in namespace '{namespace}'")
         if secret_ref is not None:
             row.secret_ref = str(secret_ref).strip()
+        if additional_secrets is not None:
+            row.additional_secrets = additional_secrets
+        if provider is not None:
+            row.provider = str(provider).strip()
+        if api_key_enabled is not None:
+            row.api_key_enabled = bool(api_key_enabled)
         if ip_allowlist is not None:
             row.ip_allowlist = list(ip_allowlist)
         if rate_limit is not None:
             row.rate_limit = max(1, int(rate_limit))
+        if max_concurrent is not None:
+            row.max_concurrent = max(0, int(max_concurrent))
         if max_payload_bytes is not None:
             row.max_payload_bytes = max(1024, int(max_payload_bytes))
+        if response_timeout_seconds is not None:
+            row.response_timeout_seconds = max(1, min(300, int(response_timeout_seconds)))
+        if payload_schema is not None:
+            row.payload_schema = payload_schema if isinstance(payload_schema, dict) else None
         if enabled is not None:
             row.enabled = bool(enabled)
         row.updated_at = utc_now()
@@ -3483,8 +3965,11 @@ def create_workflow_trigger(
     source_kind: str = "WebhookReceiver",
     source_name: str = "",
     event_filter: dict[str, Any] | None = None,
-    target_workflow_name: str = "",
-    target_workflow_namespace: str = "default",
+    target_kind: str = "workflow",
+    target_workflow_name: str | None = None,
+    target_workflow_namespace: str | None = None,
+    target_agent_name: str | None = None,
+    target_agent_namespace: str | None = None,
     payload_mapping: dict[str, str] | None = None,
     retry_max_retries: int = 3,
     retry_backoff_seconds: int = 60,
@@ -3498,16 +3983,24 @@ def create_workflow_trigger(
         raise ValueError("Trigger name is required.")
     if not source_name or not str(source_name).strip():
         raise ValueError("source_name is required.")
-    if not target_workflow_name or not str(target_workflow_name).strip():
-        raise ValueError("target_workflow_name is required.")
+    tk = (target_kind or "workflow").strip().lower()
+    if tk not in ("workflow", "agent"):
+        raise ValueError(f"target_kind must be 'workflow' or 'agent', got '{tk}'")
+    if tk == "workflow" and not target_workflow_name:
+        raise ValueError("target_workflow_name is required when target_kind is 'workflow'")
+    if tk == "agent" and not target_agent_name:
+        raise ValueError("target_agent_name is required when target_kind is 'agent'")
     row = WorkflowTriggerRow(
         namespace=normalized_ns,
         name=normalized_name,
         source_kind=str(source_kind or "WebhookReceiver").strip(),
         source_name=str(source_name).strip(),
         event_filter_json=_json_clone(event_filter),
-        target_workflow_name=str(target_workflow_name).strip(),
-        target_workflow_namespace=str(target_workflow_namespace or "default").strip(),
+        target_kind=tk,
+        target_workflow_name=str(target_workflow_name).strip() if target_workflow_name else None,
+        target_workflow_namespace=str(target_workflow_namespace or normalized_ns).strip() if target_workflow_name else None,
+        target_agent_name=str(target_agent_name).strip() if target_agent_name else None,
+        target_agent_namespace=str(target_agent_namespace or normalized_ns).strip() if target_agent_name else None,
         payload_mapping_json=_json_clone(payload_mapping) or {},
         retry_max_retries=max(0, int(retry_max_retries or 0)),
         retry_backoff_seconds=max(0, int(60 if retry_backoff_seconds is None else retry_backoff_seconds)),
@@ -3530,8 +4023,11 @@ def update_workflow_trigger(
     source_kind: str | None = None,
     source_name: str | None = None,
     event_filter: dict[str, Any] | None = None,
+    target_kind: str | None = None,
     target_workflow_name: str | None = None,
     target_workflow_namespace: str | None = None,
+    target_agent_name: str | None = None,
+    target_agent_namespace: str | None = None,
     payload_mapping: dict[str, str] | None = None,
     retry_max_retries: int | None = None,
     retry_backoff_seconds: int | None = None,
@@ -3555,10 +4051,18 @@ def update_workflow_trigger(
             row.source_name = str(source_name).strip()
         if event_filter is not None:
             row.event_filter_json = _json_clone(event_filter)
+        if target_kind is not None:
+            row.target_kind = str(target_kind).strip().lower()
         if target_workflow_name is not None:
             row.target_workflow_name = str(target_workflow_name).strip()
+            row.target_kind = "workflow"
         if target_workflow_namespace is not None:
             row.target_workflow_namespace = str(target_workflow_namespace).strip()
+        if target_agent_name is not None:
+            row.target_agent_name = str(target_agent_name).strip()
+            row.target_kind = "agent"
+        if target_agent_namespace is not None:
+            row.target_agent_namespace = str(target_agent_namespace).strip()
         if payload_mapping is not None:
             row.payload_mapping_json = _json_clone(payload_mapping) or {}
         if retry_max_retries is not None:
@@ -3590,35 +4094,207 @@ def delete_workflow_trigger(namespace: str, name: str) -> bool:
         return True
 
 
+# Allowed state transitions for trigger executions.
+_VALID_TRIGGER_STATES: frozenset[str] = frozenset({
+    "pending", "queued", "processing", "completed", "failed", "dead_letter",
+})
+_TRIGGER_TRANSITIONS: dict[str, frozenset[str]] = {
+    "pending":     frozenset({"queued", "failed", "dead_letter"}),
+    "queued":      frozenset({"processing", "failed", "dead_letter"}),
+    "processing":  frozenset({"completed", "failed", "dead_letter"}),
+    "completed":   frozenset(),
+    "failed":      frozenset({"pending"}),         # replay
+    "dead_letter": frozenset({"pending"}),          # replay
+}
+_CLAIMABLE_STATES: frozenset[str] = frozenset({"pending"})
+_STALE_QUEUED_MINUTES: int = 5
+_STALE_PROCESSING_MINUTES: int = 15
+
+
 def record_trigger_execution(
     trigger_namespace: str,
     trigger_name: str,
     webhook_name: str,
     event_id: str,
-    workflow_name: str,
-    workflow_namespace: str,
+    target_kind: str = "workflow",
+    workflow_name: str | None = None,
+    workflow_namespace: str | None = None,
+    agent_name: str | None = None,
+    agent_namespace: str | None = None,
     payload_json: dict[str, Any] | None = None,
     status: str = "pending",
     error_message: str | None = None,
     attempt_count: int = 0,
 ) -> dict[str, Any]:
+    """Record a trigger execution with dedup by (namespace, trigger_name, event_id).
+
+    If an existing row with the same dedup key already exists and is still
+    claimable (pending), it is returned instead of creating a duplicate.
+    Terminal existing rows cause a skip (no duplicate created).
+    """
     normalized_ns = str(trigger_namespace or "default").strip() or "default"
-    row = TriggerExecutionRow(
-        trigger_namespace=normalized_ns,
-        trigger_name=str(trigger_name or "").strip(),
-        webhook_name=str(webhook_name or "").strip(),
-        event_id=str(event_id or "").strip(),
-        workflow_name=str(workflow_name or "").strip(),
-        workflow_namespace=str(workflow_namespace or "default").strip(),
-        payload_json=_json_clone(payload_json),
-        status=str(status or "pending").strip(),
-        error_message=error_message,
-        attempt_count=max(0, int(attempt_count or 0)),
-    )
+    normalized_name = str(trigger_name or "").strip()
+    normalized_event = str(event_id or "").strip()
+
     with db_session() as session:
+        existing = (
+            session.query(TriggerExecutionRow)
+            .filter(
+                TriggerExecutionRow.trigger_namespace == normalized_ns,
+                TriggerExecutionRow.trigger_name == normalized_name,
+                TriggerExecutionRow.event_id == normalized_event,
+            )
+            .order_by(TriggerExecutionRow.created_at.desc())
+            .first()
+        )
+        if existing is not None:
+            if existing.status in _CLAIMABLE_STATES:
+                return existing.to_dict()
+            return existing.to_dict()
+
+        row = TriggerExecutionRow(
+            trigger_namespace=normalized_ns,
+            trigger_name=normalized_name,
+            webhook_name=str(webhook_name or "").strip(),
+            event_id=normalized_event,
+            target_kind=str(target_kind or "workflow").strip(),
+            workflow_name=str(workflow_name).strip() if workflow_name else None,
+            workflow_namespace=str(workflow_namespace or "default").strip() if workflow_name else None,
+            agent_name=str(agent_name).strip() if agent_name else None,
+            agent_namespace=str(agent_namespace or "default").strip() if agent_name else None,
+            payload_json=_json_clone(payload_json),
+            status=str(status or "pending").strip(),
+            error_message=error_message,
+            attempt_count=max(0, int(attempt_count or 0)),
+        )
         session.add(row)
         session.flush()
         return row.to_dict()
+
+
+def update_trigger_execution_status(
+    execution_id: int,
+    status: str,
+    error_message: str | None = None,
+    attempt_count: int | None = None,
+    workflow_run_id: str | None = None,
+    workflow_generation: int | None = None,
+    job_name: str | None = None,
+    session_id: str | None = None,
+    operator_instance: str | None = None,
+    dispatch_path: str | None = None,
+) -> dict[str, Any] | None:
+    """Update the status of a trigger execution record with state-machine enforcement.
+
+    Used by the operator to mark executions as queued/processing/completed/failed/dead_letter.
+    Also accepts optional lineage metadata to link the execution to its downstream
+    workflow run or agent session.
+    """
+    normalized_status = str(status or "").strip()
+    if normalized_status not in _VALID_TRIGGER_STATES:
+        raise ValueError(
+            f"Invalid trigger execution status '{normalized_status}'. "
+            f"Must be one of: {sorted(_VALID_TRIGGER_STATES)}"
+        )
+    with db_session() as session:
+        row: TriggerExecutionRow | None = (
+            session.query(TriggerExecutionRow)
+            .filter(TriggerExecutionRow.id == int(execution_id))
+            .one_or_none()
+        )
+        if row is None:
+            return None
+
+        # Enforce valid state transition
+        allowed = _TRIGGER_TRANSITIONS.get(row.status, frozenset())
+        if normalized_status not in allowed and normalized_status != row.status:
+            raise ValueError(
+                f"Invalid trigger execution status transition: '{row.status}' → "
+                f"'{normalized_status}'. Allowed transitions: {sorted(allowed)}"
+            )
+
+        row.status = normalized_status
+        if error_message is not None:
+            row.error_message = str(error_message)[:1024]
+        if attempt_count is not None:
+            row.attempt_count = max(0, int(attempt_count))
+        if normalized_status in {"completed", "failed", "dead_letter"}:
+            row.completed_at = datetime.now(UTC)
+
+        # Persist lineage metadata when provided
+        if workflow_run_id is not None:
+            row.workflow_run_id = str(workflow_run_id).strip() or None
+        if workflow_generation is not None:
+            row.workflow_generation = max(0, int(workflow_generation))
+        if job_name is not None:
+            row.job_name = str(job_name).strip() or None
+        if session_id is not None:
+            row.session_id = str(session_id).strip() or None
+        if operator_instance is not None:
+            row.operator_instance = str(operator_instance).strip() or None
+        if dispatch_path is not None:
+            row.dispatch_path = str(dispatch_path).strip() or None
+
+        row.updated_at = datetime.now(UTC)
+        session.flush()
+        return row.to_dict()
+
+
+def claim_trigger_execution(
+    execution_id: int,
+    claimed_by: str = "",
+    claim_source: str = "nats",
+) -> dict[str, Any] | None:
+    """Atomically claim a trigger execution for dispatch.
+
+    Only succeeds if the execution is still in a claimable state (pending).
+    Sets claimed_by, claim_source, claimed_at, and transitions status to queued.
+    Returns the updated row dict if claimed, or None if already claimed/terminal.
+    """
+    normalized_claimer = str(claimed_by or "unknown").strip()[:128]
+    normalized_source = str(claim_source or "nats").strip()[:32]
+    with db_session() as session:
+        row: TriggerExecutionRow | None = (
+            session.query(TriggerExecutionRow)
+            .filter(TriggerExecutionRow.id == int(execution_id))
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        if row.status not in _CLAIMABLE_STATES:
+            return None
+
+        row.status = "queued"
+        row.claimed_by = normalized_claimer
+        row.claim_source = normalized_source
+        row.claimed_at = datetime.now(UTC)
+        row.updated_at = datetime.now(UTC)
+        session.flush()
+        return row.to_dict()
+
+
+def list_stale_trigger_executions(
+    stale_queue_minutes: int = _STALE_QUEUED_MINUTES,
+    stale_processing_minutes: int = _STALE_PROCESSING_MINUTES,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """List trigger executions stuck in queued or processing beyond threshold.
+
+    Used by the operator timer fallback to recover orphaned executions.
+    """
+    now = datetime.now(UTC)
+    with db_session() as session:
+        rows = (
+            session.query(TriggerExecutionRow)
+            .filter(
+                TriggerExecutionRow.status.in_(["queued", "processing"]),
+                TriggerExecutionRow.updated_at < now - timedelta(minutes=stale_queue_minutes),
+            )
+            .order_by(TriggerExecutionRow.updated_at.asc())
+            .limit(max(1, int(limit)))
+            .all()
+        )
+        return [row.to_dict() for row in rows]
 
 
 def list_trigger_executions(

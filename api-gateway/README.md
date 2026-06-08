@@ -107,7 +107,7 @@ Admin user CRUD now provisions dedicated tenant namespaces for non-admin users.
 
 | Category | Endpoints |
 |----------|-----------|
-| Health | `GET /api/v1/health`, `GET /api/v1/ready` |
+| Health | `GET /health`, `GET /api/v1/health`, `GET /api/v1/ready` |
 | Agents | `GET /api/v1/agents`, `POST /api/v1/agents`, `GET /api/v1/agents/{name}`, `PATCH /api/v1/agents/{name}`, `DELETE /api/v1/agents/{name}` |
 | Workflows | `GET /api/v1/workflows`, `POST /api/v1/workflows`, `GET /api/v1/workflows/{name}`, `PATCH /api/v1/workflows/{name}`, `DELETE /api/v1/workflows/{name}` |
 | Invoke | `POST /api/v1/agents/{name}/invoke`, `POST /api/v1/agents/{name}/invoke/stream` |
@@ -117,6 +117,7 @@ Admin user CRUD now provisions dedicated tenant namespaces for non-admin users.
 | Admin | `/api/v1/admin/users`, `/api/v1/admin/audit`, `/api/v1/usage/*` |
 | Artifacts | `GET /api/v1/artifacts/{agent}/list`, `GET /api/v1/artifacts/{agent}/download`, `GET /api/v1/artifacts/{agent}/zip` |
 | Traces | `POST /api/v1/traces/batch`, `GET /api/v1/traces/executions`, `GET /api/v1/traces/executions/{id}`, `GET /api/v1/traces/executions/{id}/events`, `GET /api/v1/traces/steps/{id}`, `POST /api/v1/traces/executions/{id}/export/json`, `GET /api/v1/traces/executions/{id}/export/html`, `GET /api/v1/traces/{id}/timeline`, `GET /api/v1/traces/runtime-events` |
+| Incidents | `GET /api/v1/incidents`, `POST /api/v1/incidents`, `PUT /api/v1/incidents/{name}` |
 | Activity | `GET /api/v1/activity/stream` — Live SSE feed of step-level status transitions |
 
 ## Authentication

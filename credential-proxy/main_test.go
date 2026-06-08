@@ -10,6 +10,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -221,6 +222,49 @@ func TestEndToEndBearerProxy(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestProxyPreservesConcreteTargetPath(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/mcp" {
+			t.Fatalf("expected upstream path /mcp, got %q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer backend.Close()
+
+	target, err := url.Parse(backend.URL + "/mcp")
+	if err != nil {
+		t.Fatalf("parse target: %v", err)
+	}
+
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalPath := req.URL.Path
+		originalDirector(req)
+		if target.Path != "" && target.Path != "/" && strings.HasPrefix(originalPath, "/mcp") {
+			suffix := strings.TrimPrefix(originalPath, "/mcp")
+			req.URL.Path = joinURLPath(target.Path, suffix)
+			req.URL.RawPath = target.EscapedPath()
+		}
+		req.Host = target.Host
+	}
+
+	server := httptest.NewServer(proxy)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/mcp")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 }
 

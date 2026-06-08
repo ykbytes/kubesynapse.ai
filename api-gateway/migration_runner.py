@@ -14,7 +14,7 @@ import os
 logger = logging.getLogger("api-gateway.migrations")
 
 
-def run_migrations() -> None:
+def run_migrations(base=None, engine=None) -> None:
     """Apply all pending Alembic migrations to the gateway database.
 
     This replaces the old ``Base.metadata.create_all(bind=ENGINE)`` pattern.
@@ -23,7 +23,16 @@ def run_migrations() -> None:
 
     In SQLite / :memory: environments where Alembic cannot connect,
     falls back to ``create_all()``.
+
+    ``base`` and ``engine`` should be provided by the caller to ensure tables
+    are created on the correct database connection.  When omitted they default
+    to importing from ``auth_store`` (production path).
     """
+    if base is None or engine is None:
+        from auth_store import Base as _base, ENGINE as _engine
+        base = _base
+        engine = _engine
+
     db_url = os.getenv("DATABASE_URL", "").strip()
 
     # --- In-memory SQLite: use create_all (no persistent migrations) ---
@@ -31,8 +40,7 @@ def run_migrations() -> None:
         db_url.startswith("sqlite") and ":memory:" in db_url
     ):
         logger.info("SQLite in-memory detected — using create_all() fallback.")
-        from auth_store import Base, ENGINE
-        Base.metadata.create_all(bind=ENGINE)
+        base.metadata.create_all(bind=engine)
         return
 
     # --- SQLite file: run Alembic (supports persistent migrations) ---
@@ -51,8 +59,7 @@ def run_migrations() -> None:
             return
         except Exception:
             logger.warning("Alembic failed on SQLite — falling back to create_all().", exc_info=True)
-            from auth_store import Base, ENGINE
-            Base.metadata.create_all(bind=ENGINE)
+            base.metadata.create_all(bind=engine)
             return
 
     # --- PostgreSQL: run Alembic (production path) ---
@@ -72,9 +79,7 @@ def run_migrations() -> None:
             "Alembic not installed — falling back to create_all(). "
             "Install with: pip install alembic"
         )
-        from auth_store import Base, ENGINE
-        Base.metadata.create_all(bind=ENGINE)
+        base.metadata.create_all(bind=engine)
     except Exception:
         logger.exception("Alembic migration failed — falling back to create_all().")
-        from auth_store import Base, ENGINE
-        Base.metadata.create_all(bind=ENGINE)
+        base.metadata.create_all(bind=engine)

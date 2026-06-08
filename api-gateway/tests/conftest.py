@@ -55,12 +55,18 @@ _k8s_client.V1LimitRange = MagicMock
 _k8s_client.V1LimitRangeItem = MagicMock
 sys.modules.setdefault("kubernetes.client", _k8s_client)
 
+# kubernetes.client.rest sub-package (needed by some client internals)
+_k8s_client_rest = types.ModuleType("kubernetes.client.rest")
+_k8s_client_rest.ApiException = type("ApiException", (Exception,), {})
+_k8s_client_rest.ApiValueError = type("ApiValueError", (ValueError,), {})
+sys.modules.setdefault("kubernetes.client.rest", _k8s_client_rest)
+
 # Mock passlib before auth_store imports it
 passlib_module = types.ModuleType("passlib")
 passlib_context = types.ModuleType("passlib.context")
 passlib_context.CryptContext = lambda *args, **kwargs: types.SimpleNamespace(
     hash=lambda x: x,
-    verify=lambda x, y: True,
+    verify=lambda x, y: x == y,
     verify_and_update=lambda x, y: (True, None),
 )
 passlib_module.context = passlib_context
@@ -117,11 +123,21 @@ with (
 
 @pytest.fixture
 def client():
-    """Return a FastAPI TestClient for the api-gateway app."""
+    """Return a TestClient for the api-gateway app (httpx 0.28 compat)."""
+    import httpx
     from fastapi.testclient import TestClient
 
-    app = api_gateway_main.app
-    return TestClient(app)
+    # httpx 0.28 dropped `app` kwarg from sync Client.__init__.
+    # Starlette's TestClient still passes it, so we intercept and drop it.
+    original_init = httpx.Client.__init__
+
+    def _patched_init(self, *args: object, **kwargs: object) -> None:
+        kwargs.pop("app", None)
+        original_init(self, *args, **kwargs)
+
+    with patch.object(httpx.Client, "__init__", _patched_init):
+        app = api_gateway_main.app
+        yield TestClient(app)
 
 
 @pytest.fixture

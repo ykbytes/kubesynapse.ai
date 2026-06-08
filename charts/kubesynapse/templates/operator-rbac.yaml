@@ -34,10 +34,10 @@ rules:
     resources: [observationtargets/status, observationpolicies/status, observationreports/status, connectorplugins/status, mcpconnections/status]
     verbs: [get, patch, update]
   - apiGroups: ["kubesynapse.ai"]
-    resources: [webhookreceivers, workflowtriggers]
+    resources: [webhookreceivers, workflowtriggers, agentincidents]
     verbs: [create, delete, get, list, patch, update, watch]
   - apiGroups: ["kubesynapse.ai"]
-    resources: [webhookreceivers/status, workflowtriggers/status]
+    resources: [webhookreceivers/status, workflowtriggers/status, agentincidents/status]
     verbs: [get, patch, update]
   # --- API extensions (read-only) ---
   - apiGroups: ["apiextensions.k8s.io"]

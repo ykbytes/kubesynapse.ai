@@ -485,13 +485,12 @@ def enqueue_workflow_job(
             )
             return live_run_id
 
+    # Create the new worker job FIRST, then cancel any stale job.
+    # Order matters: if the operator crashes after create but before cancel,
+    # both jobs exist transiently but the worker lease mechanism prevents
+    # duplicate execution (the new job acquires the lease). Creating first
+    # avoids losing the workflow job on crash mid-enqueue.
     preserve_generation_state = workflow_status_matches_generation(workflow_status, generation)
-
-    # Cancel any stale worker job from a previous run before creating a new one.
-    previous_job = workflow_status.get("workerJob", {}) or {}
-    previous_job_name = str(previous_job.get("name") or "")
-    if previous_job_name:
-        cancel_worker_job(previous_job_name, str(previous_job.get("namespace") or OPERATOR_NAMESPACE))
 
     resolved_run_id = resolve_workflow_run_id(
         namespace,
@@ -528,6 +527,7 @@ def enqueue_workflow_job(
     except Exception:
         logger.debug("Could not resolve tenant for namespace '%s'; using default concurrency.", namespace)
 
+    # Step 1: Create new worker job
     job_name = enqueue_worker_job(
         "workflow",
         namespace,
@@ -540,6 +540,12 @@ def enqueue_workflow_job(
         max_parallel_steps=max_parallel_steps,
         resource_uid=owner_uid,
     )
+
+    # Step 2: Cancel stale worker job from previous run (if any).
+    previous_job = workflow_status.get("workerJob", {}) or {}
+    previous_job_name = str(previous_job.get("name") or "")
+    if previous_job_name:
+        cancel_worker_job(previous_job_name, str(previous_job.get("namespace") or OPERATOR_NAMESPACE))
     existing_summary = workflow_status.get("summary", {}) or {}
     preserved_summary = clear_summary_lifecycle_fields(existing_summary) if preserve_generation_state else {}
     summary: dict[str, Any] = {

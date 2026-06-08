@@ -32,8 +32,13 @@ def _load_keys() -> dict[str, JwtKey]:
     """Load active signing keys from environment supporting rotation."""
     keys: dict[str, JwtKey] = {}
 
-    # Primary secret
-    primary = os.getenv("JWT_SECRET", "").strip() or os.getenv("API_GATEWAY_SHARED_TOKEN", "").strip()
+    # JWT signing must stay independent from the shared bearer token.
+    primary = os.getenv("JWT_SECRET", "").strip()
+    if not primary and os.getenv("API_GATEWAY_SHARED_TOKEN", "").strip():
+        _logger.warning(
+            "JWT_SECRET is not configured; API_GATEWAY_SHARED_TOKEN is no longer used as a JWT signing fallback. "
+            "Set JWT_SECRET to a dedicated strong random value."
+        )
     if primary:
         keys["primary"] = JwtKey("primary", primary)
 
@@ -65,10 +70,10 @@ def _load_keys() -> dict[str, JwtKey]:
         _logger.critical(
             "SECURITY: JWT_SECRET is not configured — using a random ephemeral secret. "
             "Tokens will NOT survive restarts and all sessions will be lost. "
-            "Set JWT_SECRET or API_GATEWAY_SHARED_TOKEN before deploying to production."
+            "Set JWT_SECRET before deploying browser-session auth to production."
         )
         if os.getenv("REQUIRE_JWT_SECRET", "").strip().lower() in {"1", "true", "yes"}:
-            raise SystemExit("FATAL: JWT_SECRET or API_GATEWAY_SHARED_TOKEN must be set when REQUIRE_JWT_SECRET is enabled.")
+            raise SystemExit("FATAL: JWT_SECRET must be set when REQUIRE_JWT_SECRET is enabled.")
 
     return keys
 
@@ -104,7 +109,7 @@ def utc_now() -> datetime:
 
 
 def jwt_secret_configured() -> bool:
-    return bool(os.getenv("JWT_SECRET", "").strip() or os.getenv("API_GATEWAY_SHARED_TOKEN", "").strip())
+    return bool(os.getenv("JWT_SECRET", "").strip())
 
 
 def access_token_expiry() -> datetime:

@@ -5,8 +5,8 @@ Kubernetes workloads. Built with [Kopf](https://kopf.dev/) and Python 3.11+.
 
 ## Purpose
 
-The operator watches `AIAgent`, `AgentWorkflow`, approval, and observability-related CRDs and
-materializes them into StatefulSets, Services, PVCs, Jobs, ConfigMaps, and related policy objects.
+The operator watches `AIAgent`, `AgentWorkflow`, `AgentIncident`, approval, and observability-related CRDs
+and materializes them into StatefulSets, Services, PVCs, Jobs, ConfigMaps, and related policy objects.
 It is the control-plane engine that turns declarative agent specs into live workloads.
 
 ## Supported Runtimes
@@ -21,7 +21,7 @@ The operator currently reconciles three in-tree runtime kinds:
 
 ```mermaid
 flowchart LR
-    CRD[12 CRDs] --> CTRL[Controllers]
+    CRD[13 CRDs] --> CTRL[Controllers]
     CTRL --> BUILD[Manifest Builders]
     BUILD --> K8S[Kubernetes API client]
     CTRL --> STATE[State store]
@@ -32,7 +32,7 @@ flowchart LR
     WORKER --> CB[Circuit breaker]
 ```
 
-- **Controllers** — Kopf handlers for agent, workflow, approval, and observability reconciliation.
+- **Controllers** — Kopf handlers for agent, workflow, incident, approval, and observability reconciliation.
   Enqueue events, manage finalizers, and drive status updates.
 - **Manifest Builders** — Generate K8s objects (StatefulSet, Service, PVC, Job) from
   CRD spec snippets with sane defaults and label inheritance.
@@ -124,6 +124,16 @@ Key regression tests include:
   into valid final payloads.
 - **Trace client batching** — Validates that traces are flushed correctly at
   batch size and on graceful shutdown.
+
+## Incident Lifecycle Controller
+
+The operator includes an incident lifecycle controller (`controllers/incident_controller.py`) that
+reconciles `AgentIncident` CRDs against the gateway's incident state. It:
+
+- Syncs incident status transitions (firing → acknowledged → resolved → closed) to the gateway via `PUT /api/v1/incidents/{name}`
+- Evaluates escalation timers and escalates severity when `escalationTimeoutMinutes` is exceeded
+- Triggers `AgentWorkflow` remediation runs when `spec.workflowRef` is set
+- Watches for signal-watch anomalies and can proactively create incidents
 
 ## Deployment
 

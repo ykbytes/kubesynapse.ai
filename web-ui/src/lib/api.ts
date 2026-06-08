@@ -92,10 +92,12 @@ import type {
   WorkflowSummary,
   WorkflowUpdatePayload,
   AgentMcpConnection,
+  WebhookProvider,
   WebhookReceiverInfo,
   WebhookInvocationInfo,
   WorkflowTriggerInfo,
   TriggerExecutionInfo,
+  IncidentInfo,
 } from "../types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() ?? "";
@@ -4753,6 +4755,11 @@ function parseWebhookReceiverPayload(payload: unknown, label = "WebhookReceiverI
     rate_limit: readOptionalNumber(record, "rate_limit", label) ?? 0,
     max_payload_bytes: readOptionalNumber(record, "max_payload_bytes", label) ?? 0,
     enabled: readBoolean(record, "enabled", label, true),
+    provider: (readOptionalString(record, "provider", label) ?? "generic") as WebhookProvider,
+    api_key_enabled: readBoolean(record, "api_key_enabled", label, false),
+    failure_count: readOptionalNumber(record, "failure_count", label) ?? 0,
+    last_failure: readOptionalString(record, "last_failure", label),
+    active_keys: readOptionalNumber(record, "active_keys", label) ?? 1,
     created_at: readOptionalString(record, "created_at", label) ?? "",
     updated_at: readOptionalString(record, "updated_at", label) ?? "",
   };
@@ -4770,6 +4777,8 @@ function parseWebhookInvocationPayload(payload: unknown, label = "WebhookInvocat
     signature_verified: readBoolean(record, "signature_verified", label, false),
     status: readString(record, "status", label, ""),
     matched_triggers: readOptionalNumber(record, "matched_triggers", label) ?? 0,
+    provider: readOptionalString(record, "provider", label) ?? undefined,
+    event_type: readOptionalString(record, "event_type", label) ?? undefined,
   };
 }
 
@@ -4793,6 +4802,8 @@ export interface CreateWebhookPayload {
   rate_limit?: number;
   max_payload_bytes?: number;
   enabled?: boolean;
+  provider?: WebhookProvider;
+  api_key_enabled?: boolean;
 }
 
 export interface UpdateWebhookPayload {
@@ -4801,6 +4812,8 @@ export interface UpdateWebhookPayload {
   rate_limit?: number;
   max_payload_bytes?: number;
   enabled?: boolean;
+  provider?: WebhookProvider;
+  api_key_enabled?: boolean;
 }
 
 export async function createWebhook(token: string, namespace: string, payload: CreateWebhookPayload): Promise<WebhookReceiverInfo> {
@@ -4854,12 +4867,16 @@ function parseWorkflowTriggerPayload(payload: unknown, label = "WorkflowTriggerI
     source_ref: readString(record, "source_ref", label),
     event_filter: readRecord(record, "event_filter", label, {}),
     workflow_ref: readRecord(record, "workflow_ref", label, {}) as Record<string, string>,
+    agent_ref: readRecord(record, "agent_ref", label, {}) as Record<string, string>,
+    target_kind: readOptionalString(record, "target_kind", label) ?? "workflow",
     payload_mapping: readRecord(record, "payload_mapping", label, {}) as Record<string, string>,
     max_retries: readOptionalNumber(record, "max_retries", label) ?? 3,
     backoff_seconds: readOptionalNumber(record, "backoff_seconds", label) ?? 60,
     enabled: readBoolean(record, "enabled", label, true),
     execution_count: readOptionalNumber(record, "execution_count", label) ?? 0,
+    dead_letter_count: readOptionalNumber(record, "dead_letter_count", label) ?? 0,
     last_triggered: readOptionalString(record, "last_triggered", label),
+    notifications: readRecord(record, "notifications", label, {}) as { on_success?: string[]; on_failure?: string[] },
   };
 }
 
@@ -4874,6 +4891,10 @@ function parseTriggerExecutionPayload(payload: unknown, label = "TriggerExecutio
     status: readString(record, "status", label, ""),
     workflow_run_id: readOptionalString(record, "workflow_run_id", label),
     error_message: readOptionalString(record, "error_message", label),
+    attempt_count: readOptionalNumber(record, "attempt_count", label) ?? 0,
+    target_kind: readOptionalString(record, "target_kind", label) ?? undefined,
+    agent_name: readOptionalString(record, "agent_name", label) ?? undefined,
+    agent_namespace: readOptionalString(record, "agent_namespace", label) ?? undefined,
   };
 }
 
@@ -4896,10 +4917,13 @@ export interface CreateTriggerPayload {
   source_ref: string;
   event_filter?: Record<string, unknown>;
   workflow_ref?: Record<string, string>;
+  agent_ref?: Record<string, string>;
+  target_kind?: string;
   payload_mapping?: Record<string, string>;
   max_retries?: number;
   backoff_seconds?: number;
   enabled?: boolean;
+  notifications?: { on_success?: string[]; on_failure?: string[] };
 }
 
 export interface UpdateTriggerPayload {
@@ -4907,10 +4931,13 @@ export interface UpdateTriggerPayload {
   source_ref?: string;
   event_filter?: Record<string, unknown>;
   workflow_ref?: Record<string, string>;
+  agent_ref?: Record<string, string>;
+  target_kind?: string;
   payload_mapping?: Record<string, string>;
   max_retries?: number;
   backoff_seconds?: number;
   enabled?: boolean;
+  notifications?: { on_success?: string[]; on_failure?: string[] };
 }
 
 export async function createTrigger(token: string, namespace: string, payload: CreateTriggerPayload): Promise<WorkflowTriggerInfo> {
@@ -4951,3 +4978,140 @@ export async function fetchTriggerHistory(token: string, namespace: string, name
     return payload.map((item, index) => parseTriggerExecutionPayload(item, `TriggerExecutionInfo[${index}]`));
   });
 }
+
+// ── Webhook Secret Generation ─────────────────────────────────────────────
+
+export async function generateWebhookSecret(token: string, namespace: string, name: string): Promise<{ secret: string; key_id: string }> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/v1/webhooks/${encodeURIComponent(name)}/generate-secret`, namespace),
+    token,
+    { method: "POST" },
+  );
+  return parseJsonResponse(response, (p) => {
+    const record = expectRecord(p, "SecretGeneration");
+    return {
+      secret: readString(record, "secret", "SecretGeneration"),
+      key_id: readString(record, "key_id", "SecretGeneration", "primary"),
+    };
+  });
+}
+
+// ── Dead-Letter Queue ─────────────────────────────────────────────────────
+
+export async function fetchDeadLetterExecutions(token: string, namespace: string, name: string, limit = 50): Promise<TriggerExecutionInfo[]> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/v1/webhooks/${encodeURIComponent(name)}/dead-letter`, namespace) + `&limit=${limit}`,
+    token,
+  );
+  return parseJsonResponse(response, (payload) => {
+    if (!Array.isArray(payload)) return [];
+    return payload.map((item, index) => parseTriggerExecutionPayload(item, `TriggerExecutionInfo[${index}]`));
+  });
+}
+
+export async function replayDeadLetter(token: string, namespace: string, executionId: number): Promise<void> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/v1/webhooks/dead-letter/${executionId}/replay`, namespace),
+    token,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, "Failed to replay execution", text);
+  }
+}
+
+// ── Incident API ──────────────────────────────────────────────────────────
+
+function parseIncidentPayload(payload: unknown, label = "IncidentInfo"): IncidentInfo {
+  const record = expectRecord(payload, label);
+  return {
+    id: readNumber(record, "id", label),
+    namespace: readOptionalString(record, "namespace", label) ?? "default",
+    name: readString(record, "name", label),
+    title: readString(record, "title", label),
+    description: readOptionalString(record, "description", label) ?? "",
+    severity: (readOptionalString(record, "severity", label) ?? "warning") as IncidentInfo["severity"],
+    source: (readOptionalString(record, "source", label) ?? "manual") as IncidentInfo["source"],
+    status: (readOptionalString(record, "status", label) ?? "firing") as IncidentInfo["status"],
+    labels: (record.labels as Record<string, string>) ?? {},
+    annotations: (record.annotations as Record<string, string>) ?? {},
+    assigned_agent: readOptionalString(record, "assigned_agent", label) ?? null,
+    escalation_timeout_minutes: readOptionalNumber(record, "escalation_timeout_minutes", label) ?? 15,
+    escalated: readOptionalBoolean(record, "escalated", label) ?? false,
+    auto_acknowledge: readOptionalBoolean(record, "auto_acknowledge", label) ?? true,
+    acknowledged_at: readOptionalString(record, "acknowledged_at", label) ?? null,
+    resolved_at: readOptionalString(record, "resolved_at", label) ?? null,
+    closed_at: readOptionalString(record, "closed_at", label) ?? null,
+    escalated_at: readOptionalString(record, "escalated_at", label) ?? null,
+    alertmanager_fingerprint: readOptionalString(record, "alertmanager_fingerprint", label) ?? null,
+    workflow_ref_name: readOptionalString(record, "workflow_ref_name", label) ?? null,
+    workflow_ref_namespace: readOptionalString(record, "workflow_ref_namespace", label) ?? null,
+    workflow_run_id: readOptionalString(record, "workflow_run_id", label) ?? null,
+    timeline: Array.isArray(record.timeline) ? record.timeline.map((t: unknown, i: number) => {
+      const te = expectRecord(t, `timeline[${i}]`);
+      return { timestamp: readString(te, "timestamp", `timeline[${i}]`), event: readString(te, "event", `timeline[${i}]`), message: readString(te, "message", `timeline[${i}]`) };
+    }) : [],
+    created_at: readString(record, "created_at", label),
+    updated_at: readString(record, "updated_at", label),
+  };
+}
+
+export async function listIncidents(token: string, namespace: string, params?: { status?: string; severity?: string; limit?: number; offset?: number }): Promise<{ incidents: IncidentInfo[]; total: number }> {
+  let url = buildUrl("/api/v1/incidents", namespace);
+  if (params?.status) url += `&status=${encodeURIComponent(params.status)}`;
+  if (params?.severity) url += `&severity=${encodeURIComponent(params.severity)}`;
+  if (params?.limit) url += `&limit=${params.limit}`;
+  if (params?.offset) url += `&offset=${params.offset}`;
+  const response = await fetchAuthenticated(url, token);
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "listIncidents");
+    const items = record.incidents;
+    return {
+      incidents: Array.isArray(items) ? items.map((item: unknown, i: number) => parseIncidentPayload(item, `IncidentInfo[${i}]`)) : [],
+      total: readOptionalNumber(record, "total", "listIncidents") ?? 0,
+    };
+  });
+}
+
+export async function getIncident(token: string, namespace: string, name: string): Promise<IncidentInfo> {
+  const response = await fetchAuthenticated(buildUrl(`/api/v1/incidents/${encodeURIComponent(name)}`, namespace), token);
+  return parseJsonResponse(response, (p) => parseIncidentPayload(p, "IncidentInfo"));
+}
+
+export async function createIncident(token: string, namespace: string, body: Partial<IncidentInfo> & { name: string; title: string }): Promise<IncidentInfo> {
+  const response = await fetchAuthenticated(buildUrl("/api/v1/incidents", namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(response, (p) => parseIncidentPayload(p, "IncidentInfo"));
+}
+
+export async function updateIncidentStatus(token: string, namespace: string, name: string, body: { status?: string; message?: string; workflow_run_id?: string }): Promise<IncidentInfo> {
+  const response = await fetchAuthenticated(buildUrl(`/api/v1/incidents/${encodeURIComponent(name)}`, namespace), token, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parseJsonResponse(response, (p) => parseIncidentPayload(p, "IncidentInfo"));
+}
+
+export async function escalateIncident(token: string, namespace: string, name: string, message?: string): Promise<IncidentInfo> {
+  const response = await fetchAuthenticated(buildUrl(`/api/v1/incidents/${encodeURIComponent(name)}/escalate`, namespace), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: message ?? "Manual escalation" }),
+  });
+  return parseJsonResponse(response, (p) => parseIncidentPayload(p, "IncidentInfo"));
+}
+
+export async function getIncidentTimeline(token: string, namespace: string, name: string): Promise<{ timeline: Array<{ timestamp: string; event: string; message: string }> }> {
+  const response = await fetchAuthenticated(buildUrl(`/api/v1/incidents/${encodeURIComponent(name)}/timeline`, namespace), token);
+  return parseJsonResponse(response, (p) => {
+    const record = expectRecord(p, "IncidentTimeline");
+    return { timeline: Array.isArray(record.timeline) ? record.timeline : [] };
+  });
+}
+
+// ── Agent API ─────────────────────────────────────────────────────────────

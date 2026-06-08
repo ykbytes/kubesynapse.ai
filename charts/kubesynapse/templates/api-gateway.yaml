@@ -190,7 +190,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
                   key: LITELLM_MASTER_KEY
-                  optional: true
+                  optional: false
             - name: LLM_SECRET_NAME
               value: {{ include "kubesynapse.fullname" . }}-llm-api-keys
             - name: HELM_RELEASE_NAME

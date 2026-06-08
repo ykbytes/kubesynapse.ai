@@ -9,6 +9,7 @@ flowchart TB
     EXT["🔗 External Apps & Webhooks"]:::client
     GH["🐙 Git Repositories"]:::external
     IDP["🔐 Identity Providers"]:::external
+    AM["🚨 Alertmanager"]:::external
 
     %% ═══════════════════════════════════════════════════
     %% CONTROL PLANE
@@ -18,7 +19,7 @@ flowchart TB
     Trace ingestion · Observatory APIs"):::gateway
 
     K8S{{"☸️ Kubernetes API
-    12 CRDs"}}:::k8s
+    13 CRDs"}}:::k8s
 
     OP("🔧 Operator
     Kopf reconcile loop
@@ -91,6 +92,7 @@ flowchart TB
     UI -->|"HTTPS /api/*"| GW
     CLI -->|"REST + SSE"| GW
     EXT -->|"Webhooks · A2A"| GW
+    AM -->|"POST /api/v1/webhooks/alertmanager"| GW
 
     GW -->|"CRUD (CustomObjectsApi)"| K8S
     GW -->|"SQLAlchemy — auth, memory, traces"| PG

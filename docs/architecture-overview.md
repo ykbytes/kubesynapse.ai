@@ -8,7 +8,7 @@ For the canonical diagram source, see [`docs/kubesynapse-architecture.mmd`](kube
 
 KubeSynapse is a Kubernetes-native AI agent platform built around these ideas:
 
-- represent agents, workflows, policies, approvals, tenants, and observability resources as Kubernetes custom resources
+- represent agents, workflows, policies, approvals, tenants, incidents, and observability resources as Kubernetes custom resources
 - reconcile desired state with a Python operator and background worker Jobs
 - run each agent as an isolated singleton StatefulSet backed by one of the supported runtime adapters
 - route model calls through LiteLLM and optional retrieval through Qdrant
@@ -31,7 +31,7 @@ flowchart TB
     FastAPI · Auth · CRUD · Invoke · SSE"):::gateway
 
     K8S{{"☸️ Kubernetes API
-    12 CRDs"}}:::k8s
+    13 CRDs"}}:::k8s
 
     OP("🔧 Operator
     Kopf reconcile loop
@@ -133,7 +133,7 @@ flowchart TB
 ### What the diagram shows
 
 - **Clients** (blue) — Web UI, CLI, and external apps hit the gateway via HTTPS; Git repositories and identity providers are external systems used by the runtime and gateway
-- **Control Plane** (blue/purple/amber) — The gateway handles auth, CRUD, invoke routing, durable memory, traces, and provider/admin APIs; the operator watches 12 CRDs and reconciles them into real Kubernetes workloads
+- **Control Plane** (blue/purple/amber) — The gateway handles auth, CRUD, invoke routing, durable memory, traces, and provider/admin APIs; the operator watches 13 CRDs and reconciles them into real Kubernetes workloads
 - **Security** (green) — The hardened baseline includes immutable runtime config, credential isolation, network policy, and audit propagation into runtime pods
 - **Execution Plane** (green/pink/teal) — OpenCode runs as the production runtime in isolated StatefulSets; workflow Jobs persist detailed evidence as artifacts and logs; MCP access can come from 10 bundled tool sidecars, the separate collector sidecar, or shared hub services
 - **Shared Services** (gray) — The primary model-call path is runtime -> LiteLLM -> provider; PostgreSQL stores auth, durable memory, and traces; Redis backs gateway and LiteLLM caching; Qdrant supports optional semantic retrieval; NATS remains a configured async extension point
@@ -143,7 +143,7 @@ flowchart TB
 
 ### Kubernetes API and CRDs
 
-The Kubernetes API remains the control-plane source of truth. The chart installs 12 CRDs. Core resources include:
+The Kubernetes API remains the control-plane source of truth. The chart installs 13 CRDs. Core resources include:
 
 | CRD | Scope | Purpose |
 | --- | --- | --- |
@@ -186,6 +186,7 @@ Current responsibilities include:
 - namespace-aware authorization
 - CRUD endpoints for agents, workflows, policies, approvals, MCP connections, and observability resources
 - invoke routing to runtime sandboxes
+- webhook dispatch with claim-based dedup (atomic compare-and-set on trigger_executions)
 - workflow trigger endpoints
 - runtime metadata and validation endpoints used by the UI
 - managed sign-in and local-auth flows in current deployments
@@ -236,7 +237,8 @@ The Run Intelligence Layer extends the Execution Observatory with semantic event
 4. **Storage**: The API gateway stores execution detail in `execution_traces` and semantic events in `runtime_run_events`
 5. **Detection**: The signal watch controller runs SQL checks every 60 seconds
 6. **Reporting**: Anomalies create `ObservationReport` CRs with severity classification
-7. **Analysis**: System agents can be invoked for AI-powered explanations
+7. **Incident management**: Alertmanager webhooks are received at `POST /api/v1/webhooks/alertmanager`; the gateway creates or upserts `AgentIncident` CRs. The operator drives the incident lifecycle (acknowledge, escalate, resolve, trigger workflows).
+8. **Analysis**: System agents can be invoked for AI-powered explanations
 
 ### System Agents
 
@@ -259,6 +261,7 @@ The default chart values currently wire these core shared services and extension
 - NATS as a configured async extension point
 - the MCP hub namespace and selected shared MCP services
 - the collector DaemonSet path when enabled
+- the Alertmanager webhook receiver at `POST /api/v1/webhooks/alertmanager`, which creates and resolves `AgentIncident` CRs
 
 ## 7. MCP Architecture
 
@@ -277,10 +280,12 @@ The `AIAgent` contract now includes connection-oriented MCP metadata, and the UI
 `AgentWorkflow` still defines DAG-style execution, but the current operational model is:
 
 1. the workflow exists as a CRD object and user-facing definition
-2. the operator or gateway triggers execution
+2. the operator or gateway triggers execution (for webhooks, the gateway creates a trigger_execution record and the operator claims it atomically before dispatching)
 3. a worker Job performs the orchestration work
 4. step-level detail is persisted as artifacts and logs
 5. summary state is projected back into workflow status and the UI
+
+For webhook-triggered workflows, the dispatch uses a claim-based model: the operator claims a pending execution record via the gateway's HTTP API before dispatching, ensuring idempotent handling even with multiple operator replicas.
 
 ## 9. Observability Architecture
 
@@ -326,4 +331,5 @@ If you need the shortest possible architectural summary, these are the points th
 5. Observability is implemented through CRDs, controller logic, UI views, collector support, and trace-backed run intelligence.
 6. The Run Intelligence Layer provides semantic event indexing, deterministic anomaly detection, and AI-powered analysis across all runtimes.
 7. Explicit A2A delegation exists today, while NATS remains an extension point for deeper async coordination later.
-8. Agent runtimes are hardened by default with plugin isolation, immutable config, traffic enforcement, and model governance.
+8. Incident management is built in: Alertmanager webhooks create AgentIncident CRs; the operator drives escalation, remediation workflows, and lifecycle transitions.
+9. Agent runtimes are hardened by default with plugin isolation, immutable config, traffic enforcement, and model governance.

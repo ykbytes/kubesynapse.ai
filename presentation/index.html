@@ -522,7 +522,7 @@ found 3 critical vulnerabilities.
     <div class="arch-row" style="border-color:rgba(183,148,244,0.3);background:rgba(183,148,244,0.03);">
       <span class="arch-label" style="color:var(--c-violet);">Control</span>
       <div class="arch-items">
-        <span class="arch-chip">Kubernetes API</span><span class="arch-chip" style="color:var(--c-violet);">12 CRDs</span><span class="arch-chip" style="color:var(--c-violet);">Operator (Kopf)</span>
+        <span class="arch-chip">Kubernetes API</span><span class="arch-chip" style="color:var(--c-violet);">13 CRDs</span><span class="arch-chip" style="color:var(--c-violet);">Operator (Kopf)</span>
       </div>
     </div>
     <div class="arch-row" style="border-color:rgba(104,211,145,0.3);background:rgba(104,211,145,0.03);">
@@ -541,10 +541,10 @@ found 3 critical vulnerabilities.
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════
-     SLIDE 5 — 12 CRDs
+     SLIDE 5 — 13 CRDs
      ══════════════════════════════════════════════════════════════ -->
 <div class="slide" data-slide="4">
-  <h2>The <span class="grad">12 CRDs</span></h2>
+  <h2>The <span class="grad">13 CRDs</span></h2>
   <div class="subtitle">Kubernetes resources that define the entire platform state</div>
 
   <div class="crd-grid mt-30">
@@ -560,12 +560,14 @@ found 3 critical vulnerabilities.
     <div class="crd-item" style="border-top-color:var(--c-sky);"><div class="crd-name">ObservationTarget</div><div class="crd-desc">Observed resource</div></div>
     <div class="crd-item" style="border-top-color:var(--c-sky);"><div class="crd-name">ObservationReport</div><div class="crd-desc">System analysis</div></div>
     <div class="crd-item" style="border-top-color:var(--c-sky);"><div class="crd-name">ObservationPolicy</div><div class="crd-desc">Evaluation rules</div></div>
+    <div class="crd-item" style="border-top-color:var(--c-amber);"><div class="crd-name">AgentIncident</div><div class="crd-desc">Alert lifecycle & webhooks</div></div>
   </div>
 
   <div style="display:flex;gap:14px;margin-top:24px;justify-content:center;">
     <span class="badge be">Workload</span>
     <span class="badge bv">Integration</span>
     <span class="badge bs">Observability</span>
+    <span class="badge" style="background:rgba(251,191,36,0.08);color:var(--c-amber);border:1px solid rgba(251,191,36,0.25);font-size:12px;padding:4px 14px;border-radius:4px;font-weight:600;">Incidents</span>
   </div>
 </div>
 

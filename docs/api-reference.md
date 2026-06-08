@@ -15,15 +15,19 @@
 - [Agents](#agents)
 - [Chat Sessions](#chat-sessions)
 - [Workflows](#workflows)
+- [Webhooks & Triggers](#webhooks--triggers)
 - [MCP Connections](#mcp-connections)
 - [Policies](#policies)
 - [Approvals](#approvals)
 - [Tenants](#tenants)
 - [A2A Protocol](#a2a-protocol)
 - [Observability](#observability)
+- [Incidents](#incidents)
 - [Traces](#traces)
 - [LLM and Providers](#llm-and-providers)
 - [Admin and Usage](#admin-and-usage)
+- [Intelligence & Collectors](#intelligence--collectors)
+- [Skills Catalog](#skills-catalog)
 - [Error Responses](#error-responses)
 - [Rate Limiting](#rate-limiting)
 
@@ -122,9 +126,37 @@ Return the current user's profile.
 
 Change the current user's password.
 
+#### `GET /api/v1/auth/oidc/start/{provider_id}`
+
+Start an OIDC login flow (PKCE) for the given provider.
+
+#### `GET /api/v1/auth/oidc/callback/{provider_id}`
+
+OIDC callback endpoint — handles the authorization code exchange.
+
+#### `GET /api/v1/auth/saml/start/{provider_id}`
+
+Start a SAML SP-initiated login flow.
+
+#### `GET /api/v1/auth/saml/metadata/{provider_id}`
+
+Return SAML SP metadata XML for the given provider.
+
 ---
 
 ## Health and Readiness
+
+#### `GET /health` (root level, no auth)
+
+Unauthenticated health check used by load balancers and the operator's runtime readiness probe.
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "service": "kubesynapse-api-gateway"
+}
+```
 
 #### `GET /api/v1/health`
 
@@ -348,6 +380,60 @@ Get GitHub credential metadata.
 
 Delete GitHub credential secret.
 
+#### `GET /api/v1/agents/{agent_name}/todo`
+
+Fetch the agent's current todo list (ETag-conditional for polling).
+
+#### `GET /api/v1/agents/{agent_name}/diff`
+
+Get unified diff of pending file changes.
+
+#### `GET /api/v1/agents/{agent_name}/question`
+
+List pending question requests that require user input.
+
+#### `POST /api/v1/agents/{agent_name}/question/{request_id}/reply`
+
+Reply to a pending question request.
+
+#### `POST /api/v1/agents/{agent_name}/question/{request_id}/reject`
+
+Reject a pending question request without answering.
+
+#### `GET /api/v1/agents/{agent_name}/artifacts/list`
+
+List workspace files for the agent.
+
+#### `GET /api/v1/agents/{agent_name}/artifacts/download`
+
+Download a single workspace artifact.
+
+**Query parameters:**
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `path` | string | *(required)* | File path within the workspace |
+
+#### `GET /api/v1/agents/{agent_name}/artifacts/zip`
+
+Download the full workspace as a ZIP archive.
+
+#### `GET /api/v1/agents/{agent_name}/logs`
+
+Get agent pod logs.
+
+**Query parameters:**
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `tail` | int | `100` | Number of lines from the tail |
+
+#### `GET /api/v1/agents/{agent_name}/logs/stream`
+
+SSE stream of agent pod logs (follow mode).
+
+#### `GET /api/v1/agents/{agent_name}/memory`
+
+List durable memory records for the agent.
+
 ---
 
 ## Chat Sessions
@@ -513,6 +599,10 @@ Cancel a running workflow.
 
 Stream workflow status updates via SSE.
 
+#### `GET /api/v1/workflows/{workflow_name}/activities/stream`
+
+SSE stream of real-time journal events (step transitions, approval requests, retries).
+
 #### `GET /api/v1/workflows/{workflow_name}/runs`
 
 List workflow runs.
@@ -608,6 +698,14 @@ List MCP categories.
 #### `GET /api/v1/mcp/stats`
 
 Get MCP usage statistics.
+
+#### `GET /api/v1/mcp-hub/servers`
+
+List MCP hub server instances.
+
+#### `GET /api/v1/mcp/profiles`
+
+List curated MCP profiles with resolved connection statuses.
 
 ---
 
@@ -806,6 +904,109 @@ Send a JSON-RPC message to an agent.
 
 ---
 
+## Webhooks & Triggers
+
+KubeSynapse can react to external events through **WebhookReceiver** and **WorkflowTrigger** CRDs.
+External systems POST signed payloads; the gateway validates HMAC signatures, rate limits,
+and IP allowlists before creating a trigger execution record. The operator then claims the
+record atomically and dispatches to the target workflow or agent.
+
+### Webhook Receivers
+
+#### `GET /api/v1/webhooks`
+
+List webhook receivers.
+
+#### `POST /api/v1/webhooks`
+
+Create a webhook receiver (status 201).
+
+#### `GET /api/v1/webhooks/{name}`
+
+Get a webhook receiver by name.
+
+#### `PUT /api/v1/webhooks/{name}`
+
+Update a webhook receiver.
+
+#### `DELETE /api/v1/webhooks/{name}`
+
+Delete a webhook receiver (status 204).
+
+#### `POST /api/v1/webhooks/{name}/invoke`
+
+Public webhook invocation. Payload must be HMAC-SHA256 signed with the receiver's secret.
+
+**Headers:**
+| Name | Description |
+|------|-------------|
+| `X-kubesynapse-Signature` | HMAC-SHA256 of the body |
+| `X-kubesynapse-Timestamp` | Unix timestamp (must be within 5 min of server clock) |
+
+Supported ``namespaced`` variants: `/api/v1/namespaces/{namespace}/webhooks/...`
+
+#### `POST /api/v1/webhooks/{name}/generate-secret`
+
+Generate a new HMAC secret for the webhook receiver.
+
+#### `GET /api/v1/webhooks/{name}/history`
+
+List webhook invocation history.
+
+#### `GET /api/v1/webhooks/events/stream`
+
+SSE stream of real-time webhook events.
+
+### Workflow Triggers
+
+#### `GET /api/v1/workflow-triggers`
+
+List workflow triggers.
+
+#### `POST /api/v1/workflow-triggers`
+
+Create a workflow trigger (status 201).
+
+#### `GET /api/v1/workflow-triggers/{name}`
+
+Get a workflow trigger.
+
+#### `PUT /api/v1/workflow-triggers/{name}`
+
+Update a workflow trigger.
+
+#### `DELETE /api/v1/workflow-triggers/{name}`
+
+Delete a workflow trigger (status 204).
+
+#### `GET /api/v1/workflow-triggers/{name}/history`
+
+List trigger execution history.
+
+### Dispatch & Dead-Letter
+
+#### `GET /api/v1/webhooks/dispatched/pending`
+
+List pending (unclaimed) trigger executions.
+
+#### `POST /api/v1/webhooks/dispatched/{execution_id}/claim`
+
+Atomically claim a pending execution (compare-and-set to queued). Returns 409 if another operator already claimed it.
+
+#### `PATCH /api/v1/webhooks/dispatched/{execution_id}/status`
+
+Update execution status and lineage metadata.
+
+#### `GET /api/v1/webhooks/{name}/dead-letter`
+
+List dead-letter executions for a webhook.
+
+#### `POST /api/v1/webhooks/dead-letter/{execution_id}/replay`
+
+Replay a dead-letter execution (status 202).
+
+---
+
 ## Observability
 
 #### `GET /api/v1/observability/overview`
@@ -862,6 +1063,91 @@ Delete a connector.
 
 ---
 
+## Incidents
+
+Incidents represent actionable alerts from external monitoring systems (e.g., Alertmanager) or manual
+creation. The operator watches incidents and can escalate, acknowledge, resolve, and auto-trigger
+remediation workflows. Incidents are backed by the `AgentIncident` CRD.
+
+#### `GET /api/v1/incidents`
+
+List incidents.
+
+**Query parameters:**
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `namespace` | string | `default` | Target namespace |
+| `status` | string | — | Filter by status (firing, acknowledged, resolved, closed) |
+
+#### `POST /api/v1/incidents`
+
+Create a new incident.
+
+**Request body:**
+```json
+{
+  "name": "prod-outage-001",
+  "namespace": "default",
+  "title": "High CPU on node-3",
+  "severity": "critical",
+  "source": "alertmanager",
+  "assigned_agent": "remediation-bot",
+  "escalation_timeout_minutes": 15,
+  "workflow_ref": {"name": "auto-remediate", "namespace": "default"}
+}
+```
+
+#### `GET /api/v1/incidents/{name}`
+
+Get incident details.
+
+#### `PUT /api/v1/incidents/{name}`
+
+Upsert an incident (idempotent create or update). Same `name` returns the same `id` on consecutive calls; `updated_at` changes.
+
+**Request body:**
+```json
+{
+  "namespace": "default",
+  "title": "High CPU on node-3",
+  "severity": "critical",
+  "source": "alertmanager",
+  "assigned_agent": "remediation-bot",
+  "alertmanager_fingerprint": "abc123..."
+}
+```
+
+#### `PATCH /api/v1/incidents/{name}`
+
+Update incident status (acknowledge, resolve, close).
+
+**Request body:**
+```json
+{
+  "namespace": "default",
+  "status": "resolved",
+  "message": "CPU returned to normal levels",
+  "workflow_run_id": "wf-run-001"
+}
+```
+
+#### `POST /api/v1/incidents/{name}/escalate`
+
+Escalate an incident to a higher severity or notify the assigned agent.
+
+#### `GET /api/v1/incidents/{name}/timeline`
+
+Get the full event timeline for an incident (status transitions, escalations, notes).
+
+### Alertmanager Webhook
+
+#### `POST /api/v1/webhooks/alertmanager`
+
+Alertmanager webhook receiver. Accepts the standard Alertmanager webhook payload, creates or
+upserts incidents per alert, and resolves incidents when the alert status changes to `resolved`.
+
+---
+
 ## Traces
 
 New integrations should use the `executions` resource paths below. Temporary compatibility aliases remain available at `GET /api/v1/traces` and `GET /api/v1/traces/{execution_id}`; they return the same payloads with `Deprecation`, `Sunset`, and `Link` headers so older callers can migrate without a hard break.
@@ -910,6 +1196,26 @@ Export execution as self-contained HTML report.
 #### `POST /api/v1/traces/batch`
 
 Ingest trace events (internal use by operator/workers).
+
+#### `GET /api/v1/traces/runtime-events`
+
+Query runtime events across runs. Filterable by namespace, event_type, agent, severity, and time range.
+
+#### `POST /api/v1/traces/runtime-events`
+
+Ingest runtime events for the Run Intelligence layer (internal use by operator/workers).
+
+#### `GET /api/v1/traces/{execution_id}/timeline`
+
+Get the ordered semantic event timeline for a specific run.
+
+#### `GET /api/v1/traces/{execution_id}/runtime-summary`
+
+Get a summary of runtime events for a specific run.
+
+#### `GET /api/v1/traces/export`
+
+Export raw trace data.
 
 ---
 
@@ -974,9 +1280,51 @@ For the built-in OpenCode providers, the expected secret-backed keys are:
 - `OPENCODE_GO_API_KEY` for OpenCode Go
 - `GITHUB_COPILOT_TOKEN` for GitHub Copilot
 
+#### `GET /api/v1/providers/{provider_id}/models`
+
+List model entries configured for a specific provider.
+
+#### `POST /api/v1/providers/custom`
+
+Register a custom OpenAI-compatible provider (status 201).
+
+**Request body:**
+```json
+{
+  "name": "my-local-llm",
+  "base_url": "http://ollama.local:11434/v1",
+  "api_key": "optional-key",
+  "models": ["llama3", "mistral"]
+}
+```
+
+#### `DELETE /api/v1/providers/custom/{provider_id}`
+
+Remove a custom provider.
+
+#### `POST /api/v1/llm/providers/{provider}/models`
+
+Associate a model with a LiteLLM provider.
+
+#### `POST /api/v1/copilot/auth/device`
+
+Initiate a GitHub Copilot device-code login flow. Returns a verification URI and user code.
+
+#### `POST /api/v1/copilot/auth/poll`
+
+Poll for GitHub Copilot device-flow completion.
+
+#### `GET /api/v1/copilot/auth/status`
+
+Get the current GitHub Copilot authentication status.
+
 ---
 
 ## Admin and Usage
+
+#### `GET /api/v1/namespaces`
+
+List namespaces accessible to the authenticated user.
 
 #### `GET /api/v1/admin/users`
 
@@ -1045,6 +1393,131 @@ Import YAML bundle.
 
 ---
 
+## Intelligence & Collectors
+
+The Run Intelligence layer collects operational data, runs automated analysis scripts,
+and can proactively invoke agents when anomalies are detected.
+
+### Collectors
+
+#### `GET /api/v1/intelligence/collectors`
+
+List registered collectors.
+
+#### `POST /api/v1/intelligence/collectors`
+
+Register a new collector.
+
+#### `DELETE /api/v1/intelligence/collectors/{collector_id}`
+
+Unregister a collector.
+
+#### `POST /api/v1/intelligence/collect`
+
+Trigger an immediate collection task on all registered collectors.
+
+### Tasks
+
+#### `GET /api/v1/intelligence/tasks`
+
+List collection tasks.
+
+#### `GET /api/v1/intelligence/tasks/{task_id}`
+
+Get task details and results.
+
+#### `DELETE /api/v1/intelligence/tasks/{task_id}`
+
+Delete a collection task.
+
+### Schedules
+
+#### `GET /api/v1/intelligence/schedules`
+
+List scheduled collection tasks.
+
+#### `POST /api/v1/intelligence/schedules`
+
+Create a schedule.
+
+**Request body:**
+```json
+{
+  "name": "hourly-error-check",
+  "cron": "0 * * * *",
+  "collector_id": "prod-collector",
+  "builtin": "error-spike-analysis",
+  "enabled": true
+}
+```
+
+#### `PUT /api/v1/intelligence/schedules/{schedule_id}`
+
+Update a schedule.
+
+#### `DELETE /api/v1/intelligence/schedules/{schedule_id}`
+
+Delete a schedule.
+
+### Alert Rules
+
+#### `GET /api/v1/intelligence/alerts`
+
+List alert rules.
+
+#### `POST /api/v1/intelligence/alerts`
+
+Create an alert rule.
+
+#### `PUT /api/v1/intelligence/alerts/{alert_id}`
+
+Update an alert rule.
+
+#### `DELETE /api/v1/intelligence/alerts/{alert_id}`
+
+Delete an alert rule.
+
+#### `GET /api/v1/intelligence/alerts/history`
+
+List alert firing history.
+
+### Prompt Context Injection
+
+#### `POST /api/v1/intelligence/prompt-context`
+
+Fetch the latest intelligence output formatted for system prompt injection. Enables autonomous
+agents to consume real-time operational data without manual context assembly.
+
+**Request body:**
+```json
+{
+  "collector_id": "prod-collector",
+  "builtin": "error-spike-analysis"
+}
+```
+
+---
+
+## Skills Catalog
+
+#### `GET /api/v1/skills/catalog`
+
+List available skills in the catalog.
+
+#### `POST /api/v1/skills/catalog/refresh`
+
+Refresh the skills catalog from the configured sources.
+
+#### `GET /api/v1/skills/catalog/{skill_id}`
+
+Get skill details.
+
+#### `GET /api/v1/skills/tools`
+
+List available tools from registered skills.
+
+---
+
 ## Error Responses
 
 All errors follow a consistent schema:
@@ -1098,5 +1571,5 @@ When exceeded, the API returns `429 Too Many Requests`.
 
 ---
 
-**Last Updated:** April 27, 2026  
+**Last Updated:** June 5, 2026  
 **Platform Version:** 1.0.0

@@ -121,7 +121,7 @@ Agent runtimes ship with defense-in-depth across four layers:
 
 [Learn more about the security model →](docs/architecture-overview.md#10-security-model)
 
-- 12 CRDs model every platform concern: agents, workflows, policies, approvals, tenants, MCP connections, webhooks, and observability targets
+- 13 CRDs model every platform concern: agents, workflows, policies, approvals, tenants, MCP connections, webhooks, observability targets, and incidents
 - OpenCode runtime for production workloads (Pi and Mistral Vibe available in alpha)
 - Model calls proxy through LiteLLM with cost tracking and fallback
 - Persistent workspace state on PVC with session checkpointing
@@ -186,7 +186,7 @@ Schema changes use Alembic migrations, not ad-hoc `CREATE TABLE` calls. Backups 
 - Correlation IDs flow through invoke, logs, and error responses
 
 <details>
-<summary><strong>The 12 CRDs installed by the chart</strong></summary>
+<summary><strong>The 13 CRDs installed by the chart</strong></summary>
 
 | Kind | Purpose |
 | --- | --- |
@@ -202,6 +202,7 @@ Schema changes use Alembic migrations, not ad-hoc `CREATE TABLE` calls. Backups 
 | `ObservationTarget` | Observability target definition |
 | `ObservationPolicy` | Observability evaluation policy |
 | `ObservationReport` | Observability report output |
+| `AgentIncident` | Automated incident lifecycle and Alertmanager webhook integration |
 
 </details>
 
@@ -213,7 +214,7 @@ A separate `collector` sidecar is available for intelligence workflows and is co
 
 ### UI Surfaces
 
-**Chat Workbench** — direct agent interaction, SSE streaming, saved sessions, memory-backed continuity. **Team View** — explicit agent-to-agent collaboration. **Workflow Composer** — visual DAG editing, run history, inline approvals. **Execution Observatory** — overview, step inspection, logs, models and tools, compare, HTML/JSON export. **Catalog** — MCP registry and skills. **Intelligence** — observability resources and collector-driven flows.
+**Chat Workbench** — direct agent interaction, SSE streaming, saved sessions, memory-backed continuity. **Team View** — explicit agent-to-agent collaboration. **Workflow Composer** — visual DAG editing, run history, inline approvals. **Execution Observatory** — overview, step inspection, logs, models and tools, compare, HTML/JSON export. **Catalog** — MCP registry and skills. **Intelligence** — observability resources, collector-driven flows, and incident lifecycle management.
 
 <br>
 
@@ -233,7 +234,9 @@ flowchart TB
     Trace ingestion · Observatory APIs"):::g
 
     K8S{{"☸️ Kubernetes API
-    12 CRDs"}}:::k
+    13 CRDs"}}:::k
+
+    AM["🚨 Alertmanager"]:::ext
 
     OP("🔧 Operator
     Reconcile · Provision
@@ -275,6 +278,7 @@ flowchart TB
     UI -->|"HTTPS /api/*"| GW
     CLI -->|"REST + SSE"| GW
     EXT -->|"Webhooks"| GW
+    AM -->|"POST /api/v1/webhooks/alertmanager"| GW
     GW -->|"CRUD (CustomObjectsApi)"| K8S
     GW -->|"SQLAlchemy"| PG
     GW -->|"Agent + session cache"| REDIS
@@ -295,6 +299,7 @@ flowchart TB
     GW -.->|"SQL anomaly queries"| SIGNAL
     SIGNAL -.->|"Invokes for analysis"| SYS
 
+    classDef ext fill:#1a1a2e,stroke:#ef4444,stroke-width:2px,color:#fca5a5
     classDef c fill:#1a2332,stroke:#326CE5,stroke-width:2px,color:#7baaf7
     classDef g fill:#1a1a3e,stroke:#7c3aed,stroke-width:3px,color:#c4b5fd
     classDef k fill:#0d2137,stroke:#326CE5,stroke-width:3px,color:#93c5fd
@@ -402,7 +407,7 @@ Read [`cli/README.md`](cli/README.md) for the full command surface.
 | [`web-ui/`](web-ui/) | React 18 + Vite + Tailwind v4 console |
 | [`mcp-sidecars/`](mcp-sidecars/) | Bundled MCP sidecars (10 tools) |
 | [`cli/`](cli/) | `agentctl` CLI with shell completion |
-| [`charts/kubesynapse/`](charts/kubesynapse/) | Main Helm chart (12 CRDs) |
+| [`charts/kubesynapse/`](charts/kubesynapse/) | Main Helm chart (13 CRDs) |
 | [`deploy/`](deploy/) | Environment overlays and deployment notes |
 | [`examples/`](examples/) | Sample CRDs, workflows, and demo bundles |
 | [`docs/`](docs/) | Architecture, runtime contract, operations, walkthrough |
@@ -422,7 +427,7 @@ Read [`cli/README.md`](cli/README.md) for the full command surface.
 | Execution Observatory & run intelligence | [`docs/observability-explained.md`](docs/observability-explained.md) |
 | Configuration reference | [`docs/configuration-reference.md`](docs/configuration-reference.md) |
 | Getting started guide | [`docs/getting-started.md`](docs/getting-started.md) |
-| Installation & operations | [`INSTALL.md`](INSTALL.md) |
+| Installation & operations | [`docs/operator-guide.md`](docs/operator-guide.md) |
 | Helm chart guide | [`charts/kubesynapse/README.md`](charts/kubesynapse/README.md) |
 | Deployment guide | [`deploy/README.md`](deploy/README.md) |
 | API reference | [`docs/api-reference.md`](docs/api-reference.md) |

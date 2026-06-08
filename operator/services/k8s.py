@@ -52,6 +52,49 @@ ApiTypeError = getattr(kubernetes.client, "ApiTypeError", TypeError)
 
 logger = logging.getLogger("operator.services")
 
+_RUNTIME_SECRET_MANUAL_OVERRIDE_ANNOTATION = "kubesynapse.ai/secret-manual-override"
+
+
+def _record_runtime_secret_override_event(namespace: str, owner_name: str) -> None:
+    core_api = kubernetes.client.CoreV1Api()
+    event_cls = getattr(kubernetes.client, "CoreV1Event", None)
+    object_meta_cls = getattr(kubernetes.client, "V1ObjectMeta", None)
+    object_ref_cls = getattr(kubernetes.client, "V1ObjectReference", None)
+    if event_cls is None or object_meta_cls is None or object_ref_cls is None:
+        logger.debug("Kubernetes event classes unavailable; skipping runtime secret override event")
+        return
+
+    now = _datetime.now(_UTC)
+    event = event_cls(
+        metadata=object_meta_cls(
+            generate_name=f"{SECRET_NAME}-",
+            namespace=namespace,
+            labels={
+                "kubesynapse.ai/owner": owner_name,
+                "kubesynapse.ai/event-type": "Warning",
+            },
+        ),
+        involved_object=object_ref_cls(
+            api_version="v1",
+            kind="Secret",
+            name=SECRET_NAME,
+            namespace=namespace,
+        ),
+        type="Warning",
+        reason="RuntimeSecretManualOverride",
+        message=(
+            f"Skipped reconciliation for secret '{SECRET_NAME}' in namespace '{namespace}' because annotation "
+            f"'{_RUNTIME_SECRET_MANUAL_OVERRIDE_ANNOTATION}=true' is set."
+        ),
+        first_timestamp=now,
+        last_timestamp=now,
+        count=1,
+        action="SkipSecretReconcile",
+        reporting_component="kubesynapse-operator",
+        reporting_instance="kubesynapse-operator",
+    )
+    core_api.create_namespaced_event(namespace=namespace, body=event)
+
 
 # ---------------------------------------------------------------------------
 # §7.2 — Exponential backoff with circuit breaker for K8s API calls
@@ -701,6 +744,28 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
         "type": "Opaque",
         "stringData": string_data,
     }
+    core_api = kubernetes.client.CoreV1Api()
+    try:
+        existing_secret = _sanitize_kube_resource(core_api.read_namespaced_secret(name=SECRET_NAME, namespace=namespace))
+    except ApiException as exc:
+        if exc.status != 404:
+            raise
+        existing_secret = None
+    if isinstance(existing_secret, dict):
+        annotations = (existing_secret.get("metadata") or {}).get("annotations") or {}
+        if str(annotations.get(_RUNTIME_SECRET_MANUAL_OVERRIDE_ANNOTATION) or "").strip().lower() == "true":
+            logger.warning(
+                "Secret '%s/%s' has manual override annotation; skipping reconciliation",
+                namespace,
+                SECRET_NAME,
+            )
+            try:
+                _record_runtime_secret_override_event(namespace, owner_name)
+            except ApiException as exc:
+                if exc.status != 403:
+                    logger.warning("Failed to record runtime secret override event for %s/%s: %s", namespace, SECRET_NAME, describe_api_exception(exc))
+            _ensure_runtime_namespace_immutable_config_maps(namespace, logger)
+            return
     ensure_secret(namespace, secret_manifest)
     logger.info("Secret '%s' provisioned for namespace '%s'", SECRET_NAME, namespace)
     _ensure_runtime_namespace_immutable_config_maps(namespace, logger)
@@ -803,7 +868,12 @@ _STATUS_PATCH_MAX_RETRIES: int = 3
 
 
 def patch_custom_status(plural: str, namespace: str, name: str, status: dict[str, Any]) -> None:
-    """Patch the .status subresource with optimistic concurrency retry on 409."""
+    """Patch the .status subresource with optimistic concurrency retry on 409.
+
+    On conflict, the current resource is re-fetched to obtain the latest
+    ``resourceVersion`` so the retry body participates in proper optimistic
+    locking instead of blindly sending the same stale body.
+    """
     import random as _random
     import time as _time
 
@@ -812,28 +882,46 @@ def patch_custom_status(plural: str, namespace: str, name: str, status: dict[str
     for attempt in range(_STATUS_PATCH_MAX_RETRIES):
         try:
             cb.call()
+            body: dict[str, Any] = {"status": status}
+            if attempt > 0:
+                body["metadata"] = {"resourceVersion": _latest_resource_version}
             api.patch_namespaced_custom_object_status(
                 group="kubesynapse.ai",
                 version="v1alpha1",
                 namespace=namespace,
                 plural=plural,
                 name=name,
-                body={"status": status},
+                body=body,
             )
             cb.record_success()
             return
         except ApiException as exc:
             cb.record_failure()
             if exc.status == 409 and attempt < _STATUS_PATCH_MAX_RETRIES - 1:
-                backoff = (2**attempt) + _random.uniform(0, 0.5)  # noqa: S311 — non-cryptographic jitter for retry backoff
+                try:
+                    current = api.get_namespaced_custom_object(
+                        group="kubesynapse.ai",
+                        version="v1alpha1",
+                        namespace=namespace,
+                        plural=plural,
+                        name=name,
+                    )
+                    _latest_resource_version = str(
+                        (current.get("metadata") or {}).get("resourceVersion") or ""
+                    )
+                except ApiException:
+                    _latest_resource_version = ""
+                backoff = (2**attempt) + _random.uniform(0, 0.5)
                 logging.getLogger("operator.services.k8s").warning(
-                    "Conflict patching %s/%s/%s status (409), retry %d/%d in %.1fs.",
+                    "Conflict patching %s/%s/%s status (409), retry %d/%d in %.1fs "
+                    "(refreshed resourceVersion=%s).",
                     plural,
                     namespace,
                     name,
                     attempt + 1,
                     _STATUS_PATCH_MAX_RETRIES,
                     backoff,
+                    _latest_resource_version or "<unset>",
                 )
                 _time.sleep(backoff)
                 continue
@@ -898,9 +986,15 @@ def enqueue_worker_job(
 
 @_exponential_backoff()
 def read_job_state(name: str, namespace: str) -> str:
-    """Read the current state of a Job: missing, pending, active, succeeded, failed."""
+    """Read the current state of a Job: missing, pending, active, succeeded, failed, none.
+
+    Returns:
+        "none" — no worker job name has been assigned yet.
+        "missing" — a job name was assigned but the Job resource does not exist.
+        "pending" / "active" / "succeeded" / "failed" — Job lifecycle states.
+    """
     if not name:
-        return "missing"
+        return "none"
 
     batch_api = kubernetes.client.BatchV1Api()
     try:

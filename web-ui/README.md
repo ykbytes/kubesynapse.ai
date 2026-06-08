@@ -100,7 +100,7 @@ Useful for debugging model reasoning loops and tool-use decisions.
 - Workflow creation, editing, inspection, deletion, run history, and visual composer execution monitoring
 - Evaluation creation, editing, inspection, deletion, and per-case result visualization
 - Shared `Catalog` workspace with `MCP` and `Skills` tabs
-- Shared `Intelligence` workspace with `Observatory` and `Intelligence` tabs
+- Shared `Intelligence` workspace with `Observatory`, `Intelligence`, and `Incidents` tabs
 - Policy management, admin user management, audit trail review, usage dashboards, and health dashboard access
 - Command palette, mobile navigation shell, onboarding tour, notifications, and redesigned provider-centric settings management
 - Live Activity Stream with real-time step-level status transitions, pulse indicator, and Ctrl+L toggle

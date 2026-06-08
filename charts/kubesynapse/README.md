@@ -67,6 +67,7 @@ helm upgrade --install kubesynapse ./charts/kubesynapse \
 - System agent `AIAgent` resources are created in a post-install/post-upgrade hook, so first installs do not need `systemAgents.enabled=false`.
 - Local and air-gapped installs must preload `docker.io/litellm/litellm:v1.82.3-stable` alongside the platform images.
 - You should not need to run manual database bootstrap commands after a normal Helm deploy.
+- The `AgentIncident` CRD is installed as part of the chart and backed by the operator's incident lifecycle controller. Alertmanager webhooks are accepted at `POST /api/v1/webhooks/alertmanager` and create firing incidents automatically.
 
 ## Runtime Support
 
