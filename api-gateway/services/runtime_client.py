@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -30,6 +31,9 @@ class CircuitBreaker:
 
     Opens after `failure_threshold` consecutive failures within `window_seconds`.
     Half-opens after `recovery_seconds`, allowing one probe request.
+
+    All state mutations are serialised by an internal threading.Lock so that
+    concurrent async tasks and threads can share the same breaker safely.
     """
 
     failure_threshold: int = 5
@@ -40,46 +44,56 @@ class CircuitBreaker:
     _state: CircuitState = field(default=CircuitState.CLOSED, init=False)
     _last_failure_time: float = field(default=0.0, init=False)
     _opened_at: float = field(default=0.0, init=False)
+    # Lock is NOT in field() so dataclass doesn't try to compare/hash it.
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, compare=False, repr=False)
+
+    def _recalculate_state(self, now: float) -> None:
+        """Transition OPEN → HALF_OPEN when recovery period has elapsed (must hold _lock)."""
+        if self._state == CircuitState.OPEN and now - self._opened_at >= self.recovery_seconds:
+            self._state = CircuitState.HALF_OPEN
+            logger.debug("Circuit half-opened for probe")
 
     @property
     def state(self) -> CircuitState:
-        now = time.monotonic()
-        if self._state == CircuitState.OPEN:
-            if now - self._opened_at >= self.recovery_seconds:
-                self._state = CircuitState.HALF_OPEN
-                logger.debug("Circuit half-opened for probe")
-        return self._state
+        with self._lock:
+            self._recalculate_state(time.monotonic())
+            return self._state
 
     def record_success(self) -> None:
-        now = time.monotonic()
-        self._failures = [t for t in self._failures if now - t < self.window_seconds]
-        if self._state == CircuitState.HALF_OPEN:
-            self._state = CircuitState.CLOSED
-            logger.info("Circuit closed after successful probe")
+        with self._lock:
+            now = time.monotonic()
+            self._failures = [t for t in self._failures if now - t < self.window_seconds]
+            if self._state == CircuitState.HALF_OPEN:
+                self._state = CircuitState.CLOSED
+                logger.info("Circuit closed after successful probe")
 
     def record_failure(self) -> None:
-        now = time.monotonic()
-        self._failures.append(now)
-        self._last_failure_time = now
-        recent = [t for t in self._failures if now - t < self.window_seconds]
-        self._failures = recent
-        if len(recent) >= self.failure_threshold and self._state != CircuitState.OPEN:
-            self._state = CircuitState.OPEN
-            self._opened_at = now
-            logger.warning(
-                "Circuit opened: %d failures in %.0fs window",
-                len(recent),
-                self.window_seconds,
-            )
+        with self._lock:
+            now = time.monotonic()
+            self._failures.append(now)
+            self._last_failure_time = now
+            recent = [t for t in self._failures if now - t < self.window_seconds]
+            self._failures = recent
+            if len(recent) >= self.failure_threshold and self._state != CircuitState.OPEN:
+                self._state = CircuitState.OPEN
+                self._opened_at = now
+                logger.warning(
+                    "Circuit opened: %d failures in %.0fs window",
+                    len(recent),
+                    self.window_seconds,
+                )
 
     def allow_request(self) -> bool:
-        return self.state != CircuitState.OPEN
+        with self._lock:
+            self._recalculate_state(time.monotonic())
+            return self._state != CircuitState.OPEN
 
     def reset(self) -> None:
-        self._failures.clear()
-        self._state = CircuitState.CLOSED
-        self._last_failure_time = 0.0
-        self._opened_at = 0.0
+        with self._lock:
+            self._failures.clear()
+            self._state = CircuitState.CLOSED
+            self._last_failure_time = 0.0
+            self._opened_at = 0.0
 
 
 class CircuitBreakerRegistry:
@@ -164,13 +178,28 @@ async def check_runtime_health(
 
 
 def _is_retryable_status(status_code: int) -> bool:
-    """Determine if an HTTP status code warrants a retry."""
-    return status_code in (408, 429, 500, 502, 503, 504)
+    """Determine if an HTTP status code warrants a retry for non-idempotent invoke.
+
+    WP-2: Only retry 429/503 (rate-limit / unavailable) — these are safe to
+    retry because no work was started yet (the runtime rejects the request
+    before processing).  Do NOT retry 500/502/504/408 because the runtime may
+    have already started the turn, spending tokens and creating sessions.
+    Retrying those causes duplicate tool execution and double token spend.
+    """
+    return status_code in (429, 503)
 
 
 def _is_retryable_exception(exc: Exception) -> bool:
-    """Determine if an exception type warrants a retry."""
-    return isinstance(exc, (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError))
+    """Determine if an exception type warrants a retry.
+
+    WP-2: Only retry ConnectError/ConnectTimeout — errors that occur before
+    the request body reached the server (safe to resend).  ReadTimeout and
+    RemoteProtocolError mean the server *received* the request and may be
+    processing it — retrying would duplicate work.
+    """
+    return isinstance(exc, httpx.ConnectError) or (
+        isinstance(exc, httpx.TimeoutException) and "connect" in type(exc).__name__.lower()
+    )
 
 
 async def invoke_with_retry(
@@ -235,7 +264,6 @@ async def invoke_with_retry(
 
     # Retry loop with exponential backoff
     last_exc: Exception | None = None
-    last_response: httpx.Response | None = None
 
     for attempt in range(max_retries + 1):
         try:
@@ -288,8 +316,6 @@ async def invoke_with_retry(
             raise
 
     # Should not reach here, but handle edge case
-    if last_response is not None:
-        return last_response
     if last_exc is not None:
         raise last_exc
     raise RuntimeError("Unexpected state in invoke_with_retry")
@@ -323,7 +349,16 @@ async def stream_with_retry(
                 f"Circuit breaker is open for {agent_key}; runtime appears unhealthy."
             )
 
-    async with httpx.AsyncClient(timeout=timeout or httpx.Timeout(300.0, connect=10.0), trust_env=False) as client:
+    # WP-4: Use unlimited read timeout for SSE streams so long-running turns
+    # (up to LIVE_UPDATE_MAX_WALL_SECONDS ≈ 900 s in the runtime) are not
+    # truncated.  The previous default of httpx.Timeout(300.0) cut streams at
+    # exactly 5 minutes.  We keep a connect timeout to fail fast on unreachable
+    # runtimes, and rely on the runtime's own wall-clock cap for termination.
+    import os as _os
+    _stream_timeout_s = float(_os.getenv("AGENT_STREAM_TIMEOUT_SECONDS", "0") or "0")
+    _stream_read_timeout = _stream_timeout_s if _stream_timeout_s > 0 else None
+    _effective_timeout = timeout or httpx.Timeout(_stream_read_timeout, connect=10.0)
+    async with httpx.AsyncClient(timeout=_effective_timeout, trust_env=False) as client:
         async with client.stream("POST", url, json=payload, headers=headers) as response:
             if response.status_code >= 400:
                 if agent_key:

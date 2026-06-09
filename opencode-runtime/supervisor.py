@@ -46,6 +46,10 @@ _LOG_DIR = Path(HOME_DIR) / ".local" / "share" / "opencode-runtime" / "logs"
 _STDOUT_LOG = _LOG_DIR / "opencode-stdout.log"
 _STDERR_LOG = _LOG_DIR / "opencode-stderr.log"
 
+# Track open log file handles so they can be closed before re-opening on restart
+_active_stdout_fh: Any = None
+_active_stderr_fh: Any = None
+
 SUPERVISOR_POLL_SECONDS = max(float(os.getenv("OPENCODE_SUPERVISOR_POLL_SECONDS", "5")), 1.0)
 SUPERVISOR_MAX_RESTARTS = max(int(os.getenv("OPENCODE_SUPERVISOR_MAX_RESTARTS", "5")), 0)
 _supervisor_restart_count = 0
@@ -214,10 +218,30 @@ def _start_opencode_process(env: dict[str, str]) -> subprocess.Popen[str]:
 
     Redirects stdout/stderr to log files to prevent pipe buffer deadlocks.
     The log files are rotated on each restart (previous content is overwritten).
+    Previous handles are closed before opening new ones to avoid FD leaks.
     """
+    global _active_stdout_fh, _active_stderr_fh
+
+    # Close stale handles from a prior (possibly crashed) process before
+    # opening new ones.  Silently ignore errors — the old process is gone.
+    if _active_stdout_fh is not None:
+        try:
+            _active_stdout_fh.close()
+        except OSError:
+            pass
+        _active_stdout_fh = None
+    if _active_stderr_fh is not None:
+        try:
+            _active_stderr_fh.close()
+        except OSError:
+            pass
+        _active_stderr_fh = None
+
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
-    stdout_fh = open(_STDOUT_LOG, "w", encoding="utf-8", buffering=1)  # noqa: SIM115 — file handle managed elsewhere
-    stderr_fh = open(_STDERR_LOG, "w", encoding="utf-8", buffering=1)  # noqa: SIM115 — file handle managed elsewhere
+    stdout_fh = open(_STDOUT_LOG, "w", encoding="utf-8", buffering=1)  # noqa: SIM115
+    stderr_fh = open(_STDERR_LOG, "w", encoding="utf-8", buffering=1)  # noqa: SIM115
+    _active_stdout_fh = stdout_fh
+    _active_stderr_fh = stderr_fh
     return subprocess.Popen(
         [
             OPENCODE_BIN,
@@ -341,3 +365,16 @@ def _sigterm_handler(signum: int, frame: Any) -> None:
     _shutting_down = True
     _shutdown_event.set()
     logger.info("Received signal %d, initiating graceful shutdown.", signum)
+
+
+def close_log_handles() -> None:
+    """Close any open subprocess log file handles (called on graceful shutdown)."""
+    global _active_stdout_fh, _active_stderr_fh
+    for handle in (_active_stdout_fh, _active_stderr_fh):
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
+    _active_stdout_fh = None
+    _active_stderr_fh = None

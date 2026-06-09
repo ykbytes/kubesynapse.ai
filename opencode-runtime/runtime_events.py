@@ -94,6 +94,10 @@ _sync_flusher_thread: threading.Thread | None = None
 _sync_running = False
 _sync_sent = 0
 _sync_dropped = 0
+# WP-8: Serialise drain operations so _sync_flush_loop and flush_sync_queue
+# never race on the same queue items.  Both paths hold this lock while
+# draining, preventing double-consume / silent drops.
+_flush_lock = threading.Lock()
 
 
 def _sync_flush_loop() -> None:
@@ -117,7 +121,8 @@ def _sync_flush_loop() -> None:
             should_flush = True
 
         if should_flush:
-            _sync_flush_batch(batch)
+            with _flush_lock:
+                _sync_flush_batch(batch)
             batch.clear()
 
 
@@ -208,6 +213,10 @@ def flush_sync_queue() -> None:
     Called after each invoke to ensure observability data reaches the
     gateway promptly rather than waiting for the batch threshold or
     process shutdown.
+
+    WP-8: Holds _flush_lock while draining so this call and the background
+    _sync_flush_loop never consume the same items concurrently (previously
+    caused silent event drops that incremented _sync_dropped).
     """
     batch: list[dict[str, Any]] = []
     while True:
@@ -218,7 +227,8 @@ def flush_sync_queue() -> None:
         if event is not None:
             batch.append(event)
     if batch:
-        _sync_flush_batch(batch)
+        with _flush_lock:
+            _sync_flush_batch(batch)
 
 
 # ---------------------------------------------------------------------------

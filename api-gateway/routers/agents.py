@@ -918,7 +918,9 @@ async def invoke_agent_stream(
                         "/invoke/stream",
                         payload,
                         headers={"x-request-id": request_id},
-                        timeout=httpx.Timeout(300.0, connect=10.0),
+                        # WP-4: pass no explicit timeout so stream_with_retry
+                        # uses AGENT_STREAM_TIMEOUT_SECONDS (default: unlimited).
+                        timeout=None,
                         agent_key=agent_key,
                     ):
                         if response.status_code >= 400:

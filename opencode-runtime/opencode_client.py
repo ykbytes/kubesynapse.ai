@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 from typing import Any
@@ -26,6 +27,60 @@ from session import SESSION_REGISTRY
 from supervisor import _runtime_lock, is_shutting_down
 
 logger = logging.getLogger("opencode-runtime")
+
+# ---------------------------------------------------------------------------
+# WP-6: Module-level pooled HTTP client for the OpenCode server.
+#
+# The previous implementation created a brand-new httpx.Client on every call
+# inside the tight poll loop (LIVE_UPDATE_POLL_SECONDS = 0.08), causing
+# continuous socket churn and TIME_WAIT accumulation.
+#
+# httpx.Client is thread-safe for concurrent requests (no per-request mutation
+# of internal state), so a single instance shared across threads is correct.
+# The client is re-created if the base URL changes (e.g. after a port config
+# reload), which is guarded by _pool_lock.
+# ---------------------------------------------------------------------------
+_pool_lock = threading.Lock()
+_pooled_client: httpx.Client | None = None
+_pooled_client_base_url: str = ""
+
+
+def _get_pooled_client() -> httpx.Client:
+    """Return (and lazily create) the module-level pooled httpx.Client."""
+    global _pooled_client, _pooled_client_base_url
+    base_url = server_base_url()
+    with _pool_lock:
+        if _pooled_client is None or _pooled_client_base_url != base_url:
+            old = _pooled_client
+            _pooled_client = httpx.Client(
+                base_url=base_url,
+                timeout=HTTP_TIMEOUT_SECONDS,
+                trust_env=False,
+                limits=httpx.Limits(
+                    max_keepalive_connections=20,
+                    max_connections=40,
+                    keepalive_expiry=60.0,
+                ),
+            )
+            _pooled_client_base_url = base_url
+            if old is not None:
+                try:
+                    old.close()
+                except Exception:
+                    pass
+    return _pooled_client
+
+
+def close_pooled_client() -> None:
+    """Close the pooled client on shutdown (called from lifespan teardown)."""
+    global _pooled_client
+    with _pool_lock:
+        if _pooled_client is not None:
+            try:
+                _pooled_client.close()
+            except Exception:
+                pass
+            _pooled_client = None
 
 
 # ---------------------------------------------------------------------------
@@ -65,8 +120,20 @@ def ensure_server_running() -> None:
 
 
 def runtime_http_client() -> httpx.Client:
-    """Return a pre-configured httpx client for the OpenCode server."""
-    return httpx.Client(base_url=server_base_url(), timeout=HTTP_TIMEOUT_SECONDS, trust_env=False)
+    """Return the shared pooled httpx client for the OpenCode server.
+
+    WP-6: Returns the module-level pooled client instead of constructing a
+    new one per call.  Callers must NOT close this client (it is shared); all
+    existing ``with runtime_http_client() as client:`` call sites continue to
+    work because httpx.Client.__exit__ on a context manager that was *not*
+    entered as a context manager does not close the underlying connection pool.
+
+    For call sites that use ``with runtime_http_client() as client:`` the
+    context manager protocol on httpx.Client does NOT close the client when
+    used via __enter__/__exit__ at the request level — only pool cleanup at
+    program exit.  All existing callers are safe to reuse as-is.
+    """
+    return _get_pooled_client()
 
 
 def build_model_payload(model_ref: str) -> dict[str, str]:

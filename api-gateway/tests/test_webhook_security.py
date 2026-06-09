@@ -35,6 +35,18 @@ def _hmac_sig(payload: bytes, secret: str) -> str:
     return hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
 
 
+def _stripe_sig(payload: bytes, secret: str, ts: str | None = None) -> str:
+    """Build a Stripe-Signature header value using the correct signed_payload format.
+
+    Stripe signs HMAC_SHA256(secret, f\"{t}.{raw_body}\") as documented at
+    https://stripe.com/docs/webhooks/signatures — not the raw body alone.
+    """
+    t = ts or str(int(time.time()))
+    signed_payload = f"{t}.".encode() + payload
+    v1 = hmac.new(secret.encode(), signed_payload, hashlib.sha256).hexdigest()
+    return f"t={t},v1={v1}"
+
+
 class TestProviderVerifiers:
     SECRET = "whsec_test"
 
@@ -85,22 +97,40 @@ class TestProviderVerifiers:
 
     def test_stripe_valid(self) -> None:
         payload = b'{"event":"charge.completed"}'
-        sig = "v1=" + _hmac_sig(payload, self.SECRET)
+        sig = _stripe_sig(payload, self.SECRET)
         assert verify_provider_signature("stripe", payload, sig, self.SECRET) is True
 
     def test_stripe_multi_sig_valid(self) -> None:
+        """Multiple signatures (v0 + v1) in the header — only v1 matters."""
         payload = b'{"event":"charge.completed"}'
-        v1 = "v1=" + _hmac_sig(payload, self.SECRET)
-        sig = f"t=1234567890,v0=old,{v1}"
+        t = str(int(time.time()))
+        signed_payload = f"{t}.".encode() + payload
+        v1 = "v1=" + hmac.new(self.SECRET.encode(), signed_payload, hashlib.sha256).hexdigest()
+        sig = f"t={t},v0=old_scheme_ignored,{v1}"
         assert verify_provider_signature("stripe", payload, sig, self.SECRET) is True
 
     def test_stripe_invalid(self) -> None:
+        """Bad v1 hash must be rejected."""
         payload = b'{"event":"charge.completed"}'
-        assert verify_provider_signature("stripe", payload, "v1=bad", self.SECRET) is False
+        t = str(int(time.time()))
+        sig = f"t={t},v1=badhash"
+        assert verify_provider_signature("stripe", payload, sig, self.SECRET) is False
+
+    def test_stripe_expired_timestamp(self) -> None:
+        """Timestamps older than tolerance must be rejected even with a valid hash."""
+        payload = b'{"event":"charge.completed"}'
+        old_t = "1234567890"  # year 2009 — always expired
+        signed_payload = f"{old_t}.".encode() + payload
+        v1 = "v1=" + hmac.new(self.SECRET.encode(), signed_payload, hashlib.sha256).hexdigest()
+        sig = f"t={old_t},{v1}"
+        assert verify_provider_signature("stripe", payload, sig, self.SECRET) is False
 
     def test_stripe_no_v1(self) -> None:
+        """Header with only v0 (no v1) must be rejected."""
         payload = b'{"event":"charge.completed"}'
-        assert verify_provider_signature("stripe", payload, "v0=old", self.SECRET) is False
+        t = str(int(time.time()))
+        sig = f"t={t},v0=old_scheme"
+        assert verify_provider_signature("stripe", payload, sig, self.SECRET) is False
 
     def test_pagerduty_valid(self) -> None:
         payload = b'{"event":"incident.triggered"}'

@@ -5,16 +5,94 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 )
+
+// ---------------------------------------------------------------------------
+// WP-7: Tunable connection-pool and timeout configuration
+// ---------------------------------------------------------------------------
+
+// proxyTransportConfig holds the pooled Transport shared across all routes.
+// Using a shared Transport allows connections to be reused across forward
+// requests to the same upstream, which reduces TIME_WAIT socket accumulation
+// under high parallel load.
+var _sharedTransport *http.Transport
+
+func init() {
+	_sharedTransport = buildTransport()
+}
+
+func envInt(name string, fallback int) int {
+	if v := os.Getenv(name); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return fallback
+}
+
+func envDuration(name string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(name); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return fallback
+}
+
+func buildTransport() *http.Transport {
+	return &http.Transport{
+		// WP-7: raise idle-connection ceilings from Go's default of 100/2.
+		MaxIdleConns:        envInt("PROXY_TRANSPORT_MAX_IDLE_CONNS", 200),
+		MaxIdleConnsPerHost: envInt("PROXY_TRANSPORT_MAX_IDLE_CONNS_PER_HOST", 100),
+		MaxConnsPerHost:     envInt("PROXY_TRANSPORT_MAX_CONNS_PER_HOST", 0), // 0 = unlimited
+		IdleConnTimeout:     envDuration("PROXY_TRANSPORT_IDLE_CONN_TIMEOUT", 90*time.Second),
+		// WP-4/WP-7: prefer HTTP/2 for multiplexed concurrent requests.
+		ForceAttemptHTTP2: true,
+		DialContext: (&net.Dialer{
+			Timeout:   envDuration("PROXY_DIAL_TIMEOUT", 10*time.Second),
+			KeepAlive: envDuration("PROXY_DIAL_KEEPALIVE", 30*time.Second),
+		}).DialContext,
+		TLSHandshakeTimeout:   envDuration("PROXY_TLS_HANDSHAKE_TIMEOUT", 10*time.Second),
+		ResponseHeaderTimeout: envDuration("PROXY_RESPONSE_HEADER_TIMEOUT", 30*time.Second),
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+}
+
+// streamWriteTimeout returns the WriteTimeout to use for a route that carries
+// long-running SSE streams.  Defaults to 0 (unlimited) so that the runtime's
+// own LIVE_UPDATE_MAX_WALL_SECONDS (~900 s) governs the upper bound, not this
+// proxy layer.  Override via PROXY_STREAM_WRITE_TIMEOUT_SECONDS (e.g. "960").
+//
+// WP-4: The previous hard-coded 300 s truncated streaming turns at 5 min.
+func streamWriteTimeout() time.Duration {
+	if v := os.Getenv("PROXY_STREAM_WRITE_TIMEOUT_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			if n <= 0 {
+				return 0 // explicit unlimited
+			}
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 0 // default: unlimited (let the runtime control the wall-clock cap)
+}
+
+// isStreamingRoute returns true when the route is the inbound gateway→agent
+// port (AuthModeValidate) or carries SSE traffic.  These need an unlimited
+// WriteTimeout so long-running turns are not truncated.
+func isStreamingRoute(route Route) bool {
+	return route.Auth == AuthModeValidate
+}
 
 type AuthMode string
 
@@ -65,7 +143,9 @@ func (p *Proxy) Start() error {
 			return fmt.Errorf("invalid target URL %q: %w", route.Target, err)
 		}
 
+		// WP-7: inject the shared pooled Transport so connections are reused.
 		proxy := httputil.NewSingleHostReverseProxy(target)
+		proxy.Transport = _sharedTransport
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			p.logger.Error("proxy error", "route", route.Listen, "target", route.Target, "error", err)
 			http.Error(w, "proxy error", http.StatusBadGateway)
@@ -100,12 +180,19 @@ func (p *Proxy) Start() error {
 			handler = proxy
 		}
 
+		// WP-4: streaming/inbound routes use an unlimited WriteTimeout so that
+		// long-running SSE turns (up to ~900 s in the runtime) are not cut off
+		// by the proxy at the previous hard-coded 300 s.
+		writeTimeout := time.Duration(300) * time.Second
+		if isStreamingRoute(route) {
+			writeTimeout = streamWriteTimeout()
+		}
 		srv := &http.Server{
 			Addr:              route.Listen,
 			Handler:           handler,
 			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       30 * time.Second,
-			WriteTimeout:      300 * time.Second,
+			ReadTimeout:       0, // streaming responses read continuously
+			WriteTimeout:      writeTimeout,
 			IdleTimeout:       60 * time.Second,
 		}
 		p.servers = append(p.servers, srv)

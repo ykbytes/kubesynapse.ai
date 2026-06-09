@@ -415,6 +415,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 logger.warning("OpenCode subprocess did not exit; killing.")
                 process.kill()
                 process.wait(timeout=5)
+        # WP-5: close subprocess log FDs to prevent descriptor leaks on restart.
+        _supervisor_mod.close_log_handles()
+        # WP-6: close the pooled HTTP client so sockets are released cleanly.
+        from opencode_client import close_pooled_client
+        close_pooled_client()
         logger.info("OpenCode runtime shutdown complete.")
 
 

@@ -306,16 +306,11 @@ async def invoke_webhook(
             kwargs["timestamp"] = provider_timestamp
         if verify_provider_signature(provider, raw_body, provider_signature, provider_secret, **kwargs):
             signature_verified = True
-            # Replay protection only for verified requests
+            # Replay protection: generic uses our own timestamp header;
+            # slack validates its own timestamp inline in _verify_slack_signature;
+            # stripe validates its own t= timestamp inside _verify_stripe_signature.
             if provider == "generic":
                 verify_webhook_timestamp(x_kubesynapse_timestamp)
-            elif provider == "slack" and provider_timestamp:
-                try:
-                    ts_val = int(provider_timestamp)
-                    if abs(time_module.time() - ts_val) > 300:
-                        raise HTTPException(status_code=401, detail="Webhook timestamp is too old")
-                except ValueError:
-                    raise HTTPException(status_code=401, detail="Invalid timestamp header")
         else:
             metric = _get_metric("webhook_signature_failures_total", "Total webhook signature failures")
             if metric:

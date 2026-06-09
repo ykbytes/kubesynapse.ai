@@ -151,22 +151,57 @@ def _verify_slack_signature(payload: bytes, signature: str, secret: str, timesta
     return hmac.compare_digest(expected, signature)
 
 
-def _verify_stripe_signature(payload: bytes, signature: str, secret: str) -> bool:
+_STRIPE_TOLERANCE_SECONDS = max(
+    int(os.getenv("WEBHOOK_STRIPE_TOLERANCE_SECONDS", "300")), 1
+)
+
+
+def _verify_stripe_signature(payload: bytes, signature: str, secret: str, timestamp: str | None = None) -> bool:
     """Verify Stripe webhook signature (Stripe-Signature header).
 
-    Stripe uses a simplified check — verified_v1 timestamp scheme.
-    This validates the first v1 signature found in the header.
+    Stripe signs HMAC_SHA256(secret, f"{t}.{raw_body}") where *t* is the
+    Unix timestamp from the ``t=`` field in the Stripe-Signature header.
+    Passing only the raw body to HMAC (as the previous implementation did)
+    always produces the wrong digest and rejects every real Stripe event.
+
+    The ``timestamp`` kwarg accepts the already-extracted ``t=`` value so
+    the caller can pass it via ``PROVIDER_VERIFIERS``'s **kwargs.
+    If not provided, the function extracts it from the ``signature`` string.
     """
     if not signature:
         return False
+
+    # Parse t= and v1= fields from the Stripe-Signature header value.
+    ts_value: str | None = timestamp
+    v1_signatures: list[str] = []
     for part in signature.split(","):
         part = part.strip()
-        if part.startswith("v1="):
-            provided = part[3:]
-            expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
-            if hmac.compare_digest(expected, provided):
-                return True
-    return False
+        if part.startswith("t=") and ts_value is None:
+            ts_value = part[2:].strip()
+        elif part.startswith("v1="):
+            v1_signatures.append(part[3:])
+
+    if not ts_value or not v1_signatures:
+        return False
+
+    # Replay-attack protection: reject if timestamp is too old.
+    try:
+        event_time = int(ts_value)
+        if abs(time.time() - event_time) > _STRIPE_TOLERANCE_SECONDS:
+            logger.warning(
+                "Stripe webhook timestamp too old: age=%ds tolerance=%ds",
+                abs(time.time() - event_time),
+                _STRIPE_TOLERANCE_SECONDS,
+            )
+            return False
+    except ValueError:
+        return False
+
+    # Compute expected signature over "{ts}.{raw_payload}".
+    signed_payload = f"{ts_value}.".encode("utf-8") + payload
+    expected = hmac.new(secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
+
+    return any(hmac.compare_digest(expected, v1) for v1 in v1_signatures)
 
 
 def _verify_pagerduty_signature(payload: bytes, signature: str, secret: str) -> bool:
@@ -179,7 +214,7 @@ PROVIDER_VERIFIERS: dict[str, Any] = {
     "generic": lambda p, sig, secret, **kw: _verify_hmac_sha256(p, sig, secret),
     "github": lambda p, sig, secret, **kw: _verify_github_signature(p, sig, secret),
     "slack": lambda p, sig, secret, **kw: _verify_slack_signature(p, sig, secret, kw.get("timestamp")),
-    "stripe": lambda p, sig, secret, **kw: _verify_stripe_signature(p, sig, secret),
+    "stripe": lambda p, sig, secret, **kw: _verify_stripe_signature(p, sig, secret, kw.get("timestamp")),
     "pagerduty": lambda p, sig, secret, **kw: _verify_pagerduty_signature(p, sig, secret),
     "grafana": lambda p, sig, secret, **kw: _verify_hmac_sha256(p, sig, secret),
 }
@@ -259,8 +294,13 @@ def _resolve_k8s_secret(secret_ref: str) -> str | None:
                 secret = v1.read_namespaced_secret(name=name, namespace=ns)
                 if secret.data and key in secret.data:
                     return base64.b64decode(secret.data[key]).decode("utf-8")
-            except Exception:
-                pass
+                logger.warning(
+                    "K8s secret '%s/%s' does not contain key '%s'", ns, name, key
+                )
+            except ImportError:
+                logger.warning("kubernetes package not installed; cannot resolve K8s secret ref")
+            except Exception as exc:  # noqa: BLE001 — K8s API errors vary widely
+                logger.warning("Failed to read K8s secret '%s/%s' key '%s': %s", ns, name, key, exc)
 
     env_var_name = secret_ref.replace("-", "_").replace(" ", "_").upper()
     return os.environ.get(env_var_name)
