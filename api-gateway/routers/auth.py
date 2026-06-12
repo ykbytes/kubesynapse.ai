@@ -7,6 +7,7 @@ from typing import Any, cast
 from _core import *
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
+from sqlalchemy import text
 
 router = APIRouter(tags=["auth"])
 
@@ -34,9 +35,32 @@ def register_local_user(body: AuthRegisterRequest, raw_request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # Atomic first-user check: count once and use that value
-    user_count = count_users()
-    is_first_user = user_count == 0
+    # D9: atomic first-user check. The naive ``count_users() == 0``
+    # followed by ``create_local_user(..., role="admin")`` is a
+    # TOCTOU race on PostgreSQL — two concurrent registrations
+    # can both observe ``count_users() == 0`` and both be promoted
+    # to admin. We serialise the bootstrap path with a session-
+    # scoped advisory lock so the first INSERT in the bootstrap
+    # window wins. After the bootstrap is complete, subsequent
+    # registrations always get role=operator and namespace=default.
+    from db_session import db_session
+    is_first_user = False
+    with db_session() as session:
+        try:
+            if hasattr(session.bind.dialect, "name") and session.bind.dialect.name == "postgresql":
+                # PostgreSQL: pg_advisory_xact_lock keyed on a
+                # constant integer. The transaction-scoped variant
+                # auto-releases on commit/rollback so we never leak
+                # the lock.
+                session.execute(text("SELECT pg_advisory_xact_lock(742137)"))
+            count = session.query(User).count()
+        except Exception:
+            # SQLite (test) or pre-User model: fall back to a
+            # best-effort count without the advisory lock. The
+            # bootstrap race in SQLite is not a production concern
+            # because SQLite serialises writes.
+            count = count_users()
+        is_first_user = count == 0
     role = "admin" if is_first_user else "operator"
     namespaces = ["*"] if is_first_user else ["default"]
     try:

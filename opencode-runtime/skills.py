@@ -1015,7 +1015,21 @@ def build_generated_config(
         if provider_proxy_base_url:
             provider_block.setdefault("options", {})["baseURL"] = provider_proxy_base_url
         elif "OPENAI_BASE_URL" in resolved:
-            provider_block.setdefault("options", {})["baseURL"] = resolved["OPENAI_BASE_URL"]
+            # D2: validate the OPENAI_BASE_URL against the trusted LLM
+            # host allowlist before forwarding to the opencode
+            # subprocess. An attacker who can set the container's
+            # OPENAI_BASE_URL env var could otherwise redirect the
+            # LLM SDK to an attacker endpoint for API-key exfiltration.
+            base_url = str(resolved["OPENAI_BASE_URL"]).strip()
+            if base_url and _is_trusted_llm_base_url(base_url):
+                provider_block.setdefault("options", {})["baseURL"] = base_url
+            else:
+                logger.warning(
+                    "Provider %s OPENAI_BASE_URL %r is not in the trusted "
+                    "LLM-provider allowlist; ignoring. Set "
+                    "OPENCODE_TRUSTED_LLM_HOSTS to add custom hosts.",
+                    provider_id, base_url,
+                )
         elif provider_id == "opencode-go":
             provider_block.setdefault("options", {})["baseURL"] = "https://opencode.ai/zen/go/v1"
         elif provider_id == "opencode":
@@ -1027,12 +1041,18 @@ def build_generated_config(
             if auth_content:
                 try:
                     auth_data = json.loads(auth_content)
-                    for key in (provider_id, provider_id.replace("-go", ""), provider_id.replace("-", "")):
-                        entry = auth_data.get(key)
+                    if not isinstance(auth_data, dict):
+                        auth_data = {}
+                    # M-NEW-4: exact-match provider lookup only. The
+                    # previous fuzzy ``replace("-go", "")`` matching
+                    # could pair e.g. provider="opencode" with key
+                    # "opencode-go" in the auth JSON, which can pick
+                    # up an unrelated key. We now only accept the
+                    # exact provider id.
+                    if provider_id in _TRUSTED_AUTH_PROVIDER_IDS:
+                        entry = auth_data.get(provider_id)
                         if isinstance(entry, dict) and entry.get("type") == "api":
                             api_key = str(entry.get("key", "")).strip()
-                            if api_key:
-                                break
                 except (json.JSONDecodeError, TypeError):
                     pass
         if provider_proxy_base_url:
@@ -1201,16 +1221,25 @@ _GIT_CRED_CACHE_TIMEOUT = int(os.getenv("GIT_CRED_CACHE_TIMEOUT_SECONDS", "3600"
 def _parse_allowed_hosts() -> set[str] | None:
     """Parse the ``GIT_ALLOWED_HOSTS`` env var into a set of lowercased hostnames.
 
-    Returns ``None`` when the variable is unset (legacy behaviour — accept
-    any host), or an empty set when it is set but empty (reject every
-    host). Returns the populated set otherwise.
+    D10: defaults to *deny-all* (empty set) when unset, not permissive
+    (None). The previous permissive default meant the runtime would
+    forward ``GIT_TOKEN`` to any host in the agent's repoUrl without
+    validation. Operators must now opt in to the legacy permissive
+    behavior by setting ``GIT_ALLOWED_HOSTS=*`` explicitly.
+
+    Returns ``None`` ONLY for the explicit ``*`` opt-in (legacy
+    permissive). Returns the empty set for ``""`` (deny all). Returns
+    the populated set otherwise.
     """
     raw = os.getenv("GIT_ALLOWED_HOSTS", "")
     if raw is None:
-        return None
-    if not raw.strip():
-        return set()
-    return {h.strip().lower() for h in raw.split(",") if h.strip()}
+        return set()  # default-deny when env var is missing
+    stripped = raw.strip()
+    if not stripped:
+        return set()  # explicit empty = deny all
+    if stripped == "*":
+        return None  # explicit opt-in to legacy permissive
+    return {h.strip().lower() for h in stripped.split(",") if h.strip()}
 
 
 def _extract_repo_host(repo_url: str) -> str | None:

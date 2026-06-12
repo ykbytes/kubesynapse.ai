@@ -268,6 +268,119 @@ func TestProxyPreservesConcreteTargetPath(t *testing.T) {
 	}
 }
 
+func TestSafeEqualBearer_ExactMatch(t *testing.T) {
+	if !safeEqualBearer("Bearer abc", "Bearer abc") {
+		t.Error("expected equal strings to match")
+	}
+}
+
+func TestSafeEqualBearer_RejectsMismatch(t *testing.T) {
+	if safeEqualBearer("Bearer abc", "Bearer abd") {
+		t.Error("expected mismatch to be rejected")
+	}
+	if safeEqualBearer("Bearer abc", "Bearer ab") {
+		t.Error("expected length mismatch to be rejected")
+	}
+	if safeEqualBearer("Bearer", "Bearer abc") {
+		t.Error("expected prefix-only match to be rejected")
+	}
+}
+
+func TestIsMCPRootedPath(t *testing.T) {
+	cases := map[string]bool{
+		"/mcp":          true,
+		"/mcp/":         true,
+		"/mcp/v1":       false,
+		"/api/v1":       false,
+		"":              false,
+		"/":             false,
+		"/mcpfoo":       false,
+		"/api/v1/mcp":   false,
+	}
+	for in, want := range cases {
+		if got := isMCPRootedPath(in); got != want {
+			t.Errorf("isMCPRootedPath(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestSanitizeForwardedHeaders(t *testing.T) {
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("X-Forwarded-For", "1.2.3.4")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Real-IP", "1.2.3.4")
+	req.Header.Set("True-Client-IP", "1.2.3.4")
+	req.Header.Set("CF-Connecting-IP", "1.2.3.4")
+	req.Header.Set("Proxy-Authorization", "Bearer leaked")
+	req.Header.Set("Forwarded", "for=1.2.3.4")
+	req.Header.Set("X-Forwarded-Host", "internal.svc")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer real")
+
+	sanitizeForwardedHeaders(req)
+
+	// All forwarded-* / proxy-auth / real-ip must be stripped.
+	for _, h := range []string{
+		"X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host",
+		"X-Real-IP", "True-Client-IP", "CF-Connecting-IP",
+		"Proxy-Authorization", "Forwarded",
+	} {
+		if got := req.Header.Get(h); got != "" {
+			t.Errorf("expected %q to be stripped, got %q", h, got)
+		}
+	}
+	// Content-Type and Authorization are NOT hop-by-hop and must survive.
+	if got := req.Header.Get("Content-Type"); got != "application/json" {
+		t.Errorf("expected Content-Type to survive, got %q", got)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer real" {
+		t.Errorf("expected Authorization to survive, got %q", got)
+	}
+}
+
+func TestPathConfusionGuardRefusesNonMCPTarget(t *testing.T) {
+	// D4 — a route with target=…/api/v1 must NOT rewrite a
+	// caller-supplied /mcp/users path to upstream /api/v1/users.
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/users" {
+			t.Fatalf("upstream received /api/v1/users — path confusion confirmed")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	target, err := url.Parse(backend.URL + "/api/v1")
+	if err != nil {
+		t.Fatalf("parse target: %v", err)
+	}
+
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalPath := req.URL.Path
+		originalDirector(req)
+		if isMCPRootedPath(target.Path) && strings.HasPrefix(originalPath, "/mcp") {
+			suffix := strings.TrimPrefix(originalPath, "/mcp")
+			req.URL.Path = joinURLPath(target.Path, suffix)
+			req.URL.RawPath = target.EscapedPath()
+		}
+	}
+
+	server := httptest.NewServer(proxy)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/mcp/users")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+}
+
 func TestHealthEndpoint(t *testing.T) {
 	healthMux := http.NewServeMux()
 	healthMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

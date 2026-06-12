@@ -2114,6 +2114,14 @@ def create_agent_statefulset_manifest(
             {"name": "GIT_REPO_URL", "value": git_config.get("repoUrl", "")},
             {"name": "GIT_AUTH_METHOD", "value": git_config.get("authMethod", "")},
         ]
+        # D10: derive ``GIT_ALLOWED_HOSTS`` from the parsed host so the
+        # runtime rejects credential sends to hosts that aren't in the
+        # configured repo URL. The runtime now defaults to deny-all
+        # when this env var is missing, so we must set it here.
+        if _parsed_repo.hostname:
+            git_sidecar_env.append(
+                {"name": "GIT_ALLOWED_HOSTS", "value": _parsed_repo.hostname.strip().lower()}
+            )
         git_branch = str(git_config.get("branch", "")).strip()
         if git_branch:
             git_sidecar_env.append({"name": "GIT_BRANCH", "value": git_branch})
@@ -2160,6 +2168,13 @@ def create_agent_statefulset_manifest(
             {"name": "GIT_REPO_URL", "value": git_config.get("repoUrl", "")},
             {"name": "GIT_AUTH_METHOD", "value": git_config.get("authMethod", "")},
         ]
+        # D10: mirror GIT_ALLOWED_HOSTS into the main agent container
+        # so the runtime's deny-all default doesn't break
+        # credential-helper-driven git operations.
+        if _parsed_repo.hostname:
+            git_agent_env.append(
+                {"name": "GIT_ALLOWED_HOSTS", "value": _parsed_repo.hostname.strip().lower()}
+            )
         if git_branch:
             git_agent_env.append({"name": "GIT_BRANCH", "value": git_branch})
         if cred_secret and auth_method == "token":

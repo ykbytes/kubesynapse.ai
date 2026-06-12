@@ -349,10 +349,32 @@ def principal_from_local_user(user: dict[str, Any], session_id: str) -> dict[str
 
 
 def principal_from_oidc_claims(claims: dict[str, Any]) -> dict[str, Any]:
-    """Build a principal from OIDC JWT claims."""
+    """Build a principal from OIDC JWT claims.
+
+    Security (D7, D8): role and namespace values are taken from
+    OIDC claims but capped by per-provider (or platform-wide) role /
+    namespace allowlists. Without these caps, a misconfigured IdP that
+    emits ``role: "admin"`` in every user claim would mint admin
+    principals for every external user — a tenancy-escalation
+    disaster. The role allowlist is ``ROLE_PRIORITY`` (admin / operator /
+    viewer); the namespace allowlist is provided by the operator via
+    ``OIDC ALLOWED_NAMESPACES`` (comma-separated) or, when unset, the
+    empty default ("all namespaces are denied" — fail closed).
+    """
     provider = get_oidc_provider(issuer=str(claims.get("iss") or ""))
     group_claim = str(provider.get("group_claim") or "groups") if provider else "groups"
     groups = claim_string_list(claims.get(group_claim))
+
+    # D7: cap the role ceiling at the provider's configured max role.
+    provider_max_role = (
+        str(provider.get("max_role") or "").strip().lower()
+        if isinstance(provider, dict)
+        else ""
+    )
+    if provider_max_role and provider_max_role not in ROLE_PRIORITY:
+        provider_max_role = ""
+    max_role_rank = ROLE_PRIORITY.get(provider_max_role, 0) if provider_max_role else 0
+
     mapped_role = None
     mapped_namespaces: list[str] = []
     if provider is not None:
@@ -360,16 +382,53 @@ def principal_from_oidc_claims(claims: dict[str, Any]) -> dict[str, Any]:
         if isinstance(role_mapping, dict):
             mapped_role, mapped_namespaces = resolve_role_mapping(groups, role_mapping)
 
+    # Collect role candidates from ``roles`` claim and the single
+    # ``role`` claim, but only consider values that the provider is
+    # allowed to issue (D7) AND that exist in ROLE_PRIORITY.
     role_candidates = claim_string_list(claims.get("roles"))
     if claims.get("role") is not None:
         role_candidates.insert(0, str(claims.get("role")))
-    role = mapped_role if mapped_role in ROLE_PRIORITY else next(
-        (item for item in role_candidates if item in ROLE_PRIORITY),
-        "viewer",
+    valid_role_candidates = [r for r in role_candidates if r in ROLE_PRIORITY]
+    chosen_role = mapped_role if mapped_role in ROLE_PRIORITY else next(
+        iter(valid_role_candidates), "viewer",
     )
-    allowed_namespaces = mapped_namespaces or normalize_namespaces(
-        claims.get("allowed_namespaces") or claims.get("namespaces") or []
-    ) or []
+    # D7: clamp the chosen role to the provider's max_role ceiling.
+    if max_role_rank and ROLE_PRIORITY.get(chosen_role, 0) > max_role_rank:
+        chosen_role = provider_max_role or "viewer"
+    role = chosen_role
+
+    # D8: cap allowed_namespaces to the provider's allowlist. The
+    # IdP cannot grant the user access to a namespace the operator
+    # has not explicitly approved for this provider.
+    raw_namespaces: list[str] = []
+    if mapped_namespaces:
+        raw_namespaces.extend(mapped_namespaces)
+    if claims.get("allowed_namespaces") or claims.get("namespaces"):
+        raw_namespaces.extend(
+            normalize_namespaces(
+                claims.get("allowed_namespaces") or claims.get("namespaces") or []
+            )
+        )
+    provider_ns_allowlist: set[str] | None = None
+    if isinstance(provider, dict):
+        ns_allow = provider.get("namespace_allowlist")
+        if isinstance(ns_allow, list) and ns_allow:
+            provider_ns_allowlist = {
+                str(n).strip() for n in ns_allow if str(n).strip()
+            }
+    if provider_ns_allowlist is not None:
+        filtered = [n for n in raw_namespaces if n in provider_ns_allowlist]
+    else:
+        # Fail closed: provider configured no allowlist — do not
+        # accept any namespace claim from the IdP. The user lands
+        # in [] which means they cannot access any namespace. This
+        # is the safe default; operators must opt in by setting
+        # ``namespace_allowlist`` per provider.
+        filtered = []
+    # Admin always gets ["*"] regardless of IdP claims (D8 second
+    # half) — admin authority is local, never federated.
+    allowed_namespaces = ["*"] if role == "admin" else (filtered or [])
+
     email = str(claims.get("email") or "").strip() or None
     preferred_username = str(
         claims.get("preferred_username")
@@ -458,7 +517,7 @@ def issue_session_response(user: dict[str, Any], session_record: dict[str, Any],
 
 def ensure_role(user: dict[str, Any], minimum_role: str) -> dict[str, Any]:
     """Raise 403 if user does not have the minimum role."""
-    from error_codes import build_error_response, ErrorCode
+    from error_codes import ErrorCode, build_error_response
 
     current_role = str(user.get("role") or "viewer")
     if ROLE_PRIORITY.get(current_role, 0) < ROLE_PRIORITY.get(minimum_role, 0):
@@ -475,7 +534,7 @@ def ensure_role(user: dict[str, Any], minimum_role: str) -> dict[str, Any]:
 
 def ensure_namespace_access(user: dict[str, Any], namespace: str, minimum_role: str = "viewer") -> dict[str, Any]:
     """Raise 403 if user cannot access the given namespace."""
-    from error_codes import build_error_response, ErrorCode
+    from error_codes import ErrorCode, build_error_response
 
     ensure_role(user, minimum_role)
     if str(user.get("role") or "viewer") == "admin":
