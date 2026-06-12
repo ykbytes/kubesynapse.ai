@@ -3014,12 +3014,111 @@ export async function fetchWorkflowNextAction(
   });
 }
 
+/**
+ * EventSource-compatible wrapper built on top of {@link fetchEventSource}.
+ *
+ * The native `EventSource` constructor does not allow setting custom
+ * request headers, which forces callers to pass the auth token in the
+ * URL query string. Tokens in query strings end up in reverse-proxy
+ * access logs, browser history, and HTTP Referer headers, so the
+ * helper below routes the token through the standard `Authorization`
+ * header instead.
+ *
+ * The wrapper exposes the subset of the `EventSource` API used by the
+ * existing call sites (`.close()`, `.addEventListener(name, handler)`,
+ * `.onmessage`, `.onerror`, `.onopen`) so consumers do not need to
+ * change.
+ */
+interface EventSourceLike {
+  close(): void;
+  addEventListener(type: string, listener: (event: MessageEvent) => void): void;
+  onmessage: ((event: MessageEvent) => void) | null;
+  onerror: ((event: Event) => void) | null;
+  onopen: ((event: Event) => void) | null;
+  readyState: number;
+}
+
+function createHeaderEventSource(
+  url: string,
+  token: string,
+  extraQuery: Record<string, string | number> = {},
+): EventSourceLike {
+  const controller = new AbortController();
+  const listeners = new Map<string, Set<(event: MessageEvent) => void>>();
+  const compat: EventSourceLike = {
+    close(): void {
+      controller.abort();
+    },
+    addEventListener(type: string, listener: (event: MessageEvent) => void): void {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type)!.add(listener);
+    },
+    onmessage: null,
+    onerror: null,
+    onopen: null,
+    readyState: 0,
+  };
+
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(extraQuery)) {
+    params.set(k, String(v));
+  }
+  const fullUrl = params.toString()
+    ? `${url}${url.includes("?") ? "&" : "?"}${params.toString()}`
+    : url;
+
+  void fetchEventSource(fullUrl, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "text/event-stream",
+    },
+    signal: controller.signal,
+    openWhenHidden: true,
+    fetch: buildEventSourceFetch(token),
+    async onopen(response) {
+      compat.readyState = 1;
+      if (compat.onopen) compat.onopen(new Event("open"));
+      if (response.status >= 400) {
+        throw new Error(`SSE connection failed: ${response.status}`);
+      }
+    },
+    onmessage(event) {
+      const messageEvent = new MessageEvent(event.event || "message", {
+        data: event.data,
+      });
+      const named = listeners.get(event.event || "message");
+      if (named) for (const fn of named) fn(messageEvent);
+      if (compat.onmessage) compat.onmessage(messageEvent);
+    },
+    onclose() {
+      compat.readyState = 2;
+      if (compat.onerror) compat.onerror(new Event("error"));
+    },
+    onerror(err) {
+      if (compat.onerror) compat.onerror(new Event("error"));
+      // Re-throw so the underlying fetchEventSource handles reconnect
+      throw err;
+    },
+  }).catch(() => {
+    /* swallow — errors surface via onerror callback */
+  });
+
+  return compat;
+}
+
 export function createWorkflowStatusStream(
   token: string,
   namespace: string,
   workflowName: string,
 ): EventSource {
   const url = buildUrl(`/api/workflows/${workflowName}/status/stream`, namespace);
+  // Prefer header-based auth to avoid leaking the token in proxy logs
+  // and browser history. Falls back to query-string EventSource when
+  // the wrapper is unavailable (e.g. server bundle missing fetchEventSource).
+  if (typeof AbortController !== "undefined" && typeof fetchEventSource === "function") {
+    return createHeaderEventSource(url, token) as unknown as EventSource;
+  }
   return new EventSource(`${url}&token=${encodeURIComponent(token)}`);
 }
 
@@ -3030,6 +3129,9 @@ export function createWorkflowActivitiesStream(
   tail = 100,
 ): EventSource {
   const url = buildUrl(`/api/workflows/${workflowName}/activities/stream`, namespace);
+  if (typeof AbortController !== "undefined" && typeof fetchEventSource === "function") {
+    return createHeaderEventSource(url, token, { tail }) as unknown as EventSource;
+  }
   return new EventSource(`${url}&tail=${tail}&token=${encodeURIComponent(token)}`);
 }
 
@@ -3038,6 +3140,9 @@ export function createNotificationStream(
   namespace: string,
 ): EventSource {
   const url = buildUrl("/api/notifications/stream", namespace);
+  if (typeof AbortController !== "undefined" && typeof fetchEventSource === "function") {
+    return createHeaderEventSource(url, token) as unknown as EventSource;
+  }
   return new EventSource(`${url}&token=${encodeURIComponent(token)}`);
 }
 

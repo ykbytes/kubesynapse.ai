@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
-import json
 import logging
 import os
 import time
@@ -73,6 +72,7 @@ from memory import (
 from models import InvokeRequest, InvokeResponse
 from opencode_client import (
     abort_session,
+    auto_approve_pending_questions,
     create_remote_session,
     ensure_server_running,
     get_session_message,
@@ -80,7 +80,6 @@ from opencode_client import (
     get_session_status,
     get_session_todos,
     init_session,
-    auto_approve_pending_questions,
     send_prompt_async,
     summarize_session,
     wait_for_session_idle,
@@ -268,24 +267,34 @@ def build_gateway_a2a_jsonrpc_payload(payload: dict[str, Any], request_id: str) 
 
 
 def extract_text_from_a2a_parts(parts: Any) -> str:
+    """Concatenate A2A message parts into a single text prompt.
+
+    Security (C-NEW-5): all text and data parts are passed through the
+    prompt-injection sanitizer before concatenation. A malicious peer
+    agent (or compromised upstream) cannot inject
+    ``</description><system-reminder>`` style envelope tags to
+    hijack the agent's behavior.
+    """
+    from content_safety import sanitize_a2a_data_part, sanitize_a2a_text_part  # local to avoid cycles
+
     if not isinstance(parts, list):
         return ""
 
     chunks: list[str] = []
-    for raw_part in parts:
+    for index, raw_part in enumerate(parts):
         if not isinstance(raw_part, dict):
             continue
         text = raw_part.get("text")
         if isinstance(text, str) and text.strip():
-            chunks.append(text)
+            chunks.append(sanitize_a2a_text_part(text, source=f"a2a-part[{index}].text"))
             continue
         if "data" in raw_part:
-            try:
-                rendered = json.dumps(raw_part.get("data"), ensure_ascii=False, default=str)
-            except TypeError:
-                rendered = str(raw_part.get("data"))
-            if rendered.strip():
-                chunks.append(rendered)
+            chunks.append(
+                sanitize_a2a_data_part(
+                    raw_part.get("data"),
+                    source=f"a2a-part[{index}].data",
+                )
+            )
     return "\n\n".join(chunk for chunk in chunks if chunk.strip()).strip()
 
 
@@ -778,7 +787,7 @@ def _send_prompt_async_with_session_recovery(
             # LLM error, or race condition).  Re-send the prompt.
             if time.monotonic() > idle_grace_until:
                 session_status = get_session_status(session_id)
-                if str(session_status.get("type", "idle")) == "idle":  # noqa: SIM102 — nested if for readability
+                if str(session_status.get("type", "idle")) == "idle":
                     if idle_retry_count < max_idle_retries:
                         idle_retry_count += 1
                         logger.warning(
@@ -1439,7 +1448,7 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
         response_text = build_tool_only_response(collected_tool_calls)
     if not response_text:
         response_text = "(no output)"
-    
+
     # Defense-in-depth: redact any leaked secrets from the response text and warnings
     response_text = redact_secrets(response_text)
     all_warnings = [redact_secrets(w) for w in all_warnings]

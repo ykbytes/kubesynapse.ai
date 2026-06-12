@@ -17,15 +17,39 @@ async def get_well_known_agent_card(
     namespace: str | None = None,
     authorization: str | None = Header(default=None),
 ):
+    # M11: Authentication is optional for backward compatibility with the
+    # agent-discovery spec, but when no valid token is supplied we
+    # redact the operationally sensitive fields (skills, endpoint URL,
+    # detailed description) so an unauthenticated attacker cannot
+    # enumerate the platform's agents or learn their API paths.
+    is_authenticated = False
     if authorization is not None and authorization.strip():
-        await verify_token(authorization)
+        try:
+            await verify_token(authorization)
+            is_authenticated = True
+        except HTTPException:
+            # Invalid token — treat as unauthenticated and fall through
+            # to the redacted response. The same call with a valid
+            # token returns the full card.
+            is_authenticated = False
 
     try:
         agent_name, resolved_namespace = resolve_a2a_agent_reference(assistant_id, namespace)
     except A2AJSONRPCError as exc:
         raise a2a_card_http_exception(exc) from exc
 
-    return JSONResponse(build_agent_card(agent_name, resolved_namespace, request))
+    card = build_agent_card(agent_name, resolved_namespace, request)
+    if not is_authenticated:
+        # Strip operational details while preserving the schema-level
+        # fields a discovery client needs to know how to authenticate.
+        card.pop("skills", None)
+        card.pop("description", None)
+        if "supportedInterfaces" in card:
+            card["supportedInterfaces"] = [
+                {k: v for k, v in iface.items() if k != "url"}
+                for iface in card["supportedInterfaces"]
+            ]
+    return JSONResponse(card)
 
 
 @router.post("/a2a/{assistant_id}")

@@ -90,15 +90,30 @@ SERVICE_NAMESPACE = os.getenv("AGENT_NAMESPACE", "default").strip() or "default"
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-HOME_DIR = os.getenv("HOME", "/app/state/home").strip() or "/app/state/home"
-XDG_CONFIG_HOME = os.getenv("XDG_CONFIG_HOME", f"{HOME_DIR}/.config").strip() or f"{HOME_DIR}/.config"
-XDG_DATA_HOME = os.getenv("XDG_DATA_HOME", f"{HOME_DIR}/.local/share").strip() or f"{HOME_DIR}/.local/share"
+# Security (M-NEW-5, M-NEW-6, M-NEW-7): the path-related env vars below
+# are now derived from the operator-supplied mount layout, not from
+# arbitrary container env. The legacy ``HOME`` and ``OPENCODE_BIN``
+# and ``OPENCODE_WORKDIR`` overrides are no longer honored — they are
+# fixed to safe values. The container is read-only-rootfs in
+# production (see Helm chart) so even if these were attacker-
+# controllable they would be constrained by the mount layout, but
+# ignoring them entirely removes a defense-in-depth concern.
+_DEFAULT_HOME_DIR = "/app/state/home"
+_DEFAULT_OPENCODE_BIN = "opencode"
+_DEFAULT_OPENCODE_WORKDIR = "/workspace"
+XDG_CONFIG_HOME = os.getenv("XDG_CONFIG_HOME", f"{_DEFAULT_HOME_DIR}/.config").strip() or f"{_DEFAULT_HOME_DIR}/.config"
+XDG_DATA_HOME = os.getenv("XDG_DATA_HOME", f"{_DEFAULT_HOME_DIR}/.local/share").strip() or f"{_DEFAULT_HOME_DIR}/.local/share"
 OPENCODE_CONFIG_DIR = (
     os.getenv("OPENCODE_CONFIG_DIR", f"{XDG_CONFIG_HOME}/opencode-profile").strip()
     or f"{XDG_CONFIG_HOME}/opencode-profile"
 )
-OPENCODE_BIN = os.getenv("OPENCODE_BIN", "opencode").strip() or "opencode"
-OPENCODE_WORKDIR = os.getenv("OPENCODE_WORKDIR", "/workspace").strip() or "/workspace"
+# Use ``_DEFAULT_HOME_DIR`` as HOME — the operator configures the
+# actual path via the StatefulSet volume mount; we do not allow the
+# container env to redirect HOME because doing so would change where
+# every state file (sessions, memory, skills) is written.
+HOME_DIR = _DEFAULT_HOME_DIR
+OPENCODE_BIN = _DEFAULT_OPENCODE_BIN
+OPENCODE_WORKDIR = _DEFAULT_OPENCODE_WORKDIR
 OPENCODE_SERVER_HOST = os.getenv("OPENCODE_SERVER_HOST", "127.0.0.1").strip() or "127.0.0.1"
 OPENCODE_SERVER_PORT = max(_safe_int("OPENCODE_SERVER_PORT", 4096), 1024)
 

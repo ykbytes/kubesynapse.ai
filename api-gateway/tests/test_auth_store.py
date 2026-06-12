@@ -26,6 +26,11 @@ def load_auth_store(database_path: Path) -> tuple[str, object]:
             "DATABASE_URL": "",
             "DATABASE_HOST": "",
             "DATABASE_SQLITE_PATH": str(database_path),
+            # Required for hash_refresh_token / password-reset HMAC since
+            # the security hardening (C4/C5) refuses to operate without
+            # a configured secret. Tests use a deterministic placeholder
+            # so verify_refresh_token_hash can round-trip.
+            "JWT_SECRET": "test-jwt-secret-do-not-use-in-production",
         },
         clear=False,
     ):
@@ -43,6 +48,21 @@ class AuthStoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
+
+        # Patch JWT_SECRET for the entire test. The auth_store module
+        # now reads JWT_SECRET at call time (not just import time) for
+        # refresh-token and password-reset hashing, so the env var must
+        # remain in place for the duration of every test that exercises
+        # session creation or password reset.
+        self._env_patch = patch.dict(
+            os.environ,
+            {
+                "JWT_SECRET": "test-jwt-secret-do-not-use-in-production",
+            },
+            clear=False,
+        )
+        self._env_patch.start()
+        self.addCleanup(self._env_patch.stop)
 
         database_path = Path(self.temp_dir.name) / "auth-store.db"
         self.module_name, self.auth_store = load_auth_store(database_path)
@@ -124,7 +144,7 @@ class AuthStoreTests(unittest.TestCase):
     def test_change_user_password_updates_stored_hash(self) -> None:
         user = self.auth_store.create_local_user(
             username="Bob",
-            password="OldPassw0rd",
+            password="OldPassw0rd!",
             email="bob@example.com",
             display_name="Bob Viewer",
             role="viewer",
@@ -132,19 +152,19 @@ class AuthStoreTests(unittest.TestCase):
         )
 
         with self.assertRaises(ValueError):
-            self.auth_store.change_user_password(int(user["id"]), "WrongPw1", "NewPassw0rd")
+            self.auth_store.change_user_password(int(user["id"]), "WrongPw1!", "NewPassw0rd!")
 
         updated_user = self.auth_store.change_user_password(
             int(user["id"]),
-            "OldPassw0rd",
-            "NewPassw0rd",
+            "OldPassw0rd!",
+            "NewPassw0rd!",
         )
         stored_user = self.auth_store.get_user_by_id(int(user["id"]))
 
         self.assertEqual(updated_user["id"], user["id"])
         self.assertIsNotNone(stored_user)
-        self.assertTrue(self.auth_store.verify_password("NewPassw0rd", stored_user.password_hash))
-        self.assertFalse(self.auth_store.verify_password("OldPassw0rd", stored_user.password_hash))
+        self.assertTrue(self.auth_store.verify_password("NewPassw0rd!", stored_user.password_hash))
+        self.assertFalse(self.auth_store.verify_password("OldPassw0rd!", stored_user.password_hash))
 
     def test_admin_users_are_serialized_with_wildcard_namespace_access(self) -> None:
         user = self.auth_store.create_local_user(
@@ -335,7 +355,13 @@ class AuthStoreTests(unittest.TestCase):
     # -- Password policy tests ------------------------------------------------
 
     def test_password_meets_policy_accepts_strong_password(self) -> None:
-        self.assertTrue(self.auth_store.password_meets_policy("Passw0rd"))
+        # Policy requires 4 character classes (uppercase, lowercase,
+        # digit, symbol) so a passphrase with all four is accepted.
+        self.assertTrue(self.auth_store.password_meets_policy("Strong-Pass-2026!"))
+        # Verify each rejected class — these were accepted by the old
+        # (3-class) policy but are rejected by the new (4-class) policy.
+        self.assertFalse(self.auth_store.password_meets_policy("Passw0rd"))
+        self.assertFalse(self.auth_store.password_meets_policy("Longpassword"))
 
     def test_password_meets_policy_rejects_too_short(self) -> None:
         self.assertFalse(self.auth_store.password_meets_policy("Ab1"))
@@ -395,7 +421,7 @@ class AuthStoreTests(unittest.TestCase):
     def test_create_user_rejects_duplicate_username(self) -> None:
         self.auth_store.create_local_user(
             username="dupuser",
-            password="Passw0rd1",
+            password="Passw0rd!1",
             email="dup1@example.com",
             display_name="Dup User",
             role="viewer",
@@ -404,7 +430,7 @@ class AuthStoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.auth_store.create_local_user(
                 username="dupuser",
-                password="Passw0rd2",
+                password="Passw0rd!2",
                 email="dup2@example.com",
                 display_name="Dup User 2",
                 role="viewer",

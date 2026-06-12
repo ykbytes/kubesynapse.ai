@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import time
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from fastapi import Request as FastAPIRequest
-
 from webhook_security import (
     PROVIDER_VERIFIERS,
     check_webhook_concurrency,
@@ -116,10 +114,18 @@ class TestProviderVerifiers:
         sig = _hmac_sig(payload, self.SECRET)
         assert verify_provider_signature("grafana", payload, sig, self.SECRET) is True
 
-    def test_unknown_provider_falls_back(self) -> None:
+    def test_unknown_provider_rejected(self) -> None:
+        """Unknown provider names are rejected outright (no generic HMAC fallback).
+
+        Silently falling back to generic HMAC would let an attacker bypass
+        provider-specific protections by sending a bogus provider name.
+        See security finding H5 / SECURITY-FINDINGS-ROUND2.md.
+        """
         payload = b'{"event":"unknown"}'
         sig = _hmac_sig(payload, self.SECRET)
-        assert verify_provider_signature("nonexistent", payload, sig, self.SECRET) is True
+        # Even with a valid HMAC signature, an unknown provider must be
+        # rejected — the verifier cannot trust a provider it does not know.
+        assert verify_provider_signature("nonexistent", payload, sig, self.SECRET) is False
 
     def test_unknown_provider_bad_sig(self) -> None:
         payload = b'{"event":"unknown"}'

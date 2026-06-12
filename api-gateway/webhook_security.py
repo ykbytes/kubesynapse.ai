@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import logging
 import os
 import threading
@@ -192,11 +191,20 @@ def verify_provider_signature(
     secret: str,
     **kwargs: Any,
 ) -> bool:
-    """Verify a webhook signature using the appropriate provider verifier."""
+    """Verify a webhook signature using the appropriate provider verifier.
+
+    Unknown providers are rejected outright (no silent fallback to generic
+    HMAC) to prevent an attacker from bypassing provider-specific checks by
+    sending a bogus provider name.
+    """
     verifier = PROVIDER_VERIFIERS.get(provider)
     if verifier is None:
-        logger.warning("Unknown webhook provider '%s'; falling back to generic HMAC", provider)
-        return _verify_hmac_sha256(raw_body, signature, secret)
+        logger.warning(
+            "Unknown webhook provider '%s' — rejecting (no generic fallback). "
+            "Configure the provider explicitly or update PROVIDER_VERIFIERS.",
+            provider,
+        )
+        return False
     return verifier(raw_body, signature, secret, **kwargs)
 
 
@@ -240,30 +248,54 @@ def resolve_webhook_secret_with_key_id(
 
 
 def _resolve_k8s_secret(secret_ref: str) -> str | None:
-    """Resolve a K8s Secret reference (namespace/name#key) or env var."""
+    """Resolve a K8s Secret reference in the format ``namespace/name#key``.
+
+    Only Kubernetes Secrets are accepted — environment variable fallback is
+    disabled to prevent silent secret resolution from process environment
+    (e.g. an attacker who can write a single env var could substitute
+    webhook secrets). Returns ``None`` when the format is invalid or the
+    secret cannot be read.
+    """
     if not secret_ref or not secret_ref.strip():
         return None
 
-    if "/" in secret_ref:
-        parts = secret_ref.split("/", 1)
-        ns = parts[0].strip()
-        rest = parts[1]
-        if "#" in rest:
-            name_part, key = rest.split("#", 1)
-            name = name_part.strip()
-            key = key.strip()
-            try:
-                import base64
-                import kubernetes.client
-                v1 = kubernetes.client.CoreV1Api()
-                secret = v1.read_namespaced_secret(name=name, namespace=ns)
-                if secret.data and key in secret.data:
-                    return base64.b64decode(secret.data[key]).decode("utf-8")
-            except Exception:
-                pass
+    if "/" not in secret_ref:
+        logger.warning(
+            "Webhook secret_ref '%s' is not in the required 'namespace/name#key' format; "
+            "environment variable fallback is disabled for security.",
+            secret_ref,
+        )
+        return None
 
-    env_var_name = secret_ref.replace("-", "_").replace(" ", "_").upper()
-    return os.environ.get(env_var_name)
+    parts = secret_ref.split("/", 1)
+    ns = parts[0].strip()
+    rest = parts[1]
+    if "#" not in rest:
+        logger.warning(
+            "Webhook secret_ref '%s' is missing the '#key' suffix; refusing to resolve.",
+            secret_ref,
+        )
+        return None
+
+    name_part, key = rest.split("#", 1)
+    name = name_part.strip()
+    key = key.strip()
+    if not ns or not name or not key:
+        return None
+    try:
+        import base64
+
+        import kubernetes.client
+        v1 = kubernetes.client.CoreV1Api()
+        secret = v1.read_namespaced_secret(name=name, namespace=ns)
+        if secret.data and key in secret.data:
+            return base64.b64decode(secret.data[key]).decode("utf-8")
+        logger.warning("K8s secret '%s/%s' does not contain key '%s'", ns, name, key)
+    except ImportError:
+        logger.warning("kubernetes package not installed; cannot resolve K8s secret ref")
+    except Exception as exc:
+        logger.warning("Failed to read K8s secret '%s/%s' key '%s': %s", ns, name, key, exc)
+    return None
 
 
 # ---------------------------------------------------------------------------

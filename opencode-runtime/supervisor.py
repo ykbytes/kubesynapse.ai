@@ -78,17 +78,18 @@ def _resolve_provider_id() -> str:
 
 
 _ENV_ALLOWLIST: frozenset[str] = frozenset({
-    "HOME",
+    # NOTE: ``HOME``, ``OPENCODE_BIN``, ``OPENCODE_WORKDIR``,
+    # ``XDG_CONFIG_HOME``, ``XDG_DATA_HOME`` and ``OPENCODE_CONFIG_DIR``
+    # are intentionally absent. These are now fixed constants in
+    # ``config.py`` (set to safe operator-configured paths) and are
+    # overwritten by ``build_server_env`` with the module values.
+    # Allowing the container env to pass them through would defeat
+    # the M-NEW-5/6/7 hardening.
     "PATH",
     "LANG",
     "LC_ALL",
     "TERM",
     "TZ",
-    "XDG_CONFIG_HOME",
-    "XDG_DATA_HOME",
-    "OPENCODE_CONFIG_DIR",
-    "OPENCODE_WORKDIR",
-    "OPENCODE_BIN",
     "OPENCODE_PROVIDER",
     "OPENCODE_MODEL",
     "OPENCODE_SYSTEM_PROMPT",
@@ -181,10 +182,49 @@ def build_server_env(config_content: dict[str, Any]) -> dict[str, str]:
     return env
 
 
+#: Provider IDs accepted by ``OPENCODE_AUTH_CONTENT``. Any other key in
+#: the JSON is silently ignored. Mirrors
+#: ``_TRUSTED_AUTH_PROVIDER_IDS`` in skills.py — keep in sync.
+_TRUSTED_AUTH_PROVIDER_IDS: frozenset[str] = frozenset({
+    "anthropic",
+    "openai",
+    "google",
+    "google-vertex",
+    "github-copilot",
+    "openrouter",
+    "mistral",
+    "deepseek",
+    "groq",
+    "cohere",
+    "azure",
+    "opencode",
+    "opencode-go",
+})
+
+
 def _inject_auth_key_from_content(env: dict[str, str], provider_id: str) -> None:
-    """Read OPENCODE_AUTH_CONTENT and inject OPENAI_API_KEY for the AI SDK."""
+    """Read ``OPENCODE_AUTH_CONTENT`` and inject the matching API key.
+
+    Multi-tenancy hardening (H-NEW-1, M-NEW-4):
+
+    * Only provider IDs in the trusted allowlist are honoured. Any
+      key in the JSON whose provider ID is not allowlisted is
+      silently dropped — this prevents a misconfigured Secret from
+      injecting an attacker-controlled key for an unknown provider.
+
+    * Lookup is exact-match only. The previous implementation
+      accepted ``"opencode-go"`` against a lookup for ``"opencode"``
+      via ``replace("-go", "")`` which could match the wrong
+      provider's key. Now we only match the exact provider ID.
+    """
     auth_content = os.getenv("OPENCODE_AUTH_CONTENT", "").strip()
     if not auth_content:
+        return
+    if provider_id not in _TRUSTED_AUTH_PROVIDER_IDS:
+        logger.debug(
+            "Provider '%s' is not in the trusted allowlist; ignoring OPENCODE_AUTH_CONTENT.",
+            provider_id,
+        )
         return
     try:
         auth_data = json.loads(auth_content)
@@ -192,16 +232,17 @@ def _inject_auth_key_from_content(env: dict[str, str], provider_id: str) -> None
         return
     if not isinstance(auth_data, dict):
         return
-    # Try exact provider ID first, then try without dash suffix
-    for key in (provider_id, provider_id.replace("-go", ""), provider_id.replace("-", "")):
-        entry = auth_data.get(key)
-        if isinstance(entry, dict) and entry.get("type") == "api":
-            api_key = str(entry.get("key", "")).strip()
-            if api_key:
-                env.setdefault("OPENAI_API_KEY", api_key)
-                env.setdefault("OPENCODE_API_KEY", api_key)
-                logger.info("Injected API key from OPENCODE_AUTH_CONTENT for provider '%s' (matched key '%s')", provider_id, key)
-                return
+    entry = auth_data.get(provider_id)
+    if not isinstance(entry, dict) or entry.get("type") != "api":
+        return
+    api_key = str(entry.get("key", "")).strip()
+    if api_key:
+        env.setdefault("OPENAI_API_KEY", api_key)
+        env.setdefault("OPENCODE_API_KEY", api_key)
+        logger.info(
+            "Injected API key from OPENCODE_AUTH_CONTENT for provider '%s'",
+            provider_id,
+        )
 
 
 # ---------------------------------------------------------------------------
