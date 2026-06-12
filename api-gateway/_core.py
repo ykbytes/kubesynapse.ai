@@ -334,8 +334,25 @@ async def lifespan(app: FastAPI):
             _scheduler_task = asyncio.create_task(_intelligence_scheduler_loop())
         except NameError:
             pass
+        
+        # §2.2 — Mark gateway as ready for health checks
+        try:
+            from main import _GATEWAY_STATE
+            _GATEWAY_STATE["ready"] = True
+            logger.info("API gateway is ready to serve requests")
+        except (ImportError, NameError):
+            logger.warning("Could not set gateway ready state (main module not available)")
+        
         yield
     finally:
+        # §2.2 — Mark gateway as not ready during shutdown
+        try:
+            from main import _GATEWAY_STATE
+            _GATEWAY_STATE["ready"] = False
+            _GATEWAY_STATE["shutdown_requested"] = True
+        except (ImportError, NameError):
+            pass
+        
         _SHUTDOWN.set()
         if _scheduler_task is not None:
             _scheduler_task.cancel()

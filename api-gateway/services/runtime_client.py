@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 import threading
 import time
@@ -118,6 +119,21 @@ class CircuitBreakerRegistry:
 _registry = CircuitBreakerRegistry()
 
 
+def runtime_auth_headers(headers: dict[str, str] | None = None) -> dict[str, str]:
+    """Return headers including the gateway-to-runtime Bearer token when configured."""
+    merged = dict(headers or {})
+    if any(key.lower() == "authorization" for key in merged):
+        return merged
+    token = (
+        os.getenv("RUNTIME_BEARER_TOKEN", "").strip()
+        or os.getenv("AGENT_RUNTIME_SHARED_TOKEN", "").strip()
+        or os.getenv("API_GATEWAY_SHARED_TOKEN", "").strip()
+    )
+    if token:
+        merged["Authorization"] = f"Bearer {token}"
+    return merged
+
+
 @dataclass
 class RuntimeHealthCheck:
     """Result of a runtime health pre-check."""
@@ -130,12 +146,14 @@ class RuntimeHealthCheck:
 async def check_runtime_health(
     runtime_url: str,
     timeout: float = 2.0,
+    headers: dict[str, str] | None = None,
 ) -> RuntimeHealthCheck:
     """Check if an agent runtime is healthy before invoking.
 
     Returns health status with latency measurement.
     """
     start = time.monotonic()
+    request_headers = runtime_auth_headers(headers)
     try:
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             if not hasattr(client, "get"):
@@ -145,7 +163,7 @@ async def check_runtime_health(
                     message="Runtime health check skipped",
                     latency_ms=latency_ms,
                 )
-            response = await client.get(f"{runtime_url}/health")
+            response = await client.get(f"{runtime_url}/health", headers=request_headers)
             latency_ms = (time.monotonic() - start) * 1000
             if response.status_code == 200:
                 return RuntimeHealthCheck(is_healthy=True, message="Runtime is healthy", latency_ms=latency_ms)
@@ -237,7 +255,7 @@ async def invoke_with_retry(
         CircuitBreakerOpenError: When circuit breaker is open
     """
     url = f"{runtime_url}{endpoint}"
-    headers = headers or {}
+    headers = runtime_auth_headers(headers)
 
     # Circuit breaker check
     if agent_key:
@@ -250,7 +268,7 @@ async def invoke_with_retry(
 
     # Health pre-check (skip for streaming to avoid double latency)
     if not skip_health_check and not endpoint.startswith("/invoke/stream"):
-        health = await check_runtime_health(runtime_url)
+        health = await check_runtime_health(runtime_url, headers=headers)
         if not health.is_healthy:
             logger.warning(
                 "Runtime health check failed before invoke: %s (%.0fms)",
@@ -339,7 +357,7 @@ async def stream_with_retry(
         httpx.Response streaming object
     """
     url = f"{runtime_url}{endpoint}"
-    headers = headers or {}
+    headers = runtime_auth_headers(headers)
 
     # Circuit breaker check
     if agent_key:
@@ -354,8 +372,7 @@ async def stream_with_retry(
     # truncated.  The previous default of httpx.Timeout(300.0) cut streams at
     # exactly 5 minutes.  We keep a connect timeout to fail fast on unreachable
     # runtimes, and rely on the runtime's own wall-clock cap for termination.
-    import os as _os
-    _stream_timeout_s = float(_os.getenv("AGENT_STREAM_TIMEOUT_SECONDS", "0") or "0")
+    _stream_timeout_s = float(os.getenv("AGENT_STREAM_TIMEOUT_SECONDS", "0") or "0")
     _stream_read_timeout = _stream_timeout_s if _stream_timeout_s > 0 else None
     _effective_timeout = timeout or httpx.Timeout(_stream_read_timeout, connect=10.0)
     async with httpx.AsyncClient(timeout=_effective_timeout, trust_env=False) as client:

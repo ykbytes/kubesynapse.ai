@@ -1,0 +1,450 @@
+"""Production-grade Helm values and deployment guide for hardened operator.
+
+This shows the exact configuration needed to deploy KubeSynapse operator
+with all security and reliability fixes from the production hardening audit.
+"""
+
+# ===========================================================================
+# DEPLOYMENT MANIFEST - copy to values.yaml for Helm, or deploy directly
+# ===========================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kubesynapse
+  labels:
+    kubesynapse.ai/component: "system"
+
+---
+# ServiceAccount with explicit permissions (see RBAC below)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubesynapse-operator
+  namespace: kubesynapse
+  labels:
+    app: kubesynapse-operator
+    version: "0.2.0"
+
+---
+# Minimal RBAC ClusterRole - least privilege
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubesynapse-operator
+  labels:
+    app: kubesynapse-operator
+rules:
+# CRD management - only needed plurals
+- apiGroups: ["kubesynapse.ai"]
+  resources: ["aiagents", "agentworkflows", "agentpolicies", "agenttenants", 
+              "approvalrequests", "incidents", "mcpconnections", "webhooks"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["kubesynapse.ai"]
+  resources: ["*/status"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: ["kubesynapse.ai"]
+  resources: ["*/finalizers"]
+  verbs: ["patch", "update"]
+
+# Pod management for worker execution
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch", "create", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
+
+# Secret management
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch", "create", "patch"]
+
+# ConfigMap management
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "patch"]
+
+# Job management for workflows
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "patch", "delete"]
+
+# StatefulSet management for long-running agents
+- apiGroups: ["apps"]
+  resources: ["statefulsets"]
+  verbs: ["get", "list", "watch", "create", "patch", "delete"]
+
+# Events for status tracking
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch", "update"]
+
+# Lease for leader election
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubesynapse-operator
+  labels:
+    app: kubesynapse-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubesynapse-operator
+subjects:
+- kind: ServiceAccount
+  name: kubesynapse-operator
+  namespace: kubesynapse
+
+---
+# Secret for database credentials (referenced by operator, not env vars)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kubesynapse-db-credentials
+  namespace: kubesynapse
+type: Opaque
+stringData:
+  password: ${DATABASE_PASSWORD}  # Replace with actual password
+
+---
+# Secret for operator configuration (if using mounted secrets instead of env)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kubesynapse-operator-config
+  namespace: kubesynapse
+type: Opaque
+stringData:
+  litellm-master-key: ${LITELLM_MASTER_KEY}
+  api-gateway-token: ${API_GATEWAY_TOKEN}
+
+---
+# Deployment with full production hardening
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubesynapse-operator
+  namespace: kubesynapse
+  labels:
+    app: kubesynapse-operator
+    version: "0.2.0"
+spec:
+  replicas: 1  # Can scale to 2+ with leader election (Kopf handles it)
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0  # Ensure continuous operation
+  
+  selector:
+    matchLabels:
+      app: kubesynapse-operator
+  
+  template:
+    metadata:
+      labels:
+        app: kubesynapse-operator
+        version: "0.2.0"
+      annotations:
+        kubesynapse.ai/managed-by: "kubesynapse-operator"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"  # When metrics endpoint added
+    
+    spec:
+      # Service account
+      serviceAccountName: kubesynapse-operator
+      serviceAccountNamespace: kubesynapse
+      automountServiceAccountToken: true
+      
+      # Security context (pod level)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: "OnRootMismatch"
+        seccompProfile:
+          type: RuntimeDefault
+      
+      # Pod disruption budget for high availability
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - kubesynapse-operator
+              topologyKey: kubernetes.io/hostname
+      
+      # Graceful termination
+      terminationGracePeriodSeconds: 60
+      dnsPolicy: ClusterFirst
+      
+      containers:
+      - name: operator
+        image: kubesynapse-operator:latest  # Use specific version tag in production
+        imagePullPolicy: IfNotPresent
+        
+        # Container security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+            add: []  # No capabilities needed
+          runAsNonRoot: true
+          runAsUser: 999
+        
+        # Health checks - §7.3 from audit
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 2
+        
+        # Environment variables (non-sensitive)
+        env:
+        - name: OPERATOR_LOG_LEVEL
+          value: "INFO"
+        - name: JSON_LOGS
+          value: "true"
+        - name: OPERATOR_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: OPERATOR_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        
+        # Database configuration
+        - name: DATABASE_HOST
+          value: "kubesynapse-postgresql"
+        - name: DATABASE_PORT
+          value: "5432"
+        - name: DATABASE_USER
+          value: "kubesynapse"
+        - name: DATABASE_NAME
+          value: "kubesynapse"
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: kubesynapse-db-credentials
+              key: password
+        
+        # Operator configuration
+        - name: OPERATOR_PEERING_NAME
+          value: "kubesynapse-operator"
+        - name: OPERATOR_HEALTH_PORT
+          value: "8080"
+        
+        # Optional: OpenTelemetry configuration
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://otel-collector:4317"  # Or your OTEL endpoint
+        - name: OTEL_EXPORTER_OTLP_INSECURE
+          value: "true"
+        
+        # Ports
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        
+        # Volume mounts (writable areas)
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: home
+          mountPath: /home/operator
+        
+        # Resource limits - §3.3 from audit
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+      
+      # Volumes
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: home
+        emptyDir: {}
+
+---
+# Service for metrics/health check exposure (optional)
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubesynapse-operator
+  namespace: kubesynapse
+  labels:
+    app: kubesynapse-operator
+spec:
+  type: ClusterIP
+  selector:
+    app: kubesynapse-operator
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    protocol: TCP
+
+---
+# NetworkPolicy - §2.5 from audit
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kubesynapse-operator-network-policy
+  namespace: kubesynapse
+spec:
+  podSelector:
+    matchLabels:
+      app: kubesynapse-operator
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Allow inbound only from health check and metrics scraping
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: kubesynapse
+    ports:
+    - protocol: TCP
+      port: 8080
+  
+  # Allow outbound to: K8s API, PostgreSQL, DNS, OTEL
+  egress:
+  # Kubernetes API server (on any port typically 443)
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 443
+  
+  # PostgreSQL database
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kubesynapse
+      podSelector:
+        matchLabels:
+          app: postgresql
+    ports:
+    - protocol: TCP
+      port: 5432
+  
+  # DNS (kube-dns in kube-system)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+  
+  # OpenTelemetry collector (if used)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kubesynapse
+      podSelector:
+        matchLabels:
+          app: otel-collector
+    ports:
+    - protocol: TCP
+      port: 4317
+
+---
+# PodDisruptionBudget to ensure operator availability
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kubesynapse-operator-pdb
+  namespace: kubesynapse
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: kubesynapse-operator
+
+---
+# ServiceMonitor for Prometheus (if using Prometheus Operator)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kubesynapse-operator
+  namespace: kubesynapse
+  labels:
+    app: kubesynapse-operator
+spec:
+  selector:
+    matchLabels:
+      app: kubesynapse-operator
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+
+# ===========================================================================
+# DEPLOYMENT INSTRUCTIONS
+# ===========================================================================
+#
+# 1. Set environment variables:
+#    export DATABASE_PASSWORD="your-secure-password"
+#    export LITELLM_MASTER_KEY="your-litellm-key"
+#    export API_GATEWAY_TOKEN="your-api-token"
+#
+# 2. Substitute placeholders:
+#    envsubst < DEPLOYMENT_MANIFEST.yaml > kubesynapse-operator.yaml
+#
+# 3. Deploy:
+#    kubectl apply -f kubesynapse-operator.yaml
+#
+# 4. Verify deployment:
+#    kubectl get deployment -n kubesynapse
+#    kubectl logs -n kubesynapse -l app=kubesynapse-operator --tail=50
+#    kubectl port-forward -n kubesynapse svc/kubesynapse-operator 8080:8080
+#    curl http://localhost:8080/healthz
+#
+# 5. Verify security:
+#    kubectl get pod -n kubesynapse -o jsonpath='{.items[0].spec.securityContext}'
+#    kubectl get networkpolicies -n kubesynapse
+#    kubectl describe rolebinding kubesynapse-operator
+#
+# ===========================================================================

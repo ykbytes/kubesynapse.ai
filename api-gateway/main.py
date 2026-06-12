@@ -8,6 +8,9 @@ Legacy /api/* paths return 308 redirects with a Deprecation header.
 """
 from __future__ import annotations
 
+import json
+import logging
+
 # Import shared infrastructure needed by the app factory
 from _core import (
     _Instrumentator,
@@ -29,6 +32,9 @@ from routers.observability import router as observability_router
 from routers.webhooks import router as webhooks_router
 from routers.workflows import router as workflows_router
 from routers.incidents import router as incidents_router
+
+# §2.2 — Gateway readiness state for health checks
+_GATEWAY_STATE = {"ready": False, "shutdown_requested": False}
 
 # Create the FastAPI application
 app = FastAPI(
@@ -92,10 +98,21 @@ async def legacy_api_redirect(request: Request, call_next):
 # Mount all routers under /api/v1 prefix (except A2A which stays at /a2a)
 app.include_router(admin_router, prefix="/api/v1")
 
-# Root-level health endpoint (no auth) for operator runtime health checks
-@app.get("/health")
+# §2.2 — Health check endpoint for liveness/readiness probes
+# Returns 200 when ready, 503 during startup/shutdown for graceful handling
+@app.get("/health", tags=["health"])
 async def _root_health() -> dict:
-    return {"status": "healthy", "service": "kubesynapse-api-gateway"}
+    """Health check endpoint for Kubernetes probes.
+    
+    Returns 200 OK if gateway is ready, 503 Service Unavailable during
+    startup or shutdown for proper probe handling.
+    """
+    status_code = 200 if _GATEWAY_STATE["ready"] else 503
+    return {
+        "status": "ok" if _GATEWAY_STATE["ready"] else "starting",
+        "service": "kubesynapse-api-gateway",
+        "ready": _GATEWAY_STATE["ready"],
+    }
 
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(agents_router, prefix="/api/v1")

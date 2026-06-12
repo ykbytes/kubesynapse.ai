@@ -98,42 +98,42 @@ export function ComposerToolbar({
     summary && summary.totalSteps != null && summary.totalSteps > 0;
 
   return (
-    <div className="border-b bg-background shrink-0">
+    <div className="composer-toolbar border-b bg-background shrink-0">
       {/* Main toolbar row */}
-      <div className="flex items-center gap-2 sm:gap-3 px-2 sm:px-3 py-2 flex-wrap">
+      <div className="flex items-center gap-3 px-3 py-2.5 flex-wrap">
         {/* Left: back + name + desc */}
-        <div className="flex items-center gap-2 shrink-0">
-          <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0 cursor-pointer" onClick={onBack} title="Back to workflows">
+        <div className="flex items-center gap-3 shrink-0">
+          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 cursor-pointer transition-all hover:bg-muted" onClick={onBack} title="Back to workflows (Esc)">
             <ArrowLeft className="h-4 w-4" />
           </Button>
-          <div className="flex flex-col gap-0.5">
+          <div className="flex flex-col gap-0.5 min-w-0">
             <Input
               value={workflowName}
               onChange={(e) => onNameChange(e.target.value)}
               placeholder="Workflow name"
-              className="h-6 text-sm font-semibold w-28 sm:w-44 border-transparent bg-transparent hover:border-border focus:border-border px-1"
+              className="h-6 text-sm font-semibold w-40 sm:w-52 border-transparent bg-transparent hover:border-border/50 focus:border-primary/50 focus:bg-muted/20 px-2 rounded transition-all"
               disabled={!isNew}
             />
             <Input
               value={description}
               onChange={(e) => onDescriptionChange(e.target.value)}
               placeholder="Description"
-              className="h-5 text-[10px] text-muted-foreground w-28 sm:w-44 border-transparent bg-transparent hover:border-border focus:border-border px-1 hidden sm:block"
+              className="h-5 text-xs text-muted-foreground w-40 sm:w-52 border-transparent bg-transparent hover:border-border/50 focus:border-primary/50 focus:bg-muted/20 px-2 rounded transition-all hidden sm:block"
             />
           </div>
         </div>
 
         {/* Center: workflow input */}
-        <div className="flex-1 min-w-0 space-y-0.5 order-last sm:order-none w-full sm:w-auto">
-          <div className="flex items-center gap-1.5">
-            <Label className="text-[9px] text-muted-foreground uppercase tracking-wider hidden sm:block">Workflow Input</Label>
+        <div className="flex-1 min-w-0 space-y-1 order-last sm:order-none w-full sm:w-auto px-2 py-1.5 rounded-lg bg-muted/10 border border-border/20">
+          <div className="flex items-center gap-2">
+            <Label className="text-xs text-muted-foreground uppercase tracking-wider font-semibold hidden sm:block">Input</Label>
             <button
               type="button"
-              className="flex items-center gap-0.5 text-[9px] text-muted-foreground/60 hover:text-muted-foreground transition-colors cursor-pointer hidden sm:flex"
+              className="flex items-center gap-1 text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors cursor-pointer hidden sm:flex"
               onClick={() => setInputExpanded(!inputExpanded)}
               title={inputExpanded ? "Collapse to single line" : "Expand inline"}
             >
-              {inputExpanded ? <ChevronUp className="h-2.5 w-2.5" /> : <ChevronDown className="h-2.5 w-2.5" />}
+              {inputExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
             </button>
           </div>
           {inputExpanded ? (
@@ -197,122 +197,122 @@ export function ComposerToolbar({
         </div>
 
         {/* Right: indicators + actions */}
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 ml-auto">
+        <div className="flex items-center gap-1.5 shrink-0 ml-auto">
           {isDirty && (
-            <span className="flex items-center gap-1 text-[10px] text-amber-500 shrink-0" title="Unsaved changes">
-              <Circle className="h-2 w-2 fill-current" /> <span className="hidden sm:inline">Unsaved</span>
+            <span className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-amber-500 bg-amber-500/10 border border-amber-500/20 rounded-lg font-medium" title="Unsaved changes">
+              <Circle className="h-2 w-2 fill-current animate-pulse" /> Unsaved
             </span>
           )}
 
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs gap-1 shrink-0 cursor-pointer hidden md:flex"
-            onClick={onAutoLayout}
-            title="Auto-arrange all nodes (Ctrl+Shift+L)"
-          >
-            <LayoutGrid className="h-3 w-3" /> Layout
-          </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-7 w-7 shrink-0 cursor-pointer md:hidden"
-            onClick={onAutoLayout}
-            title="Auto-arrange all nodes (Ctrl+Shift+L)"
-          >
-            <LayoutGrid className="h-3.5 w-3.5" />
-          </Button>
-
-          <Button
-            variant={layoutDirection === "horizontal" ? "secondary" : "outline"}
-            size="icon"
-            className="h-7 w-7 shrink-0 cursor-pointer"
-            onClick={onToggleDirection}
-            title={layoutDirection === "vertical" ? "Switch to horizontal layout" : "Switch to vertical layout"}
-          >
-            {layoutDirection === "vertical"
-              ? <ArrowDownUp className="h-3.5 w-3.5" />
-              : <ArrowLeftRight className="h-3.5 w-3.5" />}
-          </Button>
-
-          {onToggleLivePanel && (
+          {/* Layout controls group */}
+          <div className="flex items-center gap-0.5 px-1.5 py-1 rounded-lg bg-muted/20 border border-border/40">
             <Button
-              variant={livePanelCollapsed ? "ghost" : "secondary"}
-              size="icon"
-              className={cn(
-                "h-7 w-7 shrink-0 cursor-pointer relative",
-                !livePanelCollapsed && "bg-sky-500/10 text-sky-400 border-sky-500/20",
-              )}
-              onClick={onToggleLivePanel}
-              title={livePanelCollapsed ? "Show live activity (Ctrl+L)" : "Hide live activity (Ctrl+L)"}
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs gap-1.5 px-2 cursor-pointer transition-all hover:bg-primary/10 hover:text-primary"
+              onClick={onAutoLayout}
+              title="Auto-arrange all nodes (Ctrl+Shift+L)"
             >
-              <Radio className="h-3.5 w-3.5" />
-              {hasLiveActivity && livePanelCollapsed && (
-                <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-              )}
+              <LayoutGrid className="h-3.5 w-3.5" />
+              <span className="hidden md:inline">Layout</span>
             </Button>
-          )}
+            <Button
+              variant={layoutDirection === "horizontal" ? "secondary" : "ghost"}
+              size="icon"
+              className="h-7 w-7 cursor-pointer transition-all"
+              onClick={onToggleDirection}
+              title={layoutDirection === "vertical" ? "Switch to horizontal layout" : "Switch to vertical layout"}
+            >
+              {layoutDirection === "vertical"
+                ? <ArrowDownUp className="h-3.5 w-3.5" />
+                : <ArrowLeftRight className="h-3.5 w-3.5" />}
+            </Button>
+          </div>
 
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0 cursor-pointer"
-            onClick={onToggleMaximize}
-            title={isMaximized ? "Exit fullscreen (Esc)" : "Maximize composer (F11)"}
-          >
-            {isMaximized ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-          </Button>
+          {/* Activity & display controls */}
+          <div className="flex items-center gap-0.5 px-1.5 py-1 rounded-lg bg-muted/20 border border-border/40">
+            {onToggleLivePanel && (
+              <Button
+                variant={livePanelCollapsed ? "ghost" : "secondary"}
+                size="icon"
+                className={cn(
+                  "h-7 w-7 shrink-0 cursor-pointer relative transition-all",
+                  !livePanelCollapsed && "bg-sky-500/15 text-sky-400 border-sky-500/30 hover:bg-sky-500/20",
+                )}
+                onClick={onToggleLivePanel}
+                title={livePanelCollapsed ? "Show live activity (Ctrl+L)" : "Hide live activity (Ctrl+L)"}
+              >
+                <Radio className="h-3.5 w-3.5" />
+                {hasLiveActivity && livePanelCollapsed && (
+                  <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse border-2 border-background" />
+                )}
+              </Button>
+            )}
 
-          <Button
-            variant="default"
-            size="sm"
-            className="h-7 text-xs gap-1 shrink-0 cursor-pointer"
-            onClick={onSave}
-            disabled={isSaving || !workflowName.trim()}
-            title={!workflowName.trim() ? "Enter a workflow name first" : "Save workflow (Ctrl+S)"}
-          >
-            <Save className="h-3 w-3" /> <span className="hidden sm:inline">{isSaving ? "Saving…" : "Save"}</span>
-          </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0 cursor-pointer transition-all hover:bg-muted"
+              onClick={onToggleMaximize}
+              title={isMaximized ? "Exit fullscreen (Esc)" : "Maximize composer (F11)"}
+            >
+              {isMaximized ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+            </Button>
+          </div>
 
-          <Button
-            variant="secondary"
-            size="sm"
-            className="h-7 text-xs gap-1 shrink-0 cursor-pointer"
-            onClick={onRun}
-            disabled={isRunning || !workflowName.trim() || isNew || isDirty}
-            title={isNew ? "Save the workflow first" : isDirty ? "Save changes before running" : "Trigger workflow run"}
-          >
-            <Play className="h-3 w-3" /> <span className="hidden sm:inline">{isRunning ? "Running…" : "Run"}</span>
-          </Button>
+          {/* Primary actions */}
+          <div className="flex items-center gap-1.5 px-1.5 py-1 rounded-lg bg-muted/20 border border-border/40 ml-auto">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs gap-1.5 px-3 cursor-pointer transition-all hover:bg-amber-500/10 hover:text-amber-500 hover:border-amber-500/30"
+              onClick={onSave}
+              disabled={isSaving || !workflowName.trim()}
+              title={!workflowName.trim() ? "Enter a workflow name first" : "Save workflow (Ctrl+S)"}
+            >
+              <Save className="h-3.5 w-3.5" /> <span className="hidden sm:inline">{isSaving ? "Saving…" : "Save"}</span>
+            </Button>
+
+            <Button
+              variant="default"
+              size="sm"
+              className="h-7 text-xs gap-1.5 px-3 cursor-pointer transition-all"
+              onClick={onRun}
+              disabled={isRunning || !workflowName.trim() || isNew || isDirty}
+              title={isNew ? "Save the workflow first" : isDirty ? "Save changes before running" : "Trigger workflow run"}
+            >
+              <Play className="h-3.5 w-3.5" /> <span className="hidden sm:inline">{isRunning ? "Running…" : "Run"}</span>
+            </Button>
+          </div>
         </div>
       </div>
 
       {/* Status bar (only shown when workflow has execution data) */}
       {(phase || hasStepProgress) && (
-        <div className="flex items-center gap-3 px-3 py-1 border-t border-border/40 bg-muted/20 text-[10px] text-muted-foreground">
+        <div className="flex items-center gap-3 px-3 py-2 border-t border-border/40 bg-gradient-to-r from-muted/30 via-muted/20 to-muted/30 text-xs text-muted-foreground">
           {phase && (
-            <span className="flex items-center gap-1">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-background/40 border border-border/40">
               {phase === "running" ? (
-                <LoaderCircle className="h-3 w-3 animate-spin text-amber-400" />
+                <LoaderCircle className="h-3.5 w-3.5 animate-spin text-amber-400" />
               ) : phase === "completed" ? (
-                <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
               ) : null}
-              <span className="font-medium">{phase}</span>
-            </span>
+              <span className="font-semibold text-foreground capitalize">{phase}</span>
+            </div>
           )}
           {summary?.runId && (
-            <span className="flex items-center gap-0.5 font-mono">
-              <Hash className="h-2.5 w-2.5" />
-              {summary.runId.slice(0, 8)}
+            <span className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-background/40 border border-border/40 font-mono text-xs">
+              <Hash className="h-3 w-3 shrink-0" />
+              {summary.runId.slice(0, 12)}
             </span>
           )}
           {hasStepProgress && (
-            <>
-              <Badge variant="outline" className="text-[9px] h-4 px-1.5">
+            <div className="flex-1 flex items-center gap-2">
+              <Badge variant="outline" className="text-xs h-5 px-2 bg-background/40 border-border/40">
                 {(summary.completedSteps ?? 0)}/{summary.totalSteps} steps
               </Badge>
-              <div className="flex-1 max-w-48 flex items-center gap-1.5">
-                <div className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden">
+              <div className="flex-1 max-w-xs flex items-center gap-2">
+                <div className="h-1.5 flex-1 rounded-full bg-muted/40 border border-border/40 overflow-hidden">
                   <div
                     className={cn(
                       "h-full rounded-full transition-all duration-500",
@@ -322,22 +322,22 @@ export function ComposerToolbar({
                     style={{ width: `${Math.round(((summary.completedSteps ?? 0) / (summary.totalSteps ?? 1)) * 100)}%` }}
                   />
                 </div>
-                <span className="text-[9px] font-mono tabular-nums">
+                <span className="text-xs font-mono tabular-nums w-7 text-right">
                   {Math.round(((summary.completedSteps ?? 0) / (summary.totalSteps ?? 1)) * 100)}%
                 </span>
               </div>
-            </>
+            </div>
           )}
           {pendingApproval && (
-            <span className="flex items-center gap-1.5 ml-auto">
-              <span className="text-orange-400 font-medium">Approval needed: {pendingApproval.stepName}</span>
-              <Button variant="outline" size="sm" className="h-5 text-[9px] px-2 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10 cursor-pointer" onClick={onApprove}>
+            <div className="flex items-center gap-2 ml-auto px-2.5 py-1.5 rounded-lg bg-orange-500/10 border border-orange-500/20">
+              <span className="text-orange-400 font-semibold text-xs">Approval: {pendingApproval.stepName}</span>
+              <Button variant="outline" size="sm" className="h-5 text-xs px-2.5 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10 cursor-pointer" onClick={onApprove}>
                 Approve
               </Button>
-              <Button variant="outline" size="sm" className="h-5 text-[9px] px-2 text-red-400 border-red-500/30 hover:bg-red-500/10 cursor-pointer" onClick={onDeny}>
+              <Button variant="outline" size="sm" className="h-5 text-xs px-2.5 text-red-400 border-red-500/30 hover:bg-red-500/10 cursor-pointer" onClick={onDeny}>
                 Deny
               </Button>
-            </span>
+            </div>
           )}
           {!pendingApproval && summary?.queuedAt && (
             <span className="ml-auto font-mono">

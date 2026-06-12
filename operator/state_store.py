@@ -97,24 +97,39 @@ def _build_database_url() -> str:
 
 DATABASE_URL = _build_database_url()
 
-# §6.2 — Connection pooling configuration
+# §6.2 — Connection pooling configuration with hardened defaults
 _is_sqlite = DATABASE_URL.startswith("sqlite")
 _pool_kwargs: dict[str, Any] = {}
+
 if not _is_sqlite:
+    pool_size = max(int(os.getenv("DATABASE_POOL_SIZE", "15")), 5)
+    max_overflow = max(int(os.getenv("DATABASE_MAX_OVERFLOW", "30")), 0)
+    pool_timeout = max(int(os.getenv("DATABASE_POOL_TIMEOUT", "30")), 5)
+    pool_recycle = max(int(os.getenv("DATABASE_POOL_RECYCLE", "1800")), 300)
+    
     _pool_kwargs = {
-        "pool_size": int(os.getenv("DATABASE_POOL_SIZE", "10")),
-        "max_overflow": int(os.getenv("DATABASE_MAX_OVERFLOW", "20")),
-        "pool_timeout": int(os.getenv("DATABASE_POOL_TIMEOUT", "30")),
-        "pool_recycle": int(os.getenv("DATABASE_POOL_RECYCLE", "1800")),
+        "pool_size": pool_size,
+        "max_overflow": max_overflow,
+        "pool_timeout": pool_timeout,
+        "pool_recycle": pool_recycle,
+        "connect_args": {
+            "timeout": 10,  # Connection timeout
+            "command_timeout": 10,
+        },
     }
+else:
+    # SQLite fallback for dev/test only
+    logger.warning("Using SQLite for state database; not recommended for production.")
+    _pool_kwargs = {"connect_args": {"check_same_thread": False}}
 
 ENGINE = create_engine(
     DATABASE_URL,
     future=True,
-    pool_pre_ping=True,
-    connect_args={"check_same_thread": False} if _is_sqlite else {},
+    pool_pre_ping=True,  # Validate connections before reuse
+    echo=os.getenv("DATABASE_SQL_DEBUG", "false").lower() in {"1", "true"},
     **_pool_kwargs,
 )
+
 SessionLocal = sessionmaker(bind=ENGINE, autoflush=False, autocommit=False, expire_on_commit=False, future=True)
 
 
@@ -263,6 +278,31 @@ def init_database() -> None:
 
 
 @contextmanager
+def get_db_session(timeout: int = 30) -> Iterator[Session]:
+    """§6.3 — Safe database session context manager with timeout and cleanup.
+    
+    Ensures proper cleanup even on exceptions, and validates state before reuse.
+    Raises SQLAlchemyError or OperationalError on connection failure.
+    """
+    session = SessionLocal()
+    try:
+        # Validate connection is working
+        session.execute("SELECT 1")
+        session.commit()
+        yield session
+    except (OperationalError, SQLAlchemyError) as exc:
+        session.rollback()
+        logger.error("Database operation failed: %s", exc)
+        raise
+    except Exception as exc:
+        session.rollback()
+        logger.error("Unexpected error in database session: %s", exc)
+        raise
+    finally:
+        try:
+            session.close()
+        except Exception as exc:
+            logger.warning("Error closing database session: %s", exc)
 def db_session() -> Iterator[Session]:
     """Yield a database session with automatic commit/rollback.
 

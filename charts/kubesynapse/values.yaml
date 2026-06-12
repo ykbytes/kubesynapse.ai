@@ -440,8 +440,10 @@ platformSecrets:
     # Generate with: openssl rand -base64 48
     litellmMasterKey: ""
     apiGatewaySharedToken: ""
+    runtimeBearerToken: "" # gateway-to-runtime bearer token; falls back to apiGatewaySharedToken if empty
     databasePassword: ""
     jwtSecret: "" # JWT signing key — must be separate from other tokens
+    opencodeServerPassword: "" # upstream OpenCode Basic Auth password; auto-generated if empty
     collectorToken: "" # §security: separate from jwtSecret; auto-generated if empty
     redisPassword: "" # auto-generated if empty
     natsToken: "" # auto-generated if empty

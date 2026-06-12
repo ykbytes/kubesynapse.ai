@@ -115,21 +115,32 @@ def _build_database_url() -> str:
 
 DATABASE_URL = _build_database_url()
 
-# Connection pool tuning for production PostgreSQL
+# §2.3 — Connection pool tuning for production PostgreSQL
+# Hardened defaults: larger pool, longer timeouts, explicit connection validation
 # SQLite uses NullPool by default (no connection pooling needed)
 _engine_kwargs: dict[str, Any] = {
     "future": True,
-    "pool_pre_ping": True,
+    "pool_pre_ping": True,  # Validate connections before reuse (prevents stale connection errors)
+    "echo": bool(os.getenv("DB_SQL_DEBUG", "").lower() in ("true", "1", "yes")),
 }
+
 if DATABASE_URL.startswith("sqlite"):
     _engine_kwargs["connect_args"] = {"check_same_thread": False}
+    logger.warning("⚠️  Using SQLite database — this is NOT recommended for production. Use PostgreSQL.")
 else:
-    # PostgreSQL production pool settings
-    _engine_kwargs["pool_size"] = max(int(os.getenv("DB_POOL_SIZE", "10")), 2)
-    _engine_kwargs["max_overflow"] = max(int(os.getenv("DB_MAX_OVERFLOW", "20")), 0)
-    _engine_kwargs["pool_recycle"] = max(int(os.getenv("DB_POOL_RECYCLE", "1800")), 300)
-    _engine_kwargs["pool_timeout"] = max(float(os.getenv("DB_POOL_TIMEOUT", "30")), 5.0)
+    # PostgreSQL production pool settings (§2.3 — Enhanced from hardening audit)
+    pool_size = max(int(os.getenv("DATABASE_POOL_SIZE", "20")), 5)  # Increased from 10
+    max_overflow = max(int(os.getenv("DATABASE_MAX_OVERFLOW", "40")), 0)  # Increased from 20
+    pool_timeout = max(float(os.getenv("DATABASE_POOL_TIMEOUT", "30")), 5.0)
+    pool_recycle = max(int(os.getenv("DATABASE_POOL_RECYCLE", "1800")), 300)  # 30min recycle
+    
+    _engine_kwargs["pool_size"] = pool_size
+    _engine_kwargs["max_overflow"] = max_overflow
+    _engine_kwargs["pool_recycle"] = pool_recycle
+    _engine_kwargs["pool_timeout"] = pool_timeout
     _engine_kwargs["connect_args"] = {
+        "timeout": 10,  # Connection timeout
+        "command_timeout": 10,  # Command timeout
         "options": f"-c statement_timeout={max(int(os.getenv('DB_STATEMENT_TIMEOUT_MS', '30000')), 5000)}ms",
     }
 

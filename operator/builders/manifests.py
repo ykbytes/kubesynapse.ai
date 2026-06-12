@@ -183,6 +183,9 @@ PLATFORM_MANAGED_OPENCODE_ENV: set[str] = {
     "OPENCODE_SYSTEM_PROMPT",
     "OPENCODE_DEFAULT_AGENT",
     "OPENCODE_MODEL_OUTPUT_LIMIT",
+    "OPENCODE_SERVER_PASSWORD",
+    "RUNTIME_AUTH_REQUIRED",
+    "RUNTIME_BEARER_TOKEN",
     A2A_ALLOWED_CALLERS_ENV,
     A2A_ALLOWED_TARGETS_ENV,
     A2A_REQUIRE_HITL_ENV,
@@ -553,6 +556,33 @@ def validate_runtime_configuration(runtime_kind: str, spec: dict[str, Any]) -> N
                                 f"AIAgent spec.runtime.opencode.configFiles contains non-empty 'plugin' "
                                 f"array in '{_cf_path}' — this enables config-driven RCE and is blocked."
                             )
+
+                # §security-P0: Block local/command-based MCP servers in OpenCode
+                # configFiles. OpenCode supports `mcp: {name: {type: "local",
+                # command: [...]}}` which spawns an arbitrary subprocess — a direct
+                # RCE vector. Only remote (HTTP) MCP servers are permitted; those
+                # are provisioned by the operator via MCPConnection resources.
+                _cf_obj: Any = None
+                if isinstance(_cf_content, dict):
+                    _cf_obj = _cf_content
+                elif isinstance(_cf_content, str) and '"mcp"' in _cf_content:
+                    try:
+                        _cf_obj = json.loads(_cf_content)
+                    except (json.JSONDecodeError, ValueError):
+                        _cf_obj = None
+                if isinstance(_cf_obj, dict):
+                    _mcp_block = _cf_obj.get("mcp")
+                    if isinstance(_mcp_block, dict):
+                        for _srv_name, _srv in _mcp_block.items():
+                            if not isinstance(_srv, dict):
+                                continue
+                            _srv_type = str(_srv.get("type") or "").strip().lower()
+                            if _srv_type == "local" or "command" in _srv or "args" in _srv:
+                                raise kopf.PermanentError(
+                                    f"AIAgent spec.runtime.opencode.configFiles defines a local/command-based "
+                                    f"MCP server '{_srv_name}' in '{_cf_path}' — this enables config-driven RCE "
+                                    f"and is blocked. Use an MCPConnection (remote HTTP) instead."
+                                )
 
 
 # ---------------------------------------------------------------------------
@@ -978,7 +1008,7 @@ def _build_credential_proxy_routes(
         "listen": f":{CREDENTIAL_PROXY_INBOUND_PORT}",
         "target": f"http://localhost:{AGENT_INTERNAL_PORT}",
         "auth": "validate",
-        "secret_env": "OPENCODE_SERVER_PASSWORD",
+        "secret_env": "RUNTIME_BEARER_TOKEN",
     })
 
     return routes
@@ -1012,6 +1042,16 @@ def _build_credential_proxy_container(
                 "secretKeyRef": {
                     "name": SECRET_NAME,
                     "key": "OPENCODE_SERVER_PASSWORD",
+                    "optional": True,
+                }
+            },
+        },
+        {
+            "name": "RUNTIME_BEARER_TOKEN",
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": SECRET_NAME,
+                    "key": "RUNTIME_BEARER_TOKEN",
                     "optional": True,
                 }
             },
@@ -2376,6 +2416,10 @@ def create_agent_statefulset_manifest(
             {"name": "opencode-immutable-config", "configMap": {"name": cfg_cm_name}}
         )
         env.append({"name": "OPENCODE_CONFIG", "value": "/etc/kubesynapse/opencode.json"})
+        # §security-P0: Signal that the immutable config is mandatory so the
+        # runtime fails CLOSED (restrictive permission baseline) if the mount
+        # is missing or tampered with, instead of running wide open.
+        env.append({"name": "OPENCODE_REQUIRE_IMMUTABLE_CONFIG", "value": "true"})
 
     # Build a deterministic per-agent secret name for provider bootstrap data
     provider_bootstrap_secret_name = f"{sandbox_name(name)}-opencode-provider"
@@ -2402,6 +2446,27 @@ def create_agent_statefulset_manifest(
             {"name": "MCP_HUB_NAMESPACE", "value": MCP_HUB_NAMESPACE},
             {"name": "CREDENTIAL_PROXY_ENABLED", "value": "true" if CREDENTIAL_PROXY_ENABLED else "false"},
             {"name": "CREDENTIAL_PROXY_MCP_HUB_PORT", "value": str(CREDENTIAL_PROXY_MCP_HUB_PORT)},
+            {"name": "RUNTIME_AUTH_REQUIRED", "value": "true"},
+            {
+                "name": "RUNTIME_BEARER_TOKEN",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": SECRET_NAME,
+                        "key": "RUNTIME_BEARER_TOKEN",
+                        "optional": True,
+                    }
+                },
+            },
+            {
+                "name": "OPENCODE_SERVER_PASSWORD",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": SECRET_NAME,
+                        "key": "OPENCODE_SERVER_PASSWORD",
+                        "optional": True,
+                    }
+                },
+            },
         ]
     )
 

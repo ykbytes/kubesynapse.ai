@@ -288,7 +288,13 @@ class OpenCodeRuntimeTests(unittest.TestCase):
         # Immutable security keys must win over runtime / config_overrides
         self.assertEqual(config["plugin"], [])
         self.assertEqual(config["skills"], {"urls": []})
-        self.assertEqual(config["permission"], {"bash": "ask", "write": "deny"})
+        # §security-P0: bash="ask" is preserved as the catch-all, with
+        # catastrophic-command deny patterns appended on top (last-match-wins).
+        bash_rule = config["permission"]["bash"]
+        self.assertIsInstance(bash_rule, dict)
+        self.assertEqual(bash_rule["*"], "ask")
+        self.assertEqual(bash_rule["rm -rf /"], "deny")
+        self.assertEqual(config["permission"]["write"], "deny")
         # Non-security keys from runtime MUST still be present
         self.assertIn("litellm", config["provider"])
         self.assertIn("model", config)

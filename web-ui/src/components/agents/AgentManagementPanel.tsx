@@ -40,6 +40,7 @@ import { ConfirmDialog } from "../shared/ConfirmDialog";
 import { ErrorDialog } from "../shared/ErrorDialog";
 import { ErrorBanner } from "../shared/ErrorBanner";
 import { ModelSelector } from "@/components/settings/ModelSelector";
+import { useManifestViewer } from "@/hooks/useManifestViewer";
 import { A2A_ALLOWED_CALLERS_PLACEHOLDER, stringifyA2APeerRefs } from "../../lib/a2a";
 import {
   buildOpenCodeConfigFiles,
@@ -223,6 +224,17 @@ export function AgentManagementPanel({
 }: AgentManagementPanelProps) {
   const ws = useWorkspace();
   const { namespace, canMutate } = useConnection();
+  
+  const {
+    ManifestButton,
+    ManifestModalComponent,
+  } = useManifestViewer({
+    resourceType: "agent",
+    resourceName: agent.name,
+    namespace,
+    token,
+  });
+
   const [model, setModel] = useState(agent.model);
   const [systemPrompt, setSystemPrompt] = useState(agent.system_prompt);
   const [policyRef, setPolicyRef] = useState(agent.policy_ref ?? "");
@@ -1813,6 +1825,7 @@ export function AgentManagementPanel({
                     <Copy className="mr-1.5 h-4 w-4" /> Clone
                   </Button>
                 )}
+                <ManifestButton />
                 <Button variant="destructive" onClick={() => setDeleteDialogOpen(true)} disabled={isDeleting}>
                   {isDeleting ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : <Trash2 className="mr-1.5 h-4 w-4" />}
                   {isDeleting ? "Deleting..." : "Delete"}
@@ -1840,6 +1853,7 @@ export function AgentManagementPanel({
         open={errorDialogOpen}
         onClose={() => setErrorDialogOpen(false)}
       />
+      <ManifestModalComponent />
     </Card>
   );
 }

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 import shutil
 import subprocess
 import threading
@@ -49,6 +50,7 @@ _STDERR_LOG = _LOG_DIR / "opencode-stderr.log"
 # Track open log file handles so they can be closed before re-opening on restart
 _active_stdout_fh: Any = None
 _active_stderr_fh: Any = None
+_generated_server_password: str | None = None
 
 SUPERVISOR_POLL_SECONDS = max(float(os.getenv("OPENCODE_SUPERVISOR_POLL_SECONDS", "5")), 1.0)
 SUPERVISOR_MAX_RESTARTS = max(int(os.getenv("OPENCODE_SUPERVISOR_MAX_RESTARTS", "5")), 0)
@@ -79,6 +81,23 @@ def validate_runtime_startup() -> None:
 def _resolve_provider_id() -> str:
     """Determine which opencode provider to use."""
     return os.getenv("OPENCODE_PROVIDER", "litellm").strip().lower() or "litellm"
+
+
+def resolve_opencode_server_password() -> str:
+    """Return the Basic Auth password for the local OpenCode server."""
+    global _generated_server_password
+    configured = os.getenv("OPENCODE_SERVER_PASSWORD", "").strip()
+    if configured:
+        return configured
+    if _generated_server_password is None:
+        _generated_server_password = secrets.token_urlsafe(32)
+        logger.info("Generated per-process OpenCode server password for local Basic Auth")
+    return _generated_server_password
+
+
+def resolve_opencode_server_username() -> str:
+    """Return the Basic Auth username for the local OpenCode server."""
+    return os.getenv("OPENCODE_SERVER_USERNAME", "opencode").strip() or "opencode"
 
 
 _ENV_ALLOWLIST: frozenset[str] = frozenset({
@@ -160,11 +179,10 @@ def build_server_env(config_content: dict[str, Any]) -> dict[str, str]:
     env["OPENCODE_DISABLE_AUTOUPDATE"] = "true"
     env["OPENCODE_DISABLE_LSP_DOWNLOAD"] = "true"
     env["OPENCODE_DISABLE_DEFAULT_PLUGINS"] = os.getenv("OPENCODE_DISABLE_DEFAULT_PLUGINS", "true") or "true"
+    env["OPENCODE_SERVER_USERNAME"] = resolve_opencode_server_username()
+    env["OPENCODE_SERVER_PASSWORD"] = resolve_opencode_server_password()
 
     credential_proxy_enabled = os.getenv("CREDENTIAL_PROXY_ENABLED", "false").strip().lower() in ("true", "1", "yes")
-
-    if not credential_proxy_enabled:
-        env["OPENCODE_SERVER_PASSWORD"] = os.getenv("OPENCODE_SERVER_PASSWORD", "")
 
     provider_id = _resolve_provider_id()
     provider = get_provider(provider_id)

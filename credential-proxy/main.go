@@ -241,7 +241,8 @@ func (p *Proxy) validateMiddleware(next http.Handler, route Route) http.Handler 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		secret := p.secrets[route.SecretEnv]
 		if secret == "" {
-			next.ServeHTTP(w, r)
+			p.logger.Error("validate route secret missing", "route", route.Listen, "secret_env", route.SecretEnv)
+			http.Error(w, "runtime auth not configured", http.StatusServiceUnavailable)
 			return
 		}
 

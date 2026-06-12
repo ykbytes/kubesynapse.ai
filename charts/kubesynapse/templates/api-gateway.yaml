@@ -108,6 +108,12 @@ spec:
                   name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
                   key: API_GATEWAY_SHARED_TOKEN
                   optional: false
+            - name: RUNTIME_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: RUNTIME_BEARER_TOKEN
+                  optional: true
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:

@@ -2,12 +2,16 @@
 
 §2.1d of the road-to-prod plan: extract shared helpers from main.py so that
 controller modules can import them without circular dependencies.
+
+§6.4 — Comprehensive error classification covering K8s API, database, and
+circuit breaker failures with proper backoff and idempotency awareness.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import random
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -16,6 +20,8 @@ import kopf
 from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
 from services import describe_api_exception
 from tracing import trace_reconcile
+from circuit_breaker import CircuitBreakerOpen
+from sqlalchemy.exc import OperationalError, SQLAlchemyError  # type: ignore[import-untyped]
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -23,6 +29,16 @@ from tracing import trace_reconcile
 
 PERMANENT_API_ERROR_STATUSES: frozenset[int] = frozenset({400, 401, 403, 404, 405, 422})
 HIGH_BACKOFF_API_ERROR_STATUSES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
+TRANSIENT_DB_ERROR_KEYWORDS: frozenset[str] = frozenset({
+    "connection refused",
+    "connection reset",
+    "timeout",
+    "deadlock",
+    "too many connections",
+    "ssl",
+    "eof",
+    "no route to host",
+})
 MAX_LOG_FIELD_LENGTH: int = 400
 
 
@@ -177,20 +193,51 @@ def log_operator_event(
 
 
 def classify_reconcile_error(action: str, exc: Exception, *, default_delay: int = 10) -> Exception:
-    """Classify an exception into PermanentError or TemporaryError."""
+    """§6.4 — Classify an exception into PermanentError or TemporaryError.
+    
+    Handles K8s API errors, database errors, and circuit breaker failures.
+    Returns an appropriate Kopf exception with reasonable backoff delays.
+    """
+    # Already classified by Kopf
     if isinstance(exc, (kopf.PermanentError, kopf.TemporaryError)):
         return exc
+    
+    # Validation errors are permanent
     if isinstance(exc, ValueError):
         return kopf.PermanentError(str(exc))
+    
+    # Circuit breaker is transient (give it time to recover)
+    if isinstance(exc, CircuitBreakerOpen):
+        delay = max(default_delay, 60)  # Back off longer for circuit break
+        return kopf.TemporaryError(f"{action} failed: Kubernetes API circuit breaker open", delay=delay)
+    
+    # Database errors: classify as transient if recoverable, else permanent
+    if isinstance(exc, (OperationalError, SQLAlchemyError)):
+        error_msg = str(exc).lower()
+        is_transient = any(keyword in error_msg for keyword in TRANSIENT_DB_ERROR_KEYWORDS)
+        
+        if is_transient:
+            delay = max(default_delay, 30)
+            return kopf.TemporaryError(f"{action} failed (transient DB error): {exc}", delay=delay)
+        else:
+            return kopf.PermanentError(f"{action} failed (permanent DB error): {exc}")
+    
+    # Kubernetes API errors with status-specific handling
     if isinstance(exc, ApiException):
         status = int(getattr(exc, "status", 0) or 0)
         details = describe_api_exception(exc)
         message = f"{action} failed: {details}"
+        
         if status in PERMANENT_API_ERROR_STATUSES:
             return kopf.PermanentError(message)
+        
+        # High backoff for rate limiting and server errors
         delay = max(default_delay, 30) if status in HIGH_BACKOFF_API_ERROR_STATUSES else default_delay
         return kopf.TemporaryError(message, delay=delay)
-    return kopf.TemporaryError(f"{action} failed: {exc}", delay=default_delay)
+    
+    # All other exceptions are transient with jitter
+    jitter = random.randint(0, 5)
+    return kopf.TemporaryError(f"{action} failed: {exc}", delay=default_delay + jitter)
 
 
 def raise_reconcile_error(

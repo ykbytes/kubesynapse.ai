@@ -10,6 +10,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { factoryModeLabel } from "@/lib/factoryModes";
+import { useManifestViewer } from "@/hooks/useManifestViewer";
 import type { FactoryMode } from "../../types";
 
 interface WorkflowHeaderProps {
@@ -23,6 +24,8 @@ interface WorkflowHeaderProps {
   isSaving: boolean;
   canSubmit: boolean;
   canMutate: boolean;
+  namespace?: string;
+  token?: string;
   onRun: () => void;
   onCancel: () => void;
   onSave: () => void;
@@ -41,46 +44,59 @@ export function WorkflowHeader({
   isSaving,
   canSubmit,
   canMutate,
+  namespace = "default",
+  token = "",
   onRun,
   onCancel,
   onSave,
   onDelete,
   onOpenComposer,
 }: WorkflowHeaderProps) {
+  const {
+    ManifestButton,
+    ManifestModalComponent,
+  } = useManifestViewer({
+    resourceType: "workflow",
+    resourceName: workflowName || "",
+    namespace,
+    token,
+  });
+
   return (
-    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-      <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-primary/20 bg-primary/10 text-primary shadow-sm">
-          <Workflow className="h-5 w-5" />
-        </div>
-        <div className="min-w-0">
-          <h1 className="text-base font-semibold leading-tight text-foreground">
-            {workflowName ?? "Create workflow"}
-          </h1>
-          <div className="mt-1 flex items-center gap-2">
-            <Badge
-              variant={
-                isActive
-                  ? "default"
-                  : phase === "failed" || phase === "cancelled"
-                    ? "destructive"
-                    : "secondary"
-              }
-              className="text-xs capitalize"
-            >
-              {phase}
-            </Badge>
-            {isFactoryWorkflow && (
+    <>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-primary/20 bg-primary/10 text-primary shadow-sm">
+            <Workflow className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <h1 className="text-base font-semibold leading-tight text-foreground">
+              {workflowName ?? "Create workflow"}
+            </h1>
+            <div className="mt-1 flex items-center gap-2">
               <Badge
-                variant="outline"
-                className="text-xs border-primary/20 bg-primary/5 text-primary/80"
+                variant={
+                  isActive
+                    ? "default"
+                    : phase === "failed" || phase === "cancelled"
+                      ? "destructive"
+                      : "secondary"
+                }
+                className="text-xs capitalize"
               >
-                {factoryModeLabel(factoryMode)}
+                {phase}
               </Badge>
-            )}
+              {isFactoryWorkflow && (
+                <Badge
+                  variant="outline"
+                  className="text-xs border-primary/20 bg-primary/5 text-primary/80"
+                >
+                  {factoryModeLabel(factoryMode)}
+                </Badge>
+              )}
+            </div>
           </div>
         </div>
-      </div>
 
       <div className="flex flex-wrap items-center gap-2">
         {workflowName && (
@@ -145,6 +161,10 @@ export function WorkflowHeader({
           </Button>
         )}
 
+        {workflowName && (
+          <ManifestButton />
+        )}
+
         {workflowName && canMutate && (
           <Button
             variant="ghost"
@@ -158,5 +178,7 @@ export function WorkflowHeader({
         )}
       </div>
     </div>
+      <ManifestModalComponent />
+    </>
   );
 }

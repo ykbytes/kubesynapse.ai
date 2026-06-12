@@ -626,21 +626,28 @@ function ComposerCanvas({
         <div ref={wrapperRef} className="flex-1 relative composer-canvas-wrapper">
           {/* Empty state helper */}
           {nodes.length <= 1 && (
-            <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
-              <div className="text-center space-y-3 max-w-sm px-6">
-                <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary">
-                  <MousePointerClick className="h-6 w-6" />
+            <div className="composer-empty-state absolute inset-0 z-10 flex items-center justify-center pointer-events-none bg-gradient-to-br from-primary/5 via-transparent to-transparent">
+              <div className="text-center space-y-4 max-w-sm px-6">
+                <div className="composer-empty-state-icon">
+                  <MousePointerClick className="h-7 w-7" />
                 </div>
-                <div>
-                  <p className="text-sm font-medium text-foreground">Build your workflow</p>
-                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                    Drag agents from the left palette onto the canvas, or click the + button next to any agent to add a step.
+                <div className="space-y-2">
+                  <p className="text-base font-semibold text-foreground">Build your workflow</p>
+                  <p className="text-sm text-muted-foreground leading-relaxed">
+                    Create automated processes by connecting agents. Drag agents from the left panel, or click the + button to add steps.
                   </p>
                 </div>
-                <div className="flex items-center justify-center gap-3 text-[10px] text-muted-foreground">
-                  <span className="inline-flex items-center gap-1"><span className="inline-block h-1.5 w-1.5 rounded-full bg-primary" />Click agent +</span>
-                  <span className="inline-flex items-center gap-1"><span className="inline-block h-1.5 w-1.5 rounded-full bg-primary" />Drag to canvas</span>
-                  <span className="inline-flex items-center gap-1"><span className="inline-block h-1.5 w-1.5 rounded-full bg-primary" />Connect steps</span>
+                <div className="flex flex-col gap-2">
+                  <div className="inline-flex items-center justify-center gap-4 text-xs text-muted-foreground">
+                    <span className="inline-flex items-center gap-2"><span className="inline-block h-1.5 w-1.5 rounded-full bg-primary/60" />Search agents</span>
+                    <span className="text-border/40">•</span>
+                    <span className="inline-flex items-center gap-2"><span className="inline-block h-1.5 w-1.5 rounded-full bg-primary/60" />Drag to canvas</span>
+                  </div>
+                  <div className="inline-flex items-center justify-center gap-4 text-xs text-muted-foreground">
+                    <span className="inline-flex items-center gap-2"><span className="inline-block h-1.5 w-1.5 rounded-full bg-primary/60" />Connect steps</span>
+                    <span className="text-border/40">•</span>
+                    <span className="inline-flex items-center gap-2"><span className="inline-block h-1.5 w-1.5 rounded-full bg-primary/60" />Auto-arrange</span>
+                  </div>
                 </div>
               </div>
             </div>

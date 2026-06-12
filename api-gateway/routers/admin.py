@@ -12,6 +12,7 @@ from _core import _SHUTDOWN
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
 
 from auth_store import get_user_by_id
+from services.runtime_client import runtime_auth_headers
 from routers.observability import (
     _COLLECTOR_TOKEN_MISSING_ERROR,
     _INTELLIGENCE_ALERT_ACTIONS,
@@ -1882,7 +1883,7 @@ async def _fire_alert(alert_dict: dict[str, Any], task: dict[str, Any], matching
                 resp = await client.post(
                     f"{runtime_url}/invoke",
                     json=request_payload,
-                    headers={"x-request-id": str(uuid.uuid4())},
+                    headers=runtime_auth_headers({"x-request-id": str(uuid.uuid4())}),
                 )
                 history_entry.agent_invoked = agent_name
                 history_entry.invoke_status = resp.status_code

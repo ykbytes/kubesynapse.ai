@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import hmac
 import hashlib
 import json
 import logging
@@ -27,6 +28,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
+RUNTIME_BEARER_TOKEN_ENV = "RUNTIME_BEARER_TOKEN"
+RUNTIME_AUTH_REQUIRED_ENV = "RUNTIME_AUTH_REQUIRED"
+RUNTIME_AUTH_PUBLIC_PATHS = frozenset({"/health", "/ready", "/info", "/capabilities", "/openapi.json", "/docs", "/redoc"})
+
 _RUNTIME_DIR = Path(__file__).resolve().parent
 _OPENAPI_SPEC_PATH = _RUNTIME_DIR / "openapi.json"
 _RUNTIME_LOCAL_MODULES = (
@@ -37,6 +42,7 @@ _RUNTIME_LOCAL_MODULES = (
     "models",
     "opencode_client",
     "prompts",
+    "runtime_permissions",
     "sanitize_secrets",
     "session",
     "skills",
@@ -45,7 +51,7 @@ _RUNTIME_LOCAL_MODULES = (
     "utils",
     "workspace",
 )
-_RUNTIME_PRESERVE_MODULES = {"analysis", "invoke", "sanitize_secrets"}
+_RUNTIME_PRESERVE_MODULES = {"analysis", "invoke", "sanitize_secrets", "runtime_permissions"}
 
 
 def _prefer_local_runtime_modules() -> tuple[list[str], dict[str, Any]]:
@@ -129,9 +135,11 @@ from config import (  # noqa: F401 — re-exported
     ARTIFACT_COLLECTION_MAX_FILES,
     AUTONOMOUS_MAX_RETRIES,
     AUTONOMOUS_MAX_TURNS,
+    BODY_SIZE_LIMIT,
     COMPACTION_AGGRESSIVE_THRESHOLD,
     COMPACTION_PRUNE_THRESHOLD,
     COMPACTION_TOKEN_THRESHOLD,
+    CONCURRENCY_LIMIT,
     DEFAULT_AGENT,
     DEFAULT_MODEL,
     DEFAULT_MODEL_REF,
@@ -161,6 +169,19 @@ from config import (  # noqa: F401 — re-exported
     logger,
     server_base_url,
 )
+
+# ---------------------------------------------------------------------------
+# Global state for concurrency and body-size enforcement
+# ---------------------------------------------------------------------------
+_INVOKE_SEMAPHORE: asyncio.Semaphore | None = None
+
+
+def get_invoke_semaphore() -> asyncio.Semaphore:
+    """Lazy initialize the invoke semaphore."""
+    global _INVOKE_SEMAPHORE
+    if _INVOKE_SEMAPHORE is None:
+        _INVOKE_SEMAPHORE = asyncio.Semaphore(CONCURRENCY_LIMIT)
+    return _INVOKE_SEMAPHORE
 from invoke import (  # noqa: F401 — re-exported
     StreamCallback,
     a2a_response_metadata,
@@ -315,13 +336,29 @@ def resolve_download_path(raw_value: str) -> Path:
     if not candidate:
         raise HTTPException(status_code=400, detail="artifact download path must not be blank")
     target = Path(candidate).expanduser().resolve()
-    import tempfile
-    allowed_roots = [Path(OPENCODE_WORKDIR).resolve(), Path(HOME_DIR).resolve(), Path(tempfile.gettempdir()).resolve()]
+    allowed_roots = [Path(OPENCODE_WORKDIR).resolve()]
     if not any(path_is_within(target, root) for root in allowed_roots):
-        raise HTTPException(status_code=400, detail=f"artifact path '{raw_value}' is outside the allowed runtime roots")
+        raise HTTPException(status_code=403, detail=f"artifact path '{raw_value}' is outside the workspace artifact roots")
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail=f"artifact path '{raw_value}' does not exist")
     return target
+
+
+def runtime_bearer_token() -> str:
+    """Return the token used for gateway-to-runtime Bearer authentication."""
+    return os.getenv(RUNTIME_BEARER_TOKEN_ENV, "").strip()
+
+
+def runtime_auth_required() -> bool:
+    """Return True when protected runtime endpoints must enforce Bearer auth."""
+    raw = os.getenv(RUNTIME_AUTH_REQUIRED_ENV, "").strip().lower()
+    return raw in ("1", "true", "yes") or bool(runtime_bearer_token())
+
+
+def _is_public_runtime_path(path: str) -> bool:
+    if path in RUNTIME_AUTH_PUBLIC_PATHS:
+        return True
+    return path.startswith("/docs/") or path.startswith("/redoc/") or path.startswith("/openapi")
 
 
 def build_execution_id(*, thread_id: str | None = None, request_id: str | None = None) -> str:
@@ -526,6 +563,29 @@ def _build_error_response(
 
 
 @app.middleware("http")
+async def body_size_limit_middleware(request: Request, call_next):
+    """Enforce a strict request body size limit to prevent DoS."""
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > BODY_SIZE_LIMIT:
+                logger.warning(
+                    "Rejecting request: content-length %s exceeds limit %s",
+                    content_length,
+                    BODY_SIZE_LIMIT,
+                )
+                return _build_error_response(
+                    request,
+                    status_code=413,
+                    message=f"Request body exceeds limit of {BODY_SIZE_LIMIT} bytes",
+                )
+        except (ValueError, TypeError):
+            pass
+
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def add_request_id(request: Request, call_next):  # type: ignore[no-untyped-def]
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
     request.state.request_id = request_id
@@ -536,6 +596,39 @@ async def add_request_id(request: Request, call_next):  # type: ignore[no-untype
         _REQUEST_ID_CTX.reset(token)
     response.headers["x-request-id"] = request_id
     return response
+
+
+@app.middleware("http")
+async def enforce_runtime_bearer_auth(request: Request, call_next):  # type: ignore[no-untyped-def]
+    if not getattr(request.state, "request_id", None):
+        request.state.request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    if _is_public_runtime_path(request.url.path) or not runtime_auth_required():
+        return await call_next(request)
+    configured_token = runtime_bearer_token()
+    if not configured_token:
+        return _build_error_response(
+            request,
+            status_code=503,
+            message="Runtime authentication is required but no bearer token is configured",
+            code="auth_not_configured",
+        )
+    auth_header = request.headers.get("authorization", "").strip()
+    if not auth_header.lower().startswith("bearer "):
+        return _build_error_response(
+            request,
+            status_code=401,
+            message="Missing runtime bearer token",
+            code="unauthorized",
+        )
+    supplied_token = auth_header[7:].strip()
+    if not hmac.compare_digest(supplied_token, configured_token):
+        return _build_error_response(
+            request,
+            status_code=403,
+            message="Invalid runtime bearer token",
+            code="forbidden",
+        )
+    return await call_next(request)
 
 
 @app.exception_handler(HTTPException)
@@ -700,94 +793,95 @@ def info() -> dict[str, Any]:
 
 
 @app.post("/invoke", response_model=InvokeResponse)
-def invoke(request: InvokeRequest) -> InvokeResponse:
+async def invoke(request: InvokeRequest) -> InvokeResponse:
     """Invoke the OpenCode agent with optional OTEL tracing."""
-    thread_id = request.thread_id or str(uuid.uuid4())
-    request_id = _request_execution_seed() or request.caller_request_id
-    execution_id = build_execution_id(
-        thread_id=thread_id,
-        request_id=request_id,
-    )
-    start_time = time.monotonic()
+    async with get_invoke_semaphore():
+        thread_id = request.thread_id or str(uuid.uuid4())
+        request_id = _request_execution_seed() or request.caller_request_id
+        execution_id = build_execution_id(
+            thread_id=thread_id,
+            request_id=request_id,
+        )
+        start_time = time.monotonic()
 
-    emit_run_started(
-        execution_id=execution_id,
-        thread_id=thread_id,
-        model=request.model or DEFAULT_MODEL_REF,
-    )
-
-    try:
-        tracer = get_tracer()
-        if tracer is not None:
-            with tracer.start_as_current_span(
-                "opencode.invoke",
-                attributes={
-                    "agent.name": SERVICE_NAME,
-                    "agent.namespace": SERVICE_NAMESPACE,
-                    "agent.model": request.model or DEFAULT_MODEL,
-                    "agent.autonomous": request.autonomous,
-                    "agent.output_format": request.output_format or "",
-                },
-            ) as span:
-                try:
-                    result = invoke_opencode(request)
-                    span.set_attribute("agent.status", result.status)
-
-                    duration_ms = int((time.monotonic() - start_time) * 1000)
-                    total_tokens = (result.metadata or {}).get("context_budget", {}).get("total_tokens", 0) if result.metadata else 0
-                    _emit_llm_call_from_response(
-                        execution_id=execution_id,
-                        thread_id=thread_id,
-                        session_id=SESSION_REGISTRY.get(thread_id),
-                        response=result,
-                        fallback_duration_ms=duration_ms,
-                    )
-                    emit_run_completed(
-                        execution_id=execution_id,
-                        thread_id=thread_id,
-                        status=result.status,
-                        total_tokens=total_tokens,
-                        duration_ms=duration_ms,
-                    )
-                    return result
-                except Exception as exc:
-                    if _OTEL_AVAILABLE and StatusCode is not None:
-                        span.set_status(StatusCode.ERROR, str(exc))
-                    emit_run_error(
-                        execution_id=execution_id,
-                        thread_id=thread_id,
-                        error=str(exc)[:2048],
-                    )
-                    raise
+        emit_run_started(
+            execution_id=execution_id,
+            thread_id=thread_id,
+            model=request.model or DEFAULT_MODEL_REF,
+        )
 
         try:
-            result = invoke_opencode(request)
-            duration_ms = int((time.monotonic() - start_time) * 1000)
-            total_tokens = (result.metadata or {}).get("context_budget", {}).get("total_tokens", 0) if result.metadata else 0
-            _emit_llm_call_from_response(
-                execution_id=execution_id,
-                thread_id=thread_id,
-                session_id=SESSION_REGISTRY.get(thread_id),
-                response=result,
-                fallback_duration_ms=duration_ms,
-            )
-            emit_run_completed(
-                execution_id=execution_id,
-                thread_id=thread_id,
-                status=result.status,
-                total_tokens=total_tokens,
-                duration_ms=duration_ms,
-            )
-            return result
-        except Exception as exc:
-            emit_run_error(
-                execution_id=execution_id,
-                thread_id=thread_id,
-                error=str(exc)[:2048],
-            )
-            raise
-    finally:
-        flush_sync_queue()
+            tracer = get_tracer()
+            if tracer is not None:
+                with tracer.start_as_current_span(
+                    "opencode.invoke",
+                    attributes={
+                        "agent.name": SERVICE_NAME,
+                        "agent.namespace": SERVICE_NAMESPACE,
+                        "agent.model": request.model or DEFAULT_MODEL,
+                        "agent.autonomous": request.autonomous,
+                        "agent.output_format": request.output_format or "",
+                    },
+                ) as span:
+                    try:
+                        result = await asyncio.to_thread(invoke_opencode, request)
+                        span.set_attribute("agent.status", result.status)
+
+                        duration_ms = int((time.monotonic() - start_time) * 1000)
+                        total_tokens = (result.metadata or {}).get("context_budget", {}).get("total_tokens", 0) if result.metadata else 0
+                        _emit_llm_call_from_response(
+                            execution_id=execution_id,
+                            thread_id=thread_id,
+                            session_id=SESSION_REGISTRY.get(thread_id),
+                            response=result,
+                            fallback_duration_ms=duration_ms,
+                        )
+                        emit_run_completed(
+                            execution_id=execution_id,
+                            thread_id=thread_id,
+                            status=result.status,
+                            total_tokens=total_tokens,
+                            duration_ms=duration_ms,
+                        )
+                        return result
+                    except Exception as exc:
+                        if _OTEL_AVAILABLE and StatusCode is not None:
+                            span.set_status(StatusCode.ERROR, str(exc))
+                        emit_run_error(
+                            execution_id=execution_id,
+                            thread_id=thread_id,
+                            error=str(exc)[:2048],
+                        )
+                        raise
+
+            try:
+                result = await asyncio.to_thread(invoke_opencode, request)
+                duration_ms = int((time.monotonic() - start_time) * 1000)
+                total_tokens = (result.metadata or {}).get("context_budget", {}).get("total_tokens", 0) if result.metadata else 0
+                _emit_llm_call_from_response(
+                    execution_id=execution_id,
+                    thread_id=thread_id,
+                    session_id=SESSION_REGISTRY.get(thread_id),
+                    response=result,
+                    fallback_duration_ms=duration_ms,
+                )
+                emit_run_completed(
+                    execution_id=execution_id,
+                    thread_id=thread_id,
+                    status=result.status,
+                    total_tokens=total_tokens,
+                    duration_ms=duration_ms,
+                )
+                return result
+            except Exception as exc:
+                emit_run_error(
+                    execution_id=execution_id,
+                    thread_id=thread_id,
+                    error=str(exc)[:2048],
+                )
+                raise
+        finally:
+            flush_sync_queue()
 
 
 @app.post("/cancel")
@@ -905,12 +999,13 @@ def context_budget(thread_id: str | None = None) -> dict[str, Any]:
 
 @app.post("/invoke/stream")
 async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
-    use_sync_memory_invoke = "you have persistent memory from prior conversations" in str(
-        request.system or ""
-    ).lower()
-    request_id = _request_execution_seed() or request.caller_request_id
+    async with get_invoke_semaphore():
+        use_sync_memory_invoke = "you have persistent memory from prior conversations" in str(
+            request.system or ""
+        ).lower()
+        request_id = _request_execution_seed() or request.caller_request_id
 
-    async def event_generator() -> AsyncIterator[str]:
+        async def event_generator() -> AsyncIterator[str]:
         thread_id = request.thread_id or str(uuid.uuid4())
         execution_id = build_execution_id(
             thread_id=thread_id,

@@ -527,6 +527,61 @@ def _apply_immutable_security_constraints(
     return config
 
 
+def _sanitize_mcp_local_servers(config: dict[str, Any]) -> list[str]:
+    """§security-P0: Strip local/command-based MCP servers from the config.
+
+    The trusted runtime builder only ever emits ``type: "remote"`` MCP servers
+    (HTTP URLs). OpenCode also supports ``type: "local"`` servers that spawn an
+    arbitrary subprocess via a ``command`` array — a direct RCE vector. Such an
+    entry can only have arrived through user-supplied ``opencode.json``
+    config_overrides, so we remove any MCP server that is local or carries a
+    ``command``/``args`` field. Returns the list of removed server names.
+    """
+    mcp = config.get("mcp")
+    if not isinstance(mcp, dict):
+        return []
+
+    removed: list[str] = []
+    sanitized: dict[str, Any] = {}
+    for name, server in mcp.items():
+        if not isinstance(server, dict):
+            removed.append(str(name))
+            continue
+        server_type = str(server.get("type") or "").strip().lower()
+        has_command = "command" in server or "args" in server
+        is_local = server_type == "local" or has_command
+        if is_local:
+            removed.append(str(name))
+            continue
+        sanitized[name] = server
+
+    if removed:
+        config["mcp"] = sanitized
+    return removed
+
+
+def _apply_failclosed_security_baseline(config: dict[str, Any]) -> None:
+    """§security-P0: Apply a restrictive baseline when the immutable config is
+    required but missing.
+
+    The hardened immutable ConfigMap is the security FLOOR. If the operator
+    mandates it (OPENCODE_REQUIRE_IMMUTABLE_CONFIG=true) but it could not be
+    loaded — e.g. the mount failed or the file was tampered with — we must
+    fail CLOSED rather than run with OpenCode's wide-open ``permission:
+    "allow"`` default. We pin plugins/skills off and drop to a restrictive
+    permission set that still allows read-only discovery tools.
+    """
+    from runtime_permissions import SAFE_DEFAULT_PERMISSION
+
+    logger.error(
+        "Immutable OpenCode config is REQUIRED but was not loaded; failing closed "
+        "with a restrictive permission baseline (bash=deny, edit/write=ask)."
+    )
+    config["permission"] = json.loads(json.dumps(SAFE_DEFAULT_PERMISSION))
+    config["plugin"] = []
+    config["skills"] = {"urls": []}
+
+
 def _apply_admin_provider_overrides(config: dict[str, Any]) -> None:
     """Merge admin-level provider configuration overrides into the config.
 
@@ -809,6 +864,14 @@ def build_generated_config(
     immutable_base = _load_immutable_config_base()
     if immutable_base:
         config = _apply_immutable_security_constraints(config, immutable_base)
+    else:
+        # §security-P0: Fail CLOSED when the immutable config is mandated but
+        # absent. Without this, a failed/tampered mount would silently grant
+        # the wide-open ``permission: "allow"`` default.
+        from runtime_permissions import require_immutable_config
+
+        if require_immutable_config():
+            _apply_failclosed_security_baseline(config)
 
     # §security-P1: Apply admin env overrides (highest priority). These can
     # override even immutable security constraints for explicit admin-approved
@@ -816,6 +879,40 @@ def build_generated_config(
     _apply_admin_provider_overrides(config)
     _apply_admin_plugin_list(config)
     _apply_admin_model_override(config, warnings)
+
+    # §security-P0: Enforce the policy-derived admin tool ceiling. The operator
+    # injects OPENCODE_ADMIN_PERMISSION_CEILING_JSON from
+    # AgentPolicy.toolPolicy.adminToolCeiling. Clamping only ever TIGHTENS
+    # permissions — it can never grant more than the floor already allows.
+    from runtime_permissions import (
+        bash_permission_with_denylist,
+        clamp_permissions_to_ceiling,
+        load_permission_ceiling,
+    )
+
+    ceiling = load_permission_ceiling()
+    if ceiling:
+        config["permission"] = clamp_permissions_to_ceiling(config.get("permission"), ceiling)
+        warnings.append(
+            f"Applied admin tool ceiling to permissions: {sorted(ceiling.items())}"
+        )
+
+    # §security-P0: Append catastrophic-command deny patterns to the bash
+    # permission so commands like ``rm -rf /`` can never be executed even when
+    # bash is otherwise allowed. Skipped when bash is already fully denied.
+    permission = config.get("permission")
+    if isinstance(permission, dict) and permission.get("bash") not in ("deny", None):
+        permission["bash"] = bash_permission_with_denylist(permission["bash"])
+
+    # §security-P0: Strip any local/command-based MCP servers. The trusted
+    # runtime builder only emits remote (HTTP) MCP servers; a local-command
+    # server can only have come from user config_overrides and is an RCE vector.
+    removed_mcp = _sanitize_mcp_local_servers(config)
+    if removed_mcp:
+        warnings.append(
+            f"Removed local/command-based MCP server(s) for security: {sorted(removed_mcp)}. "
+            "Only remote (HTTP) MCP servers are permitted."
+        )
 
     return config, warnings
 

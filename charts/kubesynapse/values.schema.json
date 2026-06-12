@@ -583,7 +583,9 @@
             "litellmMasterKey": { "type": "string" },
             "openaiApiKey": { "type": "string" },
             "dbPassword": { "type": "string" },
-            "apiGatewaySharedToken": { "type": "string" }
+            "apiGatewaySharedToken": { "type": "string" },
+            "runtimeBearerToken": { "type": "string" },
+            "opencodeServerPassword": { "type": "string" }
           }
         },
         "externalSecrets": {

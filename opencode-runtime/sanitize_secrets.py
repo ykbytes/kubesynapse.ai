@@ -16,13 +16,30 @@ logger = logging.getLogger("opencode-runtime.sanitize")
 # Secret env-var names whose *values* must never appear in user-facing output.
 # ---------------------------------------------------------------------------
 _SECRET_ENV_NAMES: list[str] = [
+    "RUNTIME_BEARER_TOKEN",
+    "AGENT_RUNTIME_SHARED_TOKEN",
     "API_GATEWAY_SHARED_TOKEN",
     "MCP_BEARER_TOKEN",
     "GITHUB_MCP_TOKEN",
+    "GIT_TOKEN",
+    "GIT_PASSWORD",
+    "GIT_CREDENTIALS",
+    "GITHUB_TOKEN",
+    "GITLAB_TOKEN",
+    "BITBUCKET_TOKEN",
+    "AZURE_DEVOPS_TOKEN",
     "LITELLM_API_KEY",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "AZURE_OPENAI_API_KEY",
+    "OPENCODE_AUTH_CONTENT",
+    "OPENCODE_API_KEY",
+    "OPENCODE_GO_API_KEY",
+    "OPENCODE_SERVER_PASSWORD",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "GOOGLE_APPLICATION_CREDENTIALS",
 ]
 
 # Env vars whose values are sensitive infrastructure URLs.

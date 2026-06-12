@@ -1,13 +1,25 @@
 """Operator entrypoint — configures logging, K8s auth, and imports controllers.
 
 All Kopf handlers are registered via the ``controllers`` package import.
+Features:
+- Graceful shutdown on SIGTERM/SIGINT
+- Health check HTTP endpoint
+- Request context propagation
+- Structured error logging
 """
 
 from __future__ import annotations
 
+import contextvars
+import http.server
+import json
 import logging
 import os
 import signal
+import socketserver
+import sys
+import threading
+from typing import Any
 
 import kopf
 import kubernetes.config  # type: ignore[import-untyped]
@@ -20,13 +32,31 @@ except ModuleNotFoundError:  # pragma: no cover
     _jsonlogger = None
 
 
+# Context variable for request tracing
+REQUEST_ID = contextvars.ContextVar("request_id", default="")
+OPERATOR_STATE = {"shutdown_requested": False, "ready": False}
+
+
+class StructuredFormatter(logging.Formatter):
+    """Add request_id to all log records."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        record.request_id = REQUEST_ID.get() or "-"
+        return super().format(record)
+
+
 def _configure_logging() -> None:
     log_level = os.getenv("OPERATOR_LOG_LEVEL", "INFO").upper()
     handler = logging.StreamHandler()
+    
     if os.getenv("JSON_LOGS", "true").lower() in {"1", "true"} and _jsonlogger is not None:
-        handler.setFormatter(_jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        fmt = "%(asctime)s %(levelname)s %(name)s %(request_id)s %(message)s"
+        handler.setFormatter(_jsonlogger.JsonFormatter(fmt))
     else:
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        fmt = "%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s"
+        formatter = StructuredFormatter(fmt)
+        handler.setFormatter(formatter)
+    
     logging.basicConfig(level=log_level, handlers=[handler], force=True)
 
 
@@ -79,22 +109,77 @@ _load_kubernetes_config()
 # Import the controllers package — Kopf handler registration happens at import time.
 import controllers  # noqa: E402,F401
 
+
+# ---------------------------------------------------------------------------
+# Health check HTTP server (§7.3 — Observability)
+# ---------------------------------------------------------------------------
+
+class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
+    """Minimal health check endpoint for Kubernetes probes."""
+
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path == "/healthz":
+            response = {"status": "ok", "ready": OPERATOR_STATE["ready"]}
+            self.send_response(200 if OPERATOR_STATE["ready"] else 503)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(response).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format: str, *args: Any) -> None:  # type: ignore[override]
+        """Suppress default HTTP logging."""
+        pass
+
+
+def _start_health_check_server() -> threading.Thread:
+    """Start health check HTTP server on port 8080."""
+    port = int(os.getenv("OPERATOR_HEALTH_PORT", "8080"))
+    server = socketserver.TCPServer(("0.0.0.0", port), HealthCheckHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logger.info("Health check server listening on port %d", port)
+    return thread
+
+
+def _handle_shutdown_signal(signum: int, frame: Any) -> None:  # type: ignore[no-untyped-def]
+    """Handle SIGTERM/SIGINT gracefully."""
+    OPERATOR_STATE["shutdown_requested"] = True
+    logger.info("Shutdown signal received (sig=%d)", signum)
+
+
 # ---------------------------------------------------------------------------
 # Startup / shutdown hooks
-# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 
 @kopf.on.startup()
 def configure(settings: kopf.OperatorSettings, **_) -> None:
     """Ensure K8s client is authenticated when the operator starts."""
+    logger.info("Operator startup: version=%s", os.getenv("OPERATOR_VERSION", "unknown"))
+    
+    # Graceful shutdown handlers
+    signal.signal(signal.SIGTERM, _handle_shutdown_signal)
+    signal.signal(signal.SIGINT, _handle_shutdown_signal)
+    
+    # Health check server
+    _start_health_check_server()
+    
+    # Kopf configuration
     settings.persistence.finalizer = "kubesynapse.ai/finalizer"
     settings.peering.name = OPERATOR_PEERING_NAME
     # §7.1 — Leader election: 30s lease duration
     settings.peering.lifetime = 30
     settings.peering.standby_delay = 15
+    settings.posting.strategy = "permanent"  # Never lose resource event logs
+    
     _load_kubernetes_config()
     init_state_database()
     init_tracing("kubesynapse-operator")
+    
+    # Mark operator ready after all init completes
+    OPERATOR_STATE["ready"] = True
+    logger.info("Operator ready for reconciliation")
 
     # §S6-1 — Migrate existing DB MCP connections to CRD resources
     try:

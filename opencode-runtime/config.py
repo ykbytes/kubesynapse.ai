@@ -81,6 +81,10 @@ DEFAULT_AGENT_STEPS = max(_safe_int("OPENCODE_AGENT_STEPS", 128), 1)
 MODEL_CONTEXT_LIMIT = max(_safe_int("OPENCODE_MODEL_CONTEXT_LIMIT", 256000), 2048)
 MODEL_OUTPUT_LIMIT = max(_safe_int("OPENCODE_MODEL_OUTPUT_LIMIT", 16384), 16)
 
+# §security-P0: Hard limits for DoS protection and resource stability
+CONCURRENCY_LIMIT = max(_safe_int("RUNTIME_CONCURRENCY_LIMIT", 2), 1)
+BODY_SIZE_LIMIT = max(_safe_int("RUNTIME_BODY_SIZE_LIMIT", 10 * 1024 * 1024), 1024 * 1024)  # default 10MB
+
 # ---------------------------------------------------------------------------
 # Service identity
 # ---------------------------------------------------------------------------

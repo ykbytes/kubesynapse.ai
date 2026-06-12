@@ -1,0 +1,457 @@
+"""Production-grade Helm values and deployment manifest for hardened API Gateway.
+
+This shows the exact configuration needed to deploy KubeSynapse API Gateway
+with all security and reliability fixes from the production hardening audit.
+"""
+
+# ===========================================================================
+# DEPLOYMENT MANIFEST - copy to values.yaml for Helm, or deploy directly
+# ===========================================================================
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubesynapse-api-gateway
+  namespace: kubesynapse
+  labels:
+    app: kubesynapse-api-gateway
+    version: "1.0.0"
+
+---
+# Minimal RBAC for API Gateway — read agents/workflows, manage sessions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubesynapse-api-gateway
+  labels:
+    app: kubesynapse-api-gateway
+rules:
+# CRD read access (no mutations from gateway)
+- apiGroups: ["kubesynapse.ai"]
+  resources: ["aiagents", "agentworkflows", "agentpolicies", "agenttenants", "mcpconnections"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["kubesynapse.ai"]
+  resources: ["*/status"]
+  verbs: ["get"]
+
+# ConfigMap read (provider registry, skills catalog)
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+
+# Secret read (API keys, credentials)
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubesynapse-api-gateway
+  labels:
+    app: kubesynapse-api-gateway
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubesynapse-api-gateway
+subjects:
+- kind: ServiceAccount
+  name: kubesynapse-api-gateway
+  namespace: kubesynapse
+
+---
+# Secret for database credentials (referenced, not env vars)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kubesynapse-db-credentials
+  namespace: kubesynapse
+type: Opaque
+stringData:
+  password: ${DATABASE_PASSWORD}  # Replace with actual password
+
+---
+# Secret for API authentication
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kubesynapse-api-gateway-secrets
+  namespace: kubesynapse
+type: Opaque
+stringData:
+  shared-token: ${API_GATEWAY_SHARED_TOKEN}
+  litellm-master-key: ${LITELLM_MASTER_KEY}
+
+---
+# Deployment with full production hardening
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubesynapse-api-gateway
+  namespace: kubesynapse
+  labels:
+    app: kubesynapse-api-gateway
+    version: "1.0.0"
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0  # Ensure continuous availability
+  
+  selector:
+    matchLabels:
+      app: kubesynapse-api-gateway
+  
+  template:
+    metadata:
+      labels:
+        app: kubesynapse-api-gateway
+        version: "1.0.0"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    
+    spec:
+      # Service account
+      serviceAccountName: kubesynapse-api-gateway
+      automountServiceAccountToken: true
+      
+      # Security context (pod level)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: "OnRootMismatch"
+        seccompProfile:
+          type: RuntimeDefault
+      
+      # Pod disruption budget for high availability
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - kubesynapse-api-gateway
+              topologyKey: kubernetes.io/hostname
+      
+      # Graceful termination
+      terminationGracePeriodSeconds: 60
+      dnsPolicy: ClusterFirst
+      
+      containers:
+      - name: gateway
+        image: kubesynapse-api-gateway:latest  # Use specific version tag in production
+        imagePullPolicy: IfNotPresent
+        
+        # Container security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 999
+        
+        # Health checks - §2.1 from audit
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 2
+        
+        # Environment variables (non-sensitive)
+        env:
+        - name: API_GATEWAY_LOG_LEVEL
+          value: "INFO"
+        - name: JSON_LOGS
+          value: "true"
+        - name: STRUCTURED_LOGGING
+          value: "true"
+        - name: OPERATOR_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        
+        # Database configuration
+        - name: DATABASE_HOST
+          value: "kubesynapse-postgresql"
+        - name: DATABASE_PORT
+          value: "5432"
+        - name: DATABASE_USER
+          value: "kubesynapse"
+        - name: DATABASE_NAME
+          value: "kubesynapse"
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: kubesynapse-db-credentials
+              key: password
+        
+        # Enhanced connection pool (§2.2 from audit)
+        - name: DATABASE_POOL_SIZE
+          value: "20"
+        - name: DATABASE_MAX_OVERFLOW
+          value: "40"
+        - name: DATABASE_POOL_TIMEOUT
+          value: "30"
+        - name: DATABASE_POOL_RECYCLE
+          value: "1800"
+        
+        # API Gateway configuration
+        - name: API_GATEWAY_SHARED_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: kubesynapse-api-gateway-secrets
+              key: shared-token
+        - name: LITELLM_INTERNAL_URL
+          value: "http://kubesynapse-litellm:4000"
+        - name: LITELLM_MASTER_KEY
+          valueFrom:
+            secretKeyRef:
+              name: kubesynapse-api-gateway-secrets
+              key: litellm-master-key
+        
+        # Ports
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        
+        # Volume mounts (writable areas)
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: gateway-tmp
+          mountPath: /tmp/gateway
+        
+        # Resource limits - §1.4 from audit
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+      
+      # Volumes
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: gateway-tmp
+        emptyDir: {}
+
+---
+# Service for API exposure
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubesynapse-api-gateway
+  namespace: kubesynapse
+  labels:
+    app: kubesynapse-api-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: kubesynapse-api-gateway
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    protocol: TCP
+
+---
+# NetworkPolicy - §1.5 from audit
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kubesynapse-api-gateway-network-policy
+  namespace: kubesynapse
+spec:
+  podSelector:
+    matchLabels:
+      app: kubesynapse-api-gateway
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Allow inbound only from clients in same namespace or ingress controller
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: kubesynapse
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8080
+  
+  # Allow outbound to: PostgreSQL, Redis, NATS, Qdrant, LiteLLM, Operator, DNS
+  egress:
+  # PostgreSQL database
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kubesynapse
+      podSelector:
+        matchLabels:
+          app: postgresql
+    ports:
+    - protocol: TCP
+      port: 5432
+  
+  # Redis cache
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kubesynapse
+      podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  
+  # NATS message broker
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kubesynapse
+      podSelector:
+        matchLabels:
+          app: nats
+    ports:
+    - protocol: TCP
+      port: 4222
+  
+  # Qdrant vector database
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kubesynapse
+      podSelector:
+        matchLabels:
+          app: qdrant
+    ports:
+    - protocol: TCP
+      port: 6333
+  
+  # LiteLLM proxy
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kubesynapse
+      podSelector:
+        matchLabels:
+          app: litellm
+    ports:
+    - protocol: TCP
+      port: 4000
+  
+  # Kubernetes API server
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 443
+  
+  # DNS (kube-dns in kube-system)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+
+---
+# PodDisruptionBudget to ensure gateway availability
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kubesynapse-api-gateway-pdb
+  namespace: kubesynapse
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: kubesynapse-api-gateway
+
+---
+# ServiceMonitor for Prometheus (if using Prometheus Operator)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kubesynapse-api-gateway
+  namespace: kubesynapse
+  labels:
+    app: kubesynapse-api-gateway
+spec:
+  selector:
+    matchLabels:
+      app: kubesynapse-api-gateway
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+
+# ===========================================================================
+# DEPLOYMENT INSTRUCTIONS
+# ===========================================================================
+#
+# 1. Set environment variables:
+#    export DATABASE_PASSWORD="your-secure-password"
+#    export API_GATEWAY_SHARED_TOKEN="your-shared-token"
+#    export LITELLM_MASTER_KEY="your-litellm-key"
+#
+# 2. Substitute placeholders:
+#    envsubst < API_GATEWAY_DEPLOYMENT_MANIFEST.yaml > kubesynapse-api-gateway.yaml
+#
+# 3. Deploy:
+#    kubectl apply -f kubesynapse-api-gateway.yaml
+#
+# 4. Verify deployment:
+#    kubectl get deployment -n kubesynapse kubesynapse-api-gateway
+#    kubectl logs -n kubesynapse -l app=kubesynapse-api-gateway --tail=50
+#    kubectl port-forward -n kubesynapse svc/kubesynapse-api-gateway 8080:8080
+#    curl http://localhost:8080/health
+#
+# 5. Verify security:
+#    kubectl get pod -n kubesynapse -l app=kubesynapse-api-gateway -o yaml | grep -A 10 securityContext
+#    kubectl get networkpolicies -n kubesynapse
+#
+# ===========================================================================

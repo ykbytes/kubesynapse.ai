@@ -43,17 +43,29 @@ logger = logging.getLogger("opencode-runtime")
 _pool_lock = threading.Lock()
 _pooled_client: httpx.Client | None = None
 _pooled_client_base_url: str = ""
+_pooled_client_auth_key: str = ""
+
+
+def _opencode_server_auth() -> tuple[str, str] | None:
+    password = _supervisor_mod.resolve_opencode_server_password()
+    if not password:
+        return None
+    username = _supervisor_mod.resolve_opencode_server_username()
+    return username, password
 
 
 def _get_pooled_client() -> httpx.Client:
     """Return (and lazily create) the module-level pooled httpx.Client."""
-    global _pooled_client, _pooled_client_base_url
+    global _pooled_client, _pooled_client_auth_key, _pooled_client_base_url
     base_url = server_base_url()
+    auth = _opencode_server_auth()
+    auth_key = ":".join(auth) if auth else ""
     with _pool_lock:
-        if _pooled_client is None or _pooled_client_base_url != base_url:
+        if _pooled_client is None or _pooled_client_base_url != base_url or _pooled_client_auth_key != auth_key:
             old = _pooled_client
             _pooled_client = httpx.Client(
                 base_url=base_url,
+                auth=auth,
                 timeout=HTTP_TIMEOUT_SECONDS,
                 trust_env=False,
                 limits=httpx.Limits(
@@ -63,6 +75,7 @@ def _get_pooled_client() -> httpx.Client:
                 ),
             )
             _pooled_client_base_url = base_url
+            _pooled_client_auth_key = auth_key
             if old is not None:
                 try:
                     old.close()
@@ -575,11 +588,30 @@ def auto_approve_pending_questions() -> list[str]:
             logger.warning("Failed to auto-approve question %s", qid)
 
     # Handle permission questions (bash/edit/write "ask" prompts)
-    # These have IDs starting with "per_" and use a different endpoint
+    # These have IDs starting with "per_" and use a different endpoint.
+    #
+    # §security-P0: Auto-approval is NOT unconditional. Each pending permission
+    # is evaluated against the policy-derived admin tool ceiling
+    # (OPENCODE_ADMIN_PERMISSION_CEILING_JSON) and the catastrophic-command
+    # denylist. Tools the policy caps at deny/ask — and dangerous shell
+    # commands — are rejected instead of approved, even in autonomous mode.
+    from runtime_permissions import evaluate_pending_permission, load_permission_ceiling
+
+    ceiling = load_permission_ceiling()
     permissions = list_pending_permissions()
     for p in permissions:
         pid = str(p.get("id", "")).strip()
         if not pid:
+            continue
+        decision = evaluate_pending_permission(p, ceiling, autonomous=True)
+        if decision == "reject":
+            if reply_to_permission(pid, "reject"):
+                logger.warning(
+                    "Auto-rejected permission %s (%s) — blocked by policy ceiling or denylist",
+                    pid, p.get("permission", "?"),
+                )
+            else:
+                logger.warning("Failed to auto-reject permission %s", pid)
             continue
         if reply_to_permission(pid, "always"):
             approved_ids.append(pid)

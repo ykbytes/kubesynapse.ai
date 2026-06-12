@@ -106,6 +106,18 @@ def get_workflow(
     return info
 
 
+@router.get("/workflows/{workflow_name}/manifest")
+def get_workflow_manifest(
+    workflow_name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Return the full Kubernetes manifest for a workflow."""
+    ensure_namespace_access(user, namespace)
+    manifest = read_custom_resource("agentworkflows", workflow_name, namespace, "Workflow")
+    return JSONResponse(content=manifest)
+
+
 @router.patch("/workflows/{workflow_name}", response_model=WorkflowInfo)
 def update_workflow(
     workflow_name: str,

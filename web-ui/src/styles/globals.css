@@ -1013,6 +1013,442 @@ body::after {
   overflow-wrap: anywhere;
 }
 
+/* ─────────────────────────────────────────────────────────────── */
+/* ──  PREMIUM UI ENHANCEMENTS                                   ── */
+/* ─────────────────────────────────────────────────────────────── */
+
+/* ── Premium Input styling ── */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="search"],
+input[type="url"],
+input[type="date"],
+input[type="time"],
+textarea,
+select {
+  @apply border-border/50 bg-black/20 transition-all duration-200;
+}
+
+input[type="text"]:hover,
+input[type="email"]:hover,
+input[type="password"]:hover,
+input[type="search"]:hover,
+input[type="url"]:hover,
+textarea:hover,
+select:hover {
+  @apply border-border/70 bg-black/30;
+}
+
+input[type="text"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus,
+input[type="search"]:focus,
+input[type="url"]:focus,
+textarea:focus,
+select:focus {
+  @apply border-primary/50 bg-black/40 ring-1 ring-primary/20;
+}
+
+/* ── Premium Button transitions ── */
+button {
+  @apply transition-all duration-200;
+}
+
+button:active:not(:disabled) {
+  @apply scale-95;
+}
+
+/* ── Premium Badge animations ── */
+.badge {
+  @apply transition-all duration-200;
+}
+
+.badge:hover {
+  @apply shadow-md shadow-current/10;
+}
+
+/* ── Premium Card shadows ── */
+.card {
+  @apply transition-all duration-200;
+}
+
+.card:hover {
+  @apply shadow-md;
+}
+
+/* ── Manifest viewer syntax highlighting ── */
+.manifest-viewer {
+  @apply bg-black/50 border border-primary/20 rounded-lg overflow-hidden;
+}
+
+.manifest-viewer pre {
+  @apply bg-transparent text-xs leading-relaxed font-mono;
+}
+
+.manifest-viewer code {
+  @apply text-foreground/90;
+}
+
+/* ── Premium table styling ── */
+table {
+  @apply border-collapse w-full;
+}
+
+tbody tr {
+  @apply border-b border-border/30 transition-colors duration-150;
+}
+
+tbody tr:hover {
+  @apply bg-primary/5;
+}
+
+tbody tr:nth-child(even) {
+  @apply bg-black/20;
+}
+
+td, th {
+  @apply px-4 py-3 text-left text-sm;
+}
+
+th {
+  @apply font-semibold text-foreground/80 bg-primary/5 border-b-2 border-border/50;
+}
+
+/* ── Loading shimmer effect ── */
+@keyframes premium-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.loading-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--color-muted) 0%,
+    var(--color-card) 50%,
+    var(--color-muted) 100%
+  );
+  background-size: 200% 100%;
+  animation: premium-shimmer 2s infinite;
+}
+
+/* ── Premium modal entrance ── */
+@keyframes modal-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.modal-enter {
+  animation: modal-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── Premium panel slide ── */
+@keyframes panel-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.panel-slide-in {
+  animation: panel-slide-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── Status badge pulse ── */
+@keyframes status-badge-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 currentColor;
+  }
+  50% {
+    box-shadow: 0 0 0 4px currentColor;
+    opacity: 0.5;
+  }
+}
+
+.status-badge-pulse {
+  animation: status-badge-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ── Code block styling ── */
+.code-block {
+  @apply bg-black/40 border border-border/40 rounded-lg p-3 font-mono text-sm overflow-auto;
+}
+
+.code-block code {
+  @apply text-foreground/90;
+}
+
+/* ── Premium disabled state ── */
+[disabled],
+:disabled {
+  @apply opacity-50 cursor-not-allowed;
+}
+
+/* ── Smooth scroll anchor ── */
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 4rem;
+}
+
+/* ── Focus-visible ring ── */
+:focus-visible {
+  @apply outline-none ring-2 ring-primary/50 ring-offset-2 ring-offset-background rounded;
+}
+
+/* ── Premium link styling ── */
+a {
+  @apply transition-colors duration-200;
+}
+
+a:hover:not(.no-hover) {
+  @apply text-primary;
+}
+
+a:focus-visible {
+  @apply outline-none ring-2 ring-primary/50 rounded;
+}
+
+/* ═══════════════════════════════════════════════════════════════════ */
+/* ─── COMPOSER PAGE ENHANCEMENTS ─── */
+/* ═══════════════════════════════════════════════════════════════════ */
+
+/* Panel slide animations */
+@keyframes panel-slide-in-left {
+  from { opacity: 0; transform: translateX(-20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes panel-slide-in-right {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes panel-slide-in-bottom {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes toolbar-highlight {
+  0% { box-shadow: inset 0 0 0 2px transparent; }
+  50% { box-shadow: inset 0 0 0 2px oklch(0.708 0.101 188 / 0.3); }
+  100% { box-shadow: inset 0 0 0 2px transparent; }
+}
+
+@keyframes node-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 oklch(0.708 0.101 188 / 0.4); }
+  50% { box-shadow: 0 0 0 6px oklch(0.708 0.101 188 / 0); }
+}
+
+@keyframes status-flow {
+  0% { opacity: 0.3; }
+  50% { opacity: 1; }
+  100% { opacity: 0.3; }
+}
+
+/* Composer toolbar enhancements */
+.composer-toolbar {
+  @apply bg-gradient-to-r from-background to-background/95 transition-all duration-200;
+  border-bottom: 1px solid oklch(0.4 0.02 200 / 0.3);
+}
+
+.composer-toolbar:hover {
+  @apply shadow-sm;
+}
+
+/* Canvas wrapper enhancements */
+.composer-canvas-wrapper {
+  @apply bg-gradient-to-br from-background via-background to-muted/5;
+}
+
+.composer-canvas {
+  @apply transition-opacity duration-300;
+}
+
+/* Panel transitions */
+.composer-panel {
+  animation: panel-slide-in-left 0.3s cubic-bezier(0, 0, 0.38, 0.9);
+}
+
+.composer-palette {
+  animation: panel-slide-in-left 0.3s cubic-bezier(0, 0, 0.38, 0.9);
+}
+
+.composer-properties {
+  animation: panel-slide-in-right 0.3s cubic-bezier(0, 0, 0.38, 0.9);
+}
+
+.composer-activity {
+  animation: panel-slide-in-right 0.35s cubic-bezier(0, 0, 0.38, 0.9);
+}
+
+.composer-history {
+  animation: panel-slide-in-bottom 0.3s cubic-bezier(0, 0, 0.38, 0.9);
+}
+
+/* Node styling enhancements */
+.react-flow__node {
+  @apply transition-all duration-200;
+}
+
+.react-flow__node.selected {
+  @apply drop-shadow-lg;
+}
+
+.react-flow__node:hover {
+  @apply drop-shadow-md;
+}
+
+/* Edge styling */
+.react-flow__edge {
+  @apply transition-all duration-200;
+}
+
+.react-flow__edge.animated {
+  stroke-dasharray: 5, 5;
+  animation: dash 0.5s linear infinite;
+}
+
+@keyframes dash {
+  to {
+    stroke-dashoffset: 10;
+  }
+}
+
+/* Status indicators */
+.status-running {
+  animation: status-flow 2s ease-in-out infinite;
+}
+
+.status-pulse {
+  animation: node-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Better visual separation */
+.composer-section {
+  @apply border-b border-border/40 transition-colors duration-200;
+}
+
+.composer-section:hover {
+  @apply border-border/60 bg-muted/30;
+}
+
+/* Smooth input/select focus states */
+.composer-input:focus,
+.composer-select:focus {
+  @apply ring-2 ring-primary/30 border-primary/50;
+}
+
+/* Toolbar button grouping */
+.button-group {
+  @apply flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-muted/20 border border-border/40;
+}
+
+.button-group:hover {
+  @apply bg-muted/40 border-border/60;
+}
+
+/* Improved scrollbar styling for panels */
+.composer-panel::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.composer-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.composer-panel::-webkit-scrollbar-thumb {
+  background: oklch(0.4 0.02 200 / 0.3);
+  border-radius: 3px;
+}
+
+.composer-panel::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.4 0.02 200 / 0.5);
+}
+
+/* Canvas empty state enhancement */
+.composer-empty-state {
+  @apply animate-fade-in;
+}
+
+.composer-empty-state-icon {
+  @apply inline-flex items-center justify-center h-14 w-14 rounded-2xl border-2 border-primary/20 bg-gradient-to-br from-primary/15 to-primary/5 text-primary;
+  animation: bounce-in 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Enhanced button states */
+.composer-button {
+  @apply transition-all duration-200 relative;
+}
+
+.composer-button:hover {
+  @apply shadow-sm -translate-y-0.5;
+}
+
+.composer-button:active {
+  @apply translate-y-0;
+}
+
+/* Panel dividers with gradient */
+.composer-divider {
+  @apply bg-gradient-to-r from-transparent via-border/40 to-transparent h-px;
+}
+
+/* ── Icon button polish ── */
+button[class*="icon"] {
+  @apply relative transition-all duration-200;
+}
+
+button[class*="icon"]:hover:not(:disabled) {
+  @apply bg-primary/10;
+}
+
+/* ── Form label styling ── */
+label {
+  @apply text-sm font-medium text-foreground/80 transition-colors duration-200;
+}
+
+label:hover {
+  @apply text-foreground;
+}
+
+/* ── Error message styling ── */
+.error-text {
+  @apply text-red-500 dark:text-red-400 text-xs font-medium;
+}
+
+.error-state {
+  @apply border-red-500/50 bg-red-500/5;
+}
+
+/* ── Success message styling ── */
+.success-text {
+  @apply text-emerald-600 dark:text-emerald-400 text-xs font-medium;
+}
+
+.success-state {
+  @apply border-emerald-500/50 bg-emerald-500/5;
+}
+
+/* ── Warning message styling ── */
+.warning-text {
+  @apply text-amber-600 dark:text-amber-400 text-xs font-medium;
+}
+
+.warning-state {
+  @apply border-amber-500/50 bg-amber-500/5;
+}
+
 /* Restore readable docs contrast in light theme even when older section content
    still carries hard-coded dark-theme utility classes. */
 [data-theme="light"] .docs-content p,

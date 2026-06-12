@@ -34,18 +34,18 @@ const EMPTY_CREATE: CreateUserPayload = {
 function roleBadge(role: UserRole) {
   switch (role) {
     case "admin":
-      return <Badge variant="outline" className="gap-1 border-sky-500/25 bg-sky-500/10 text-sky-500"><ShieldCheck className="h-3 w-3" />Admin</Badge>;
+      return <Badge variant="outline" className="gap-1 border-sky-500/40 bg-gradient-to-r from-sky-500/15 to-sky-500/5 text-sky-600 dark:text-sky-400 font-medium"><ShieldCheck className="h-3 w-3" />Admin</Badge>;
     case "operator":
-      return <Badge variant="outline" className="gap-1 border-amber-500/25 bg-amber-500/10 text-amber-500"><Shield className="h-3 w-3" />Operator</Badge>;
+      return <Badge variant="outline" className="gap-1 border-amber-500/40 bg-gradient-to-r from-amber-500/15 to-amber-500/5 text-amber-600 dark:text-amber-400 font-medium"><Shield className="h-3 w-3" />Operator</Badge>;
     default:
-      return <Badge variant="outline" className="border-border/60 bg-background/80 text-foreground/70">Viewer</Badge>;
+      return <Badge variant="outline" className="border-border/50 bg-gradient-to-r from-muted/50 to-background text-foreground/60 font-medium">Viewer</Badge>;
   }
 }
 
 function statusBadge(active: boolean) {
   return active
-    ? <Badge variant="outline" className="border-emerald-500/25 bg-emerald-500/10 text-emerald-500">Active</Badge>
-    : <Badge variant="outline" className="border-red-500/25 bg-red-500/10 text-red-500">Locked</Badge>;
+    ? <Badge variant="outline" className="border-emerald-500/40 bg-gradient-to-r from-emerald-500/15 to-emerald-500/5 text-emerald-600 dark:text-emerald-400 font-medium">Active</Badge>
+    : <Badge variant="outline" className="border-red-500/40 bg-gradient-to-r from-red-500/15 to-red-500/5 text-red-600 dark:text-red-400 font-medium">Locked</Badge>;
 }
 
 function formatDate(iso: string | null | undefined): string {

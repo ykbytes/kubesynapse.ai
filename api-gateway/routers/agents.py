@@ -16,6 +16,7 @@ from services.runtime_client import (
     CircuitBreakerOpenError,
     RuntimeUnhealthyError,
     invoke_with_retry,
+    runtime_auth_headers,
     stream_with_retry,
 )
 
@@ -340,6 +341,18 @@ def get_agent(
 ):
     ensure_namespace_access(user, namespace)
     return agent_detail_from_resource(read_agent(agent_name, namespace))
+
+
+@router.get("/agents/{agent_name}/manifest")
+def get_agent_manifest(
+    agent_name: str,
+    namespace: str = "default",
+    user=Depends(verify_token),
+):
+    """Return the full Kubernetes manifest for an agent."""
+    ensure_namespace_access(user, namespace)
+    manifest = read_custom_resource("agents", agent_name, namespace, "Agent")
+    return JSONResponse(content=manifest)
 
 
 @router.get("/agents/{agent_name}/discover", response_model=AgentDiscoveryResponse)
@@ -1070,6 +1083,7 @@ async def get_agent_todos(
     if_none_match = request.headers.get("if-none-match")
     if if_none_match:
         upstream_headers["If-None-Match"] = if_none_match
+    upstream_headers = runtime_auth_headers(upstream_headers)
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0), trust_env=False) as client:
             response = await client.get(
@@ -1108,6 +1122,7 @@ async def get_agent_diff(
             response = await client.get(
                 f"{agent_runtime_url(agent_name, namespace)}/diff",
                 params={"thread_id": thread_id},
+                headers=runtime_auth_headers(),
             )
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Failed to fetch session diff: {exc}") from exc
@@ -1132,6 +1147,7 @@ async def get_agent_questions(
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0), trust_env=False) as client:
             response = await client.get(
                 f"{agent_runtime_url(agent_name, namespace)}/question",
+                headers=runtime_auth_headers(),
             )
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Failed to fetch agent questions: {exc}") from exc
@@ -1158,6 +1174,7 @@ async def reply_agent_question(
             response = await client.post(
                 f"{agent_runtime_url(agent_name, namespace)}/question/{request_id}/reply",
                 json=body,
+                headers=runtime_auth_headers(),
             )
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Failed to reply to question: {exc}") from exc
@@ -1181,6 +1198,7 @@ async def reject_agent_question(
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0), trust_env=False) as client:
             response = await client.post(
                 f"{agent_runtime_url(agent_name, namespace)}/question/{request_id}/reject",
+                headers=runtime_auth_headers(),
             )
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Failed to reject question: {exc}") from exc
@@ -1205,6 +1223,7 @@ async def download_agent_artifact(
             response = await client.get(
                 f"{agent_runtime_url(agent_name, namespace)}/artifacts/download",
                 params={"path": path},
+                headers=runtime_auth_headers(),
             )
         except Exception as exc:
             logger.error("Artifact download failed (%s/%s): %s", namespace, agent_name, exc)
@@ -1250,6 +1269,7 @@ async def download_agent_artifacts_zip(
             response = await client.get(
                 f"{agent_runtime_url(agent_name, namespace)}/artifacts/zip",
                 params=params,
+                headers=runtime_auth_headers(),
             )
         except Exception as exc:
             logger.error("Artifact zip download failed (%s/%s): %s", namespace, agent_name, exc)
@@ -1294,6 +1314,7 @@ async def list_agent_artifacts(
             response = await client.get(
                 f"{agent_runtime_url(agent_name, namespace)}/artifacts/list",
                 params=params,
+                headers=runtime_auth_headers(),
             )
         except Exception as exc:
             logger.error("Artifact list failed (%s/%s): %s", namespace, agent_name, exc)
