@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -734,6 +735,9 @@ async def stream_workflow_activities(
     )
 
 
+_ARTIFACT_REL_SAFE = re.compile(r"^[A-Za-z0-9._/-]+$")
+
+
 def _read_artifact_from_pvc_sync(
     pvc_name: str,
     artifact_rel: str,
@@ -743,6 +747,22 @@ def _read_artifact_from_pvc_sync(
 ) -> str | None:
     """Best-effort read of an artifact file from a PVC via a transient pod."""
     if not pvc_name or not artifact_rel:
+        return None
+    # §security-R6: reject any artifact path containing path-traversal
+    # sequences, option-injection sequences, or unsafe characters
+    # before constructing the exec command. The exec fallback is
+    # also gated behind the TENANT_EXEC_ACCESS / pods/exec RBAC
+    # which is disabled by default in the chart; this is
+    # defense-in-depth.
+    if (
+        artifact_rel.startswith("-")
+        or ".." in artifact_rel
+        or not _ARTIFACT_REL_SAFE.fullmatch(artifact_rel)
+    ):
+        logger.warning(
+            "Rejected unsafe artifact_rel %r for pvc %s/%s (path traversal attempt)",
+            artifact_rel, namespace, pvc_name,
+        )
         return None
     try:
         from kubernetes import client as k8s_client

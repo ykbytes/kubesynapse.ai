@@ -1,7 +1,10 @@
 """Auto-generated router — extracted from api-gateway main.py."""
 from __future__ import annotations
 
+import ipaddress
+import socket
 from typing import Any, cast
+from urllib.parse import urlparse
 
 # Re-import all shared symbols from the gateway core
 from _core import *
@@ -121,6 +124,68 @@ async def provider_registry_models(provider_id: str, user=Depends(verify_token))
     raise HTTPException(status_code=404, detail=f"Unknown provider: {normalized_provider_id}")
 
 
+# §security-R6: SSRF protection for custom LLM provider URLs. An
+# admin-supplied base_url is used as the upstream for any
+# LLM request that names this provider, so we must reject URLs
+# that resolve to internal infrastructure (loopback, link-local,
+# private RFC1918, CGNAT, multicast, etc.). Without this guard,
+# a compromised admin account could register a provider with
+# base_url=http://localhost:4000/admin and use the viewer-role
+# chat endpoints to relay SSRF traffic.
+_BLOCKED_LLM_PROVIDER_NETS = [
+    ipaddress.ip_network("0.0.0.0/8"),         # "this network" / unspecified
+    ipaddress.ip_network("10.0.0.0/8"),        # RFC1918
+    ipaddress.ip_network("100.64.0.0/10"),     # CGNAT
+    ipaddress.ip_network("127.0.0.0/8"),       # loopback
+    ipaddress.ip_network("169.254.0.0/16"),    # link-local (cloud metadata!)
+    ipaddress.ip_network("172.16.0.0/12"),     # RFC1918
+    ipaddress.ip_network("192.0.0.0/24"),      # IETF protocol assignments
+    ipaddress.ip_network("192.168.0.0/16"),    # RFC1918
+    ipaddress.ip_network("224.0.0.0/4"),       # multicast
+    ipaddress.ip_network("240.0.0.0/4"),       # reserved
+    ipaddress.ip_network("::1/128"),           # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),          # IPv6 ULA
+    ipaddress.ip_network("fe80::/10"),         # IPv6 link-local
+]
+
+
+def _validate_llm_provider_url(url: str) -> str | None:
+    """Return an error message if the URL is unsafe, else None.
+
+    §security-R6: prevents custom LLM providers from being used
+    as SSRF relays. The check is intentionally strict:
+    - Scheme must be http or https.
+    - Hostname must resolve (at registration time) to a public
+      IP. Loopback, link-local, and RFC1918 ranges are blocked.
+    """
+    if not re.match(r"^https?://", url, re.IGNORECASE):
+        return "base_url must be an http or https URL"
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return "base_url is not a valid URL"
+    hostname = parsed.hostname or ""
+    if not hostname:
+        return "base_url must include a hostname"
+    try:
+        infos = socket.getaddrinfo(hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+    except socket.gaierror:
+        return f"base_url hostname '{hostname}' could not be resolved"
+    for _family, _type, _proto, _canon, sockaddr in infos:
+        try:
+            ip = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            continue
+        for net in _BLOCKED_LLM_PROVIDER_NETS:
+            if ip in net:
+                return (
+                    f"base_url hostname '{hostname}' resolves to a blocked "
+                    f"address range ({net}). Custom LLM providers must use "
+                    f"public DNS names."
+                )
+    return None
+
+
 @router.post("/providers/custom", status_code=201)
 def provider_registry_upsert_custom_provider(body: CustomProviderRequest, user=Depends(verify_token)):
     """Create or update a custom OpenAI-compatible provider. Admin only."""
@@ -132,6 +197,11 @@ def provider_registry_upsert_custom_provider(body: CustomProviderRequest, user=D
     base_url = body.base_url.strip()
     if not re.match(r"^https?://", base_url, re.IGNORECASE):
         raise HTTPException(status_code=400, detail="base_url must be an http or https URL")
+    # §security-R6: SSRF protection — reject any base_url that
+    # resolves to a private, loopback, or link-local address.
+    url_err = _validate_llm_provider_url(base_url)
+    if url_err:
+        raise HTTPException(status_code=400, detail=url_err)
 
     api, configmap, state = _read_or_create_provider_registry_configmap()
     custom_providers = cast(dict[str, dict[str, Any]], state.setdefault("custom_providers", {}))

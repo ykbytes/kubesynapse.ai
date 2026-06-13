@@ -1060,6 +1060,23 @@ def _build_credential_proxy_container(
             },
         }
     )
+    # §security-R5: per-namespace HMAC secret used to bind the shared
+    # api-gateway token to this runtime's agent + namespace. The
+    # api-gateway reads the same secret (or the operator's
+    # RUNTIME_IDENTITY_HMAC_SECRET) to validate the X-Runtime-Identity
+    # header. Optional so missing secrets don't fail the pod.
+    env.append(
+        {
+            "name": "RUNTIME_IDENTITY_HMAC_SECRET",
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": SECRET_NAME,
+                    "key": "RUNTIME_IDENTITY_HMAC_SECRET",
+                    "optional": True,
+                }
+            },
+        }
+    )
 
     if selected_provider_id not in ("litellm",):
         env.append({
@@ -1851,6 +1868,14 @@ def _create_pi_statefulset_spec(
                         "fsGroup": 2000,
                         "fsGroupChangePolicy": "OnRootMismatch",
                         "seccompProfile": {"type": "RuntimeDefault"},
+                        # §security-R5: explicitly disable host namespace
+                        # access. Defaults are already False in K8s 1.25+,
+                        # but defense-in-depth: a compromised runtime cannot
+                        # sniff the host's network namespace, observe
+                        # host processes, or share IPC with host processes.
+                        "hostNetwork": False,
+                        "hostPID": False,
+                        "hostIPC": False,
                     },
                     "initContainers": init_containers,
                     "containers": containers,
@@ -1990,6 +2015,10 @@ def _create_mistral_vibe_statefulset_spec(
                         "fsGroup": 1000,
                         "fsGroupChangePolicy": "OnRootMismatch",
                         "seccompProfile": {"type": "RuntimeDefault"},
+                        # §security-R5: explicit host namespace isolation
+                        "hostNetwork": False,
+                        "hostPID": False,
+                        "hostIPC": False,
                     },
                     "initContainers": init_containers,
                     "containers": [
@@ -2976,6 +3005,10 @@ def create_worker_job_manifest(
         "runAsGroup": 37,
         "fsGroup": 37,
         "seccompProfile": {"type": "RuntimeDefault"},
+        # §security-R5: explicit host namespace isolation for workers
+        "hostNetwork": False,
+        "hostPID": False,
+        "hostIPC": False,
     }
     container_security_context = {
         "runAsNonRoot": True,

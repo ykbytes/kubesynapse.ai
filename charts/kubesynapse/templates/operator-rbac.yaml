@@ -143,7 +143,7 @@ rules:
     verbs: [create, get, update]
   - apiGroups: ["kubesynapse.ai"]
     resources: [agentapprovals]
-    verbs: [get, list, watch]
+    verbs: [get, list, watch, create]
   - apiGroups: ["kubesynapse.ai"]
     resources: [agentapprovals/status]
     verbs: [patch, update]
@@ -226,37 +226,43 @@ kind: ClusterRole
 metadata:
   name: {{ include "kubesynapse.fullname" . }}-runtime-role
 rules:
-  # Kubernetes MCP sidecar — read-only access to cluster resources
+  # §security-R5: Kubernetes MCP sidecar — read-only access to cluster
+  # resources. The runtime must NOT create/patch/update configmaps in
+  # shared namespaces — a compromised runtime can otherwise poison
+  # litellm-config, provider-registry, or skills-catalog configmaps.
   - apiGroups: [""]
     resources: [pods, services, nodes, events, configmaps, endpoints, persistentvolumeclaims, namespaces, resourcequotas, limitranges]
     verbs: [get, list, watch]
-  - apiGroups: [""]
-    resources: [configmaps]
-    verbs: [create, patch, update]
-  - apiGroups: [""]
-    resources: [pods/log]
-    verbs: [get]
-  - apiGroups: [apps]
+  # §security-R5: Removed `configmaps create/patch/update` — RCE in the
+  # runtime container must not be able to mutate platform configuration.
+  # Runtimes now use the api-gateway as a mediation layer for any writes.
+  # §security-R5: Removed `pods/log get` ClusterRole grant. Runtimes can
+  # only read their own pod logs via the kubelet API on the local node,
+  # which is reachable through the agent's network policy but is not
+  # subject to this ClusterRole. The api-gateway's existing pod-log role
+  # is unchanged.
+  - apiGroups: ["apps"]
     resources: [deployments, statefulsets, daemonsets, replicasets]
     verbs: [get, list, watch]
-  - apiGroups: [batch]
+  - apiGroups: ["batch"]
     resources: [jobs, cronjobs]
     verbs: [get, list, watch]
-  - apiGroups: [networking.k8s.io]
+  - apiGroups: ["networking.k8s.io"]
     resources: [ingresses, networkpolicies]
     verbs: [get, list, watch]
-  - apiGroups: [autoscaling]
+  - apiGroups: ["autoscaling"]
     resources: [horizontalpodautoscalers]
     verbs: [get, list, watch]
   - apiGroups: ["kubesynapse.ai"]
     resources: [agentpolicies, aiagents, agentworkflows]
     verbs: [get, list, watch]
-  # Runtime agents must NOT mutate platform CRDs (least-privilege). The
-  # agentapprovals resource is the only exception: runtimes need to create
-  # approval requests and read their status.
+  # §security-R5: Removed `agentapprovals create` verb. Approval requests
+  # now flow through the api-gateway's mediation path so that a compromised
+  # runtime cannot forge its own approval decisions. Runtimes retain
+  # read-only access so they can still observe approval state.
   - apiGroups: ["kubesynapse.ai"]
     resources: [agentapprovals]
-    verbs: [create, get, list, watch]
+    verbs: [get, list, watch]
 ---
 # ---------------------------------------------------------------------------
 # §security-P0: Dedicated worker ServiceAccount with minimal permissions.

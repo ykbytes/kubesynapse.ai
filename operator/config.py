@@ -138,6 +138,13 @@ SECRET_PROVISIONING_MODE: str = os.getenv("SECRET_PROVISIONING_MODE", "native").
 DEFAULT_LITELLM_MASTER_KEY: str = os.getenv("DEFAULT_LITELLM_MASTER_KEY", "").strip()
 DEFAULT_API_GATEWAY_SHARED_TOKEN: str = os.getenv("DEFAULT_API_GATEWAY_SHARED_TOKEN", "").strip()
 API_GATEWAY_INTERNAL_URL: str = os.getenv("API_GATEWAY_INTERNAL_URL", "").strip()
+# §security-R5: optional operator-minted HMAC secret used to bind the
+# shared gateway token to a specific agent + namespace. When set, the
+# operator uses this secret both to compute the per-agent identity
+# digest in the runtime env and as the validation key on the api-gateway
+# side. When empty, the api-gateway falls back to its
+# RUNTIME_IDENTITY_HMAC_SECRET env var.
+RUNTIME_IDENTITY_HMAC_SECRET: str = os.getenv("RUNTIME_IDENTITY_HMAC_SECRET", "").strip()
 # ---------------------------------------------------------------------------
 # Static constants (not loaded from environment)
 # ---------------------------------------------------------------------------

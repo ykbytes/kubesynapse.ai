@@ -62,6 +62,7 @@ from config import (
     SESSION_ABORT_TIMEOUT_SECONDS,
     SESSION_INIT_ON_CREATE,
     WORKSPACE_SNAPSHOT_ENABLED,
+    build_runtime_identity_header,
 )
 from fastapi import HTTPException
 from memory import (
@@ -427,6 +428,9 @@ def invoke_gateway_a2a_target(
         }
         if not _CREDENTIAL_PROXY_ENABLED:
             headers["Authorization"] = f"Bearer {API_GATEWAY_SHARED_TOKEN}"
+            identity = build_runtime_identity_header()
+            if identity:
+                headers["X-Runtime-Identity"] = identity
         response = client.post(
             f"{gateway_url}/a2a/{target_agent}",
             params={"namespace": target_namespace},
@@ -656,9 +660,7 @@ def _is_stuck_idle_payload(payload: dict[str, Any]) -> bool:
     finish = str(info.get("finish", "")).strip().lower()
     if finish not in ("unknown", ""):
         return False
-    if assistant_payload_has_signal(payload):
-        return False
-    return True
+    return not assistant_payload_has_signal(payload)
 
 
 def _send_prompt_async_with_session_recovery(

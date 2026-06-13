@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import random
+import secrets
 import time
 from collections.abc import Callable
 from datetime import UTC as _UTC
@@ -42,6 +43,7 @@ from config import (
     ORPHAN_PRUNING_ENABLED,
     PI_IMMUTABLE_CONFIG,
     RUNTIME_CLUSTER_ROLE,
+    RUNTIME_IDENTITY_HMAC_SECRET,
     RUNTIME_SERVICE_ACCOUNT,
     SECRET_NAME,
     SECRET_PROVISIONING_MODE,
@@ -53,6 +55,19 @@ ApiTypeError = getattr(kubernetes.client, "ApiTypeError", TypeError)
 logger = logging.getLogger("operator.services")
 
 _RUNTIME_SECRET_MANUAL_OVERRIDE_ANNOTATION = "kubesynapse.ai/secret-manual-override"
+
+
+def _generate_runtime_identity_hmac_secret() -> str:
+    """Generate a fresh per-namespace HMAC secret.
+
+    §security-R5: each tenant namespace gets its own random HMAC secret
+    used to bind the shared api-gateway token to that namespace. The
+    api-gateway reads the same secret (or a global one) to validate the
+    X-Runtime-Identity header. The secret is regenerated on every
+    namespace-secret provisioning cycle, which forces runtime identity
+    re-validation after a namespace reset.
+    """
+    return secrets.token_urlsafe(48)
 
 
 def _record_runtime_secret_override_event(namespace: str, owner_name: str) -> None:
@@ -717,6 +732,13 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
         string_data["LITELLM_MASTER_KEY"] = DEFAULT_LITELLM_MASTER_KEY
     if DEFAULT_API_GATEWAY_SHARED_TOKEN:
         string_data["API_GATEWAY_SHARED_TOKEN"] = DEFAULT_API_GATEWAY_SHARED_TOKEN
+    # §security-R5: per-namespace HMAC secret that binds the shared
+    # gateway token to a specific agent + namespace. Generated on the
+    # fly by the operator and rotated whenever the namespace secret is
+    # reprovisioned. The api-gateway reads the same secret from its own
+    # environment (configured by the operator) to validate the
+    # X-Runtime-Identity header.
+    string_data["RUNTIME_IDENTITY_HMAC_SECRET"] = RUNTIME_IDENTITY_HMAC_SECRET or _generate_runtime_identity_hmac_secret()
 
     if not string_data:
         logger.warning(

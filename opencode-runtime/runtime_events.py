@@ -14,15 +14,14 @@ Features:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import threading
-import time
 import uuid
 from queue import Queue
 from typing import Any
 
+import config as _config
 import httpx
 
 logger = logging.getLogger("opencode-runtime.events")
@@ -37,6 +36,22 @@ _EMIT_ENABLED = bool(_API_GATEWAY_URL and _API_GATEWAY_TOKEN)
 _RUNTIME_KIND = "opencode"
 _AGENT_NAME = os.getenv("AGENT_NAME", "opencode-agent").strip() or "opencode-agent"
 _NAMESPACE = os.getenv("AGENT_NAMESPACE", "default").strip() or "default"
+
+
+def _gateway_request_headers() -> dict[str, str]:
+    """Build the standard Authorization + X-Runtime-Identity headers for
+    api-gateway calls. The X-Runtime-Identity header is only present when
+    the operator has configured a per-agent HMAC secret; without it the
+    api-gateway falls back to the unscoped (low-privilege) principal.
+    """
+    headers = {
+        "Authorization": f"Bearer {_API_GATEWAY_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    identity = _config.build_runtime_identity_header()
+    if identity:
+        headers["X-Runtime-Identity"] = identity
+    return headers
 
 _QUEUE_MAX_SIZE = int(os.getenv("RUNTIME_EVENTS_QUEUE_SIZE", "500"))
 _BATCH_MAX_SIZE = int(os.getenv("RUNTIME_EVENTS_BATCH_SIZE", "50"))
@@ -167,10 +182,7 @@ def _sync_flush_batch(batch: list[dict[str, Any]]) -> None:
         resp = httpx.post(
             f"{_API_GATEWAY_URL}/api/v1/traces/runtime-events",
             json={"events": batch},
-            headers={
-                "Authorization": f"Bearer {_API_GATEWAY_TOKEN}",
-                "Content-Type": "application/json",
-            },
+            headers=_gateway_request_headers(),
             timeout=_HTTP_TIMEOUT_S,
         )
         if resp.status_code in (200, 201):
@@ -253,7 +265,7 @@ class RuntimeEventEmitter:
         if self._task:
             try:
                 await asyncio.wait_for(self._task, timeout=10.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self._task.cancel()
         logger.info(
             "Runtime event emitter stopped (sent=%d, dropped=%d)",
@@ -301,7 +313,7 @@ class RuntimeEventEmitter:
         while self._running or batch:
             try:
                 event = await asyncio.wait_for(self._queue.get(), timeout=_FLUSH_INTERVAL_S)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 event = None
 
             if event is not None:
@@ -326,10 +338,7 @@ class RuntimeEventEmitter:
                 resp = await client.post(
                     f"{_API_GATEWAY_URL}/api/v1/traces/runtime-events",
                     json={"events": batch},
-                    headers={
-                        "Authorization": f"Bearer {_API_GATEWAY_TOKEN}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=_gateway_request_headers(),
                 )
                 if resp.status_code in (200, 201):
                     self._sent += len(batch)

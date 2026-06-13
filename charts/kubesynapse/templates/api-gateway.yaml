@@ -114,6 +114,17 @@ spec:
                   name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
                   key: JWT_SECRET
                   optional: false
+            # §security-R5: per-cluster HMAC secret used to bind shared
+            # api-gateway tokens to specific agent + namespace pairs via
+            # the X-Runtime-Identity header. When this is unset, the
+            # api-gateway falls back to the unscoped (low-privilege)
+            # principal for shared-token callers.
+            - name: RUNTIME_IDENTITY_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: RUNTIME_IDENTITY_HMAC_SECRET
+                  optional: true
             # §security-P0: Require JWT_SECRET to be configured. The gateway will
             # exit with a clear error if JWT_SECRET is empty, preventing ephemeral keys.
             - name: REQUIRE_JWT_SECRET

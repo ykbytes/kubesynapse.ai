@@ -230,6 +230,16 @@ spec:
                   name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
                   key: API_GATEWAY_SHARED_TOKEN
                   optional: false
+            # §security-R5: HMAC secret used to bind shared gateway tokens
+            # to specific agent + namespace pairs. The operator uses this
+            # as a fallback for RUNTIME_IDENTITY_HMAC_SECRET and also
+            # generates per-namespace variants derived from it.
+            - name: RUNTIME_IDENTITY_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubesynapse.fullname" . }}-llm-api-keys
+                  key: RUNTIME_IDENTITY_HMAC_SECRET
+                  optional: true
             - name: API_GATEWAY_INTERNAL_URL
               value: {{ printf "http://%s-api-gateway.%s.svc.cluster.local:8080" (include "kubesynapse.fullname" .) .Release.Namespace | quote }}
             - name: AGENT_HITL_MODE

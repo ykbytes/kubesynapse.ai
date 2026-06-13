@@ -3113,13 +3113,10 @@ export function createWorkflowStatusStream(
   workflowName: string,
 ): EventSource {
   const url = buildUrl(`/api/workflows/${workflowName}/status/stream`, namespace);
-  // Prefer header-based auth to avoid leaking the token in proxy logs
-  // and browser history. Falls back to query-string EventSource when
-  // the wrapper is unavailable (e.g. server bundle missing fetchEventSource).
-  if (typeof AbortController !== "undefined" && typeof fetchEventSource === "function") {
-    return createHeaderEventSource(url, token) as unknown as EventSource;
-  }
-  return new EventSource(`${url}&token=${encodeURIComponent(token)}`);
+  // §security-R6: only use the header-based auth path. The previous
+  // fallback (new EventSource(url + '&token=' + token)) leaked the
+  // JWT in proxy logs, browser history, and the Referer header.
+  return createHeaderEventSource(url, token) as unknown as EventSource;
 }
 
 export function createWorkflowActivitiesStream(
@@ -3129,10 +3126,7 @@ export function createWorkflowActivitiesStream(
   tail = 100,
 ): EventSource {
   const url = buildUrl(`/api/workflows/${workflowName}/activities/stream`, namespace);
-  if (typeof AbortController !== "undefined" && typeof fetchEventSource === "function") {
-    return createHeaderEventSource(url, token, { tail }) as unknown as EventSource;
-  }
-  return new EventSource(`${url}&tail=${tail}&token=${encodeURIComponent(token)}`);
+  return createHeaderEventSource(url, token, { tail }) as unknown as EventSource;
 }
 
 export function createNotificationStream(
@@ -3140,10 +3134,9 @@ export function createNotificationStream(
   namespace: string,
 ): EventSource {
   const url = buildUrl("/api/notifications/stream", namespace);
-  if (typeof AbortController !== "undefined" && typeof fetchEventSource === "function") {
-    return createHeaderEventSource(url, token) as unknown as EventSource;
-  }
-  return new EventSource(`${url}&token=${encodeURIComponent(token)}`);
+  // §security-R6: header-based auth only. The previous fallback
+  // leaked the JWT in the URL.
+  return createHeaderEventSource(url, token) as unknown as EventSource;
 }
 
 export interface StreamHandlers {
