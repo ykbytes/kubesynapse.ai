@@ -141,6 +141,35 @@ function ProgressSummaryBar({ summary, phase }: { summary: WorkflowSummary; phas
   );
 }
 
+function SignalMetric({
+  label,
+  value,
+  detail,
+  tone,
+}: {
+  label: string;
+  value: number | string;
+  detail: string;
+  tone: "amber" | "sky" | "violet" | "neutral";
+}) {
+  const toneClass =
+    tone === "amber"
+      ? "border-amber-500/25 bg-amber-500/5"
+      : tone === "sky"
+        ? "border-sky-500/25 bg-sky-500/5"
+        : tone === "violet"
+          ? "border-violet-500/25 bg-violet-500/5"
+          : "border-border/60 bg-card/70";
+
+  return (
+    <div className={`rounded-lg border p-3 ${toneClass}`}>
+      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-1 text-2xl font-semibold leading-none text-foreground">{value}</div>
+      <div className="mt-2 text-xs leading-5 text-muted-foreground">{detail}</div>
+    </div>
+  );
+}
+
 /* ────────── live view ────────── */
 
 interface WorkflowLiveViewProps {
@@ -229,215 +258,192 @@ export function WorkflowLiveView({
   );
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Progress bar */}
-      {wfSummary && (wfSummary.totalSteps ?? 0) > 0 && (
-        <Card className="border-border/65 bg-background/75 shadow-sm backdrop-blur-sm">
-          <CardContent className="p-4">
-            <ProgressSummaryBar summary={wfSummary} phase={workflow.phase} />
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Agent pipeline */}
-      {steps.length > 1 && (
-        <Card className="border-border/65 bg-background/75 shadow-sm backdrop-blur-sm">
-          <CardContent className="p-4">
-            <div className="text-xs font-medium text-muted-foreground mb-3">Agent pipeline</div>
-            <div className="flex items-center gap-1 overflow-x-auto pb-1">
-              {steps.map((step, idx) => {
-                const state = workflow.step_states?.[step.name];
-                const status = state?.status ?? "pending";
-                const lp = state?.loopProgress;
-                const pp = state?.planProgress;
-                const isRunningStep = status === "running";
-                const isDone = status === "succeeded" || status === "completed";
-                const isFailed = status === "failed";
-
-                return (
-                  <div key={step.name} className="flex items-center gap-1 shrink-0">
-                    <div
-                      className={`rounded-xl border px-3 py-2 min-w-[140px] transition-all ${
-                        isRunningStep
-                          ? "border-primary/40 bg-primary/10 ring-1 ring-primary/20"
-                          : isDone
-                            ? "border-emerald-500/30 bg-emerald-500/10"
-                            : isFailed
-                              ? "border-destructive/30 bg-destructive/10"
-                              : "border-border/40 bg-background/60"
-                      }`}
-                    >
-                      <div className="flex items-center gap-1.5 mb-1">
-                        {stepStatusIcon(status, false).icon}
-                        <span className="text-xs font-medium truncate">{step.name}</span>
-                      </div>
-                      <div className="text-xs text-muted-foreground truncate">{step.agent_ref}</div>
-                      {lp && lp.totalItems > 0 && (
-                        <div className="mt-1.5">
-                          <div className="h-1 w-full overflow-hidden rounded-full bg-border/40">
-                            <div
-                              className={`h-full rounded-full transition-all duration-500 ${isDone ? "bg-emerald-500" : "bg-primary"}`}
-                              style={{
-                                width: `${Math.round((lp.completedItems / lp.totalItems) * 100)}%`,
-                              }}
-                            />
-                          </div>
-                          <div className="text-xs text-muted-foreground mt-0.5">
-                            {lp.completedItems}/{lp.totalItems} · iter {lp.iteration}/{lp.maxIterations}
-                          </div>
-                        </div>
-                      )}
-                      {pp && pp.totalItems > 0 && !lp && (
-                        <div className="mt-1.5">
-                          <div className="h-1 w-full overflow-hidden rounded-full bg-border/40">
-                            <div
-                              className={`h-full rounded-full transition-all duration-500 ${isDone ? "bg-emerald-500" : "bg-sky-500"}`}
-                              style={{
-                                width: `${Math.round((pp.completedItems / pp.totalItems) * 100)}%`,
-                              }}
-                            />
-                          </div>
-                          <div className="text-xs text-muted-foreground mt-0.5">
-                            {pp.completedItems}/{pp.totalItems} tasks
-                          </div>
-                        </div>
-                      )}
-                      {isRunningStep && !lp && !pp && (
-                        <div className="mt-1">
-                          <LoaderCircle className="h-3 w-3 animate-spin text-primary" />
-                        </div>
-                      )}
-                    </div>
-                    {idx < steps.length - 1 && (
-                      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
-                    )}
-                  </div>
-                );
-              })}
+    <div className="animate-fade-in space-y-5">
+      <Card className="overflow-hidden border-border/70 bg-card shadow-sm">
+        <CardHeader className="border-b border-border/60 bg-muted/20 px-5 py-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <CardTitle className="text-base">Run command center</CardTitle>
+              <CardDescription className="mt-1 text-xs">
+                Execution state, operational signals, and next action in one compact workspace.
+              </CardDescription>
             </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Suggested next action */}
-      {nextAction && (
-        <Card className="border-primary/20 bg-primary/5 shadow-sm backdrop-blur-sm">
-          <CardContent className="p-4">
-            <div className="flex items-start gap-3">
-              <Sparkles className="h-4 w-4 mt-0.5 text-primary shrink-0" />
-              <div className="space-y-1">
-                <p className="text-xs font-medium text-primary/80">Suggested Next</p>
-                <p className="text-sm font-semibold text-foreground">{nextAction.action}</p>
-                <p className="text-xs text-muted-foreground">{nextAction.reason}</p>
+            {nextAction && (
+              <div className="flex max-w-2xl items-start gap-3 rounded-lg border border-primary/20 bg-background/75 px-3 py-2">
+                <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                <div className="min-w-0">
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-primary">Suggested next</div>
+                  <div className="truncate text-sm font-semibold text-foreground">{nextAction.action}</div>
+                  <div className="line-clamp-2 text-xs leading-5 text-muted-foreground">{nextAction.reason}</div>
+                </div>
               </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Operator signals */}
-      <Card className="border-border/65 bg-background/75 shadow-sm backdrop-blur-sm">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Operator signals</CardTitle>
-          <CardDescription className="text-xs">High-signal blockers from the current run.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3">
-              <div className="text-xs text-muted-foreground">Attention</div>
-              <div className="text-lg font-semibold text-foreground">{workflowSignals.attentionSteps.length}</div>
-              <div className="text-xs text-muted-foreground">
-                {workflowSignals.verificationFailures} verify · {workflowSignals.reviewRejections} review ·{" "}
-                {workflowSignals.jsonContractFailures} JSON
-              </div>
-            </div>
-            <div className="rounded-xl border border-primary/20 bg-primary/5 p-3">
-              <div className="text-xs text-muted-foreground">Active now</div>
-              <div className="text-lg font-semibold text-foreground">{workflowSignals.activeSteps}</div>
-              <div className="text-xs text-muted-foreground">
-                {workflow.pending_approval ? 1 : 0} wait
-              </div>
-            </div>
-            <div className="rounded-xl border border-sky-500/20 bg-sky-500/5 p-3">
-              <div className="text-xs text-muted-foreground">Tool activity</div>
-              <div className="text-lg font-semibold text-foreground">{workflowSignals.totalToolCalls}</div>
-              <div className="text-xs text-muted-foreground">
-                {workflowSignals.activitySteps.length} step{workflowSignals.activitySteps.length === 1 ? "" : "s"}{" "}
-                with actions
-              </div>
-            </div>
-            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
-              <div className="text-xs text-muted-foreground">Files observed</div>
-              <div className="text-lg font-semibold text-foreground">{workflowSignals.totalArtifacts}</div>
-              <div className="text-xs text-muted-foreground">
-                {workflowSignals.totalWarnings} warning{workflowSignals.totalWarnings === 1 ? "" : "s"}
-              </div>
-            </div>
+            )}
           </div>
-
-          {workflowSignals.attentionSteps.length > 0 ? (
-            <div className="space-y-2">
-              <div className="text-xs font-medium text-muted-foreground">Needs attention</div>
-              <div className="flex flex-wrap gap-2">
-                {workflowSignals.attentionSteps.slice(0, 8).map((signal) => (
-                  <div
-                    key={signal.name}
-                    className="rounded-full border border-amber-500/20 bg-amber-500/5 px-3 py-1.5 text-xs"
-                  >
-                    <span className="font-medium text-foreground">{signal.name}</span>
-                    {signal.reasons.length > 0 && (
-                      <span className="ml-2 text-muted-foreground">{signal.reasons.join(" · ")}</span>
-                    )}
-                  </div>
-                ))}
-                {workflowSignals.attentionSteps.length > 8 && (
-                  <Badge
-                    variant="outline"
-                    className="border-amber-500/20 bg-amber-500/5 text-xs text-amber-200"
-                  >
-                    +{workflowSignals.attentionSteps.length - 8} more
-                  </Badge>
-                )}
-              </div>
+        </CardHeader>
+        <CardContent className="space-y-5 p-5">
+          {wfSummary && (wfSummary.totalSteps ?? 0) > 0 ? (
+            <div className="rounded-lg border border-border/60 bg-background/65 p-4">
+              <ProgressSummaryBar summary={wfSummary} phase={workflow.phase} />
             </div>
           ) : (
-            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-300">
-              No failed steps, approval blockers, or warning signals are active right now.
+            <div className="rounded-lg border border-border/60 bg-background/65 p-4 text-sm text-muted-foreground">
+              No run summary has been captured yet. Start a run to populate live progress and trace data.
             </div>
           )}
 
-          {workflowSignals.activitySteps.length > 0 && (
-            <div className="space-y-2">
-              <div className="text-xs font-medium text-muted-foreground">Observed activity</div>
-              <div className="flex flex-wrap gap-2">
-                {workflowSignals.activitySteps.slice(0, 8).map((signal) => (
-                  <div
-                    key={`${signal.name}-activity`}
-                    className="rounded-full border border-sky-500/20 bg-sky-500/5 px-3 py-1.5 text-xs text-muted-foreground"
-                  >
-                    <span className="font-medium text-foreground">{signal.name}</span>
-                    <span className="ml-2">
-                      {signal.toolCallCount} tools · {signal.artifactCount} files
-                      {signal.warningCount > 0 ? ` · ${signal.warningCount} warnings` : ""}
-                    </span>
-                  </div>
-                ))}
-                {workflowSignals.activitySteps.length > 8 && (
-                  <Badge
-                    variant="outline"
-                    className="border-sky-500/20 bg-sky-500/5 text-xs text-sky-200"
-                  >
-                    +{workflowSignals.activitySteps.length - 8} more
-                  </Badge>
-                )}
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <SignalMetric
+              label="Attention"
+              value={workflowSignals.attentionSteps.length}
+              detail={`${workflowSignals.verificationFailures} verify, ${workflowSignals.reviewRejections} review, ${workflowSignals.jsonContractFailures} JSON`}
+              tone="amber"
+            />
+            <SignalMetric
+              label="Active now"
+              value={workflowSignals.activeSteps}
+              detail={`${workflow.pending_approval ? 1 : 0} approval wait`}
+              tone="neutral"
+            />
+            <SignalMetric
+              label="Tool activity"
+              value={workflowSignals.totalToolCalls}
+              detail={`${workflowSignals.activitySteps.length} step${workflowSignals.activitySteps.length === 1 ? "" : "s"} with actions`}
+              tone="sky"
+            />
+            <SignalMetric
+              label="Files observed"
+              value={workflowSignals.totalArtifacts}
+              detail={`${workflowSignals.totalWarnings} warning${workflowSignals.totalWarnings === 1 ? "" : "s"}`}
+              tone="violet"
+            />
+          </div>
+
+          {steps.length > 1 && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Agent pipeline</div>
+                <div className="text-xs text-muted-foreground">{steps.length} steps</div>
+              </div>
+              <div className="flex items-stretch gap-2 overflow-x-auto pb-1">
+                {steps.map((step, idx) => {
+                  const state = workflow.step_states?.[step.name];
+                  const status = state?.status ?? "pending";
+                  const lp = state?.loopProgress;
+                  const pp = state?.planProgress;
+                  const isRunningStep = status === "running";
+                  const isDone = status === "succeeded" || status === "completed";
+                  const isFailed = status === "failed";
+                  const progressTotal = lp?.totalItems ?? pp?.totalItems ?? 0;
+                  const progressDone = lp?.completedItems ?? pp?.completedItems ?? 0;
+                  const progressPct = progressTotal > 0 ? Math.round((progressDone / progressTotal) * 100) : 0;
+
+                  return (
+                    <div key={step.name} className="flex shrink-0 items-center gap-2">
+                      <div
+                        className={`min-w-[13rem] overflow-hidden rounded-lg border bg-background transition-all ${
+                          isRunningStep
+                            ? "border-primary/45 shadow-[inset_0_3px_0_hsl(var(--primary))]"
+                            : isFailed
+                              ? "border-destructive/35 shadow-[inset_0_3px_0_hsl(var(--destructive))]"
+                              : isDone
+                                ? "border-border/70 shadow-[inset_0_3px_0_rgb(16_185_129)]"
+                                : "border-border/60"
+                        }`}
+                      >
+                        <div className="space-y-2 p-3">
+                          <div className="flex min-w-0 items-center gap-2">
+                            {stepStatusIcon(status, false).icon}
+                            <span className="truncate text-sm font-semibold text-foreground">{step.name}</span>
+                          </div>
+                          <div className="truncate text-xs text-muted-foreground">{step.agent_ref}</div>
+                          {progressTotal > 0 ? (
+                            <div className="space-y-1.5">
+                              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                                <div
+                                  className={isDone ? "h-full rounded-full bg-emerald-500" : "h-full rounded-full bg-primary"}
+                                  style={{ width: `${progressPct}%` }}
+                                />
+                              </div>
+                              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                <span>{progressDone}/{progressTotal} {lp ? "items" : "tasks"}</span>
+                                <span>{progressPct}%</span>
+                              </div>
+                            </div>
+                          ) : isRunningStep ? (
+                            <div className="flex items-center gap-2 text-xs text-primary">
+                              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                              Running
+                            </div>
+                          ) : (
+                            <div className="text-xs capitalize text-muted-foreground">{status}</div>
+                          )}
+                        </div>
+                      </div>
+                      {idx < steps.length - 1 && (
+                        <ChevronRight className="h-4 w-4 shrink-0 self-center text-muted-foreground/45" />
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
+
+          <div className="grid gap-3 lg:grid-cols-2">
+            <div className="rounded-lg border border-border/60 bg-background/65 p-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Needs attention</div>
+              {workflowSignals.attentionSteps.length > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {workflowSignals.attentionSteps.slice(0, 8).map((signal) => (
+                    <div key={signal.name} className="rounded-full border border-amber-500/25 bg-amber-500/5 px-3 py-1.5 text-xs">
+                      <span className="font-medium text-foreground">{signal.name}</span>
+                      {signal.reasons.length > 0 && (
+                        <span className="ml-2 text-muted-foreground">{signal.reasons.join(" · ")}</span>
+                      )}
+                    </div>
+                  ))}
+                  {workflowSignals.attentionSteps.length > 8 && (
+                    <Badge variant="outline" className="border-amber-500/25 bg-amber-500/5 text-xs">
+                      +{workflowSignals.attentionSteps.length - 8} more
+                    </Badge>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-2 text-sm text-muted-foreground">
+                  No failed steps, approval blockers, or warning signals are active.
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-border/60 bg-background/65 p-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Observed activity</div>
+              {workflowSignals.activitySteps.length > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {workflowSignals.activitySteps.slice(0, 8).map((signal) => (
+                    <div key={`${signal.name}-activity`} className="rounded-full border border-sky-500/25 bg-sky-500/5 px-3 py-1.5 text-xs text-muted-foreground">
+                      <span className="font-medium text-foreground">{signal.name}</span>
+                      <span className="ml-2">
+                        {signal.toolCallCount} tools · {signal.artifactCount} files
+                        {signal.warningCount > 0 ? ` · ${signal.warningCount} warnings` : ""}
+                      </span>
+                    </div>
+                  ))}
+                  {workflowSignals.activitySteps.length > 8 && (
+                    <Badge variant="outline" className="border-sky-500/25 bg-sky-500/5 text-xs">
+                      +{workflowSignals.activitySteps.length - 8} more
+                    </Badge>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-2 text-sm text-muted-foreground">No tool calls or artifacts have been recorded.</div>
+              )}
+            </div>
+          </div>
         </CardContent>
       </Card>
 
       {/* Step pipeline */}
-      <Card className="border-border/65 bg-background/75 shadow-sm backdrop-blur-sm">
+      <Card className="border-border/70 bg-card shadow-sm">
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2">

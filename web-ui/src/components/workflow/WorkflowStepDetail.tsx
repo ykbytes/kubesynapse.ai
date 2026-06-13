@@ -68,16 +68,18 @@ function LoopProgressDisplay({ progress }: { progress: NonNullable<WorkflowStepS
           {items.map((item, i) => (
             <div
               key={i}
-              className={`flex items-start gap-2 rounded px-2 py-1 text-xs ${
-                item.done ? "bg-emerald-500/10 text-emerald-300" : "text-muted-foreground"
+              className={`flex items-start gap-2 rounded-md border px-2.5 py-1.5 text-xs ${
+                item.done
+                  ? "border-border/45 bg-card/70 text-foreground"
+                  : "border-transparent text-muted-foreground"
               }`}
             >
               {item.done ? (
-                <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-400" />
+                <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-500" />
               ) : (
                 <Circle className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/50" />
               )}
-              <span className={item.done ? "line-through opacity-70" : ""}>{item.text}</span>
+              <span className={item.done ? "text-muted-foreground" : ""}>{item.text}</span>
             </div>
           ))}
         </div>
@@ -121,16 +123,18 @@ function PlanProgressDisplay({ progress }: { progress: NonNullable<WorkflowStepS
         {items.map((item, i) => (
           <div
             key={i}
-            className={`flex items-start gap-2 rounded px-2 py-1 text-xs ${
-              item.done ? "bg-emerald-500/10 text-emerald-300" : "text-muted-foreground"
+            className={`flex items-start gap-2 rounded-md border px-2.5 py-1.5 text-xs ${
+              item.done
+                ? "border-border/45 bg-card/70 text-foreground"
+                : "border-transparent text-muted-foreground"
             }`}
           >
             {item.done ? (
-              <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-400" />
+              <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-emerald-500" />
             ) : (
               <Circle className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/50" />
             )}
-            <span className={item.done ? "line-through opacity-70" : ""}>{item.text}</span>
+            <span className={item.done ? "text-muted-foreground" : ""}>{item.text}</span>
           </div>
         ))}
       </div>

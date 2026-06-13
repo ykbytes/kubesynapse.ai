@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const manager = readFileSync(resolve(root, "src/components/workflows/WorkflowManager.tsx"), "utf8");
 const history = readFileSync(resolve(root, "src/components/workflow/WorkflowHistoryView.tsx"), "utf8");
+const live = readFileSync(resolve(root, "src/components/workflow/WorkflowLiveView.tsx"), "utf8");
+const detail = readFileSync(resolve(root, "src/components/workflow/WorkflowStepDetail.tsx"), "utf8");
 
 const checks = [
   ["manager has overview tab", /value="overview"/.test(manager)],
@@ -12,6 +14,9 @@ const checks = [
   ["manager has definition tab", /value="definition"/.test(manager)],
   ["old duplicate workspace banner removed", !manager.includes("Workflow workspace")],
   ["runs view no longer embeds workspace files", !history.includes("Workspace Files")],
+  ["overview uses command center layout", live.includes("Run command center")],
+  ["workflow overview avoids green-on-green checklist rows", !detail.includes('item.done ? "bg-emerald-500/10 text-emerald-300"')],
+  ["workflow overview uses neutral completed checklist rows", detail.includes("border-border/45 bg-card/70")],
 ];
 
 const failed = checks.filter(([, ok]) => !ok);
