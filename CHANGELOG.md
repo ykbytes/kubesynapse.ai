@@ -6,6 +6,68 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.2.0](https://github.com/ykbytes/kubesynapse.ai/compare/v0.1.0...v0.2.0) (2026-06-13)
+
+
+### Added
+
+* **backend:** enrich step tool/artifact summaries with duration, output, paths, errors ([1ac33be](https://github.com/ykbytes/kubesynapse.ai/commit/1ac33bee23216788c3adb861bccaaeae32e006d0))
+* **gateway:** enrich live SSE activity payloads with structured fields ([37c7f60](https://github.com/ykbytes/kubesynapse.ai/commit/37c7f604ad79b8d40db06b44a98e69b15b68835c))
+* incident management CRUD + UI + smoke test scripts ([7f78004](https://github.com/ykbytes/kubesynapse.ai/commit/7f780049782a4b750cff50e6785c28025fdcffbd))
+* KubeSynapse — Kubernetes-native AI agent platform ([0c80731](https://github.com/ykbytes/kubesynapse.ai/commit/0c80731aa748e6704761b34fa5cacf3458161019))
+* **landing:** optimized public site build + branded logo ([9a221e5](https://github.com/ykbytes/kubesynapse.ai/commit/9a221e514c7d954417256dda304d3e5d49a850a5))
+* **security:** deeper-scan hardening (Round 4) ([ced3bbd](https://github.com/ykbytes/kubesynapse.ai/commit/ced3bbd769d9fdf6774c4df1c6163102cdd6dda9))
+* **security:** multi-tenancy hardening for OpenCode runtime (Round 3) ([c07dd0a](https://github.com/ykbytes/kubesynapse.ai/commit/c07dd0a48c1e976035d66a7708b868824f453660))
+* **security:** OPA Gatekeeper integration, admin tool ceiling, and policy seal ([936f997](https://github.com/ykbytes/kubesynapse.ai/commit/936f997bbafa30111f69c474018712a976562c07))
+* **security:** rounds 5 & 6 hardening - auth, MCP, SSRF, XSS, audit ([9e72331](https://github.com/ykbytes/kubesynapse.ai/commit/9e7233187094f676d35be8b18d4883cc0d1bd02e))
+* **ui+infra:** Observatory redesign, Permission Matrix, and backend fixes ([709678a](https://github.com/ykbytes/kubesynapse.ai/commit/709678a0ecbef08baf7c518b410a48647a47bf88))
+* **ui:** AIOps composer redesign — Phase 1 frontend ([d0a7fd8](https://github.com/ykbytes/kubesynapse.ai/commit/d0a7fd8a492990280921bac63949051a8b5fd0a5))
+* **ui:** compact agent header, catalog header, and sidebar ([11c822a](https://github.com/ykbytes/kubesynapse.ai/commit/11c822a2ed1c5fbe555705b43ed69a980eef5c23))
+* **webhooks:** claim-based dispatch with atomic dedup, state machine, and lineage tracking ([8650193](https://github.com/ykbytes/kubesynapse.ai/commit/865019328a1290515e3c707a2d81ed5bcbbdee7f))
+
+
+### Fixed
+
+* align CREDENTIAL_PROXY_MCP_HUB_PORT to 4010 across all components ([194366c](https://github.com/ykbytes/kubesynapse.ai/commit/194366ce56581650c55211885669c48d9eff7b44))
+* correct secret name in README password retrieval command ([de2efde](https://github.com/ykbytes/kubesynapse.ai/commit/de2efde73f06143a6dcc09712e499cd7e6ff1bd7))
+* incident controller reliability + gateway test infrastructure fixes ([de9153c](https://github.com/ykbytes/kubesynapse.ai/commit/de9153cc0a7080ab5a3b766457144470a9bd451e))
+* **opencode-runtime:** remove dead config_generator.py from Dockerfile COPY ([51cdd13](https://github.com/ykbytes/kubesynapse.ai/commit/51cdd13501c25428f1f930f9c96c578da1931aed))
+* **README:** replace wordmark SVG with icon-only badge for reliable rendering ([ad3050e](https://github.com/ykbytes/kubesynapse.ai/commit/ad3050edaefde92d890d0d700c133cfb62fb1ee2))
+* reduce opencode invoke latency and align api v1 paths ([3e4684a](https://github.com/ykbytes/kubesynapse.ai/commit/3e4684a41836bc33c54c8c86320843f83e3a11a4))
+* remove expires 0 from Copilot OAuth auth content ([4ee7744](https://github.com/ykbytes/kubesynapse.ai/commit/4ee7744bb9995b987ee1831efbce5c0e17fe0c5b))
+* remove MCP sidecars from all 3 demos — images not available in Kind ([f41bad6](https://github.com/ykbytes/kubesynapse.ai/commit/f41bad6b1fc4786867f3fcd1b167630561db41ab))
+* resolve daily-standup-bot end-to-end workflow issues ([8edbc70](https://github.com/ykbytes/kubesynapse.ai/commit/8edbc709dc2a467b65619dda8c8b95c5edc004db))
+* security audit fixes + credential-proxy path fix + docs ([1fd62b2](https://github.com/ykbytes/kubesynapse.ai/commit/1fd62b22958631bd0737e4d8f684fc5697f47923))
+* switch demos to opencode-go/deepseek-v4-flash — fastest available model ([fbae799](https://github.com/ykbytes/kubesynapse.ai/commit/fbae799619e2358cb9f83cf2e787437ebb1f4ce2))
+* switch demos to opencode-go/glm-5 — working free model ([3d81902](https://github.com/ykbytes/kubesynapse.ai/commit/3d819027dee172a83c52a8323c5ae3756aaa6d0f))
+* **traces:** dedup run history + observability docs and faithful architecture diagram ([8062156](https://github.com/ykbytes/kubesynapse.ai/commit/8062156a0d97ea3892211421f06e753f2e90d66e))
+* **traces:** token breakdown + per-tool duration end-to-end ([a4e1710](https://github.com/ykbytes/kubesynapse.ai/commit/a4e1710ed12ff635bf7b34b83a27eb60096cfb5d))
+* **ui:** replace hard truncate with line-clamp on chats/policies/list sidebars ([ce5a2a9](https://github.com/ykbytes/kubesynapse.ai/commit/ce5a2a958f97146fbf7d19f09e4d9e8ab87db381))
+* validate demos against real CRD schema — model, sessionGroup, policies ([b5ca8a9](https://github.com/ykbytes/kubesynapse.ai/commit/b5ca8a92f2c96ca2f4418e0b5391244a3a6a3924))
+
+
+### Changed
+
+* **operator:** deduplicate preview/summarize helpers ([c3ba31c](https://github.com/ykbytes/kubesynapse.ai/commit/c3ba31c660e1fbfd7a315d45717715b920202c76))
+
+
+### Documentation
+
+* 3-day work summary (June 10-13, 2026) ([c0290c0](https://github.com/ykbytes/kubesynapse.ai/commit/c0290c0dd1ffc4d5ee73012e7ad570b3799b349b))
+* add Sprint 11 changelog entry for dead code cleanup ([e0fff22](https://github.com/ykbytes/kubesynapse.ai/commit/e0fff22818e133aa869b0fe6103d5f79d7b0770d))
+* comprehensive README overhaul — branded logo, incident management, webhook dispatch, security audit, landing page ([b9b3693](https://github.com/ykbytes/kubesynapse.ai/commit/b9b36935bfd01dc9d76d5d2e7c62a84ee6b0f7ca))
+* document LiteLLM runtime secret drift ([609e517](https://github.com/ykbytes/kubesynapse.ai/commit/609e5172b789682c34244dad056be88dfe673062))
+* feature only OpenCode as production runtime, mark Pi/Vibe as alpha ([2922019](https://github.com/ykbytes/kubesynapse.ai/commit/2922019b9d72946d183736b62f825fdb2c967669))
+* fix 11 CRITICAL + 16 HIGH + 20+ MEDIUM in-app doc issues ([5267d63](https://github.com/ykbytes/kubesynapse.ai/commit/5267d6388f69d2d163115b480857978f97fa5e82))
+* fix deployment guides — add MCP sidecars, fix API paths, mark Pi/Vibe alpha ([a8a528b](https://github.com/ykbytes/kubesynapse.ai/commit/a8a528bf83e3c54777bd1e56486bfeffd8c1e6b9))
+* fix README quickstart and DX — critical user-facing bugs ([6ee14e5](https://github.com/ykbytes/kubesynapse.ai/commit/6ee14e5fbbc657a2522d5eb2ad910b9f648031ee))
+* polish pass — fix remaining factual issues + add cross-reference callouts between sections ([71bb55c](https://github.com/ykbytes/kubesynapse.ai/commit/71bb55cb7dff2fef7fa2e608cb61e0fcf780fe00))
+* redesigned architecture diagram — color-coded layers, emojis, cleaner flow ([c5b4715](https://github.com/ykbytes/kubesynapse.ai/commit/c5b4715259004a8df2bf756f461a0f4afe608e24))
+* replace README architecture diagram with color-coded layered version ([dbd6039](https://github.com/ykbytes/kubesynapse.ai/commit/dbd6039a30f10bc730f9925041cddbbaf860d3b9))
+* run-variability analysis and prompt/workflow/context engineering guide ([bc0e3d9](https://github.com/ykbytes/kubesynapse.ai/commit/bc0e3d9e16d5a83bebb9bf3f31f979f42bac0c67))
+* Update AGENTS.md with incident flow, operator fix, smoke test scripts ([7f78004](https://github.com/ykbytes/kubesynapse.ai/commit/7f780049782a4b750cff50e6785c28025fdcffbd))
+* validate and correct architecture diagram — add labels, fix edges ([14b5939](https://github.com/ykbytes/kubesynapse.ai/commit/14b593948b4aa5efc777e4d5f8731c5e3ef3bbce))
+
 ## [Unreleased] - Sprint 11 (Dead Code Cleanup & Operator Hardening)
 
 ### Removed
