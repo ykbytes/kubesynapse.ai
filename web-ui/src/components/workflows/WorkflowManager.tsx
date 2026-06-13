@@ -1,21 +1,37 @@
 import { useEffect, useMemo, useState } from "react";
-import { Clock, FolderOpen, Pencil, Blocks } from "lucide-react";
+import {
+  BarChart3,
+  Blocks,
+  CheckCircle2,
+  Clock,
+  FolderOpen,
+  LoaderCircle,
+  Pencil,
+  Play,
+  Save,
+  ShieldCheck,
+  Square,
+  Trash2,
+  Users,
+  Workflow,
+  XCircle,
+} from "lucide-react";
 import { useConnection } from "@/contexts/ConnectionContext";
 import { fetchWorkflowNextAction, type WorkflowRunRecord } from "@/lib/api";
 import { isFactoryWorkflowName } from "@/lib/factoryModes";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "../shared/ConfirmDialog";
 import { ErrorBanner } from "../shared/ErrorBanner";
 import { ErrorDialog } from "../shared/ErrorDialog";
-import { WorkflowHeader } from "../workflow/WorkflowHeader";
-import { WorkflowStatusBar } from "../workflow/WorkflowStatusBar";
-import { WorkflowExecutionBrief } from "../workflow/WorkflowExecutionBrief";
 import { WorkflowDefinitionForm } from "../workflow/WorkflowDefinitionForm";
 import { WorkflowSidebar } from "../workflow/WorkflowSidebar";
 import { WorkflowStepsList } from "../workflow/WorkflowStepsList";
 import { WorkflowLiveView } from "../workflow/WorkflowLiveView";
 import { WorkflowHistoryView } from "../workflow/WorkflowHistoryView";
+import { WorkflowFilesView } from "../workflow/WorkflowFilesView";
+import { useManifestViewer } from "@/hooks/useManifestViewer";
 import {
   defaultStepsForAgent,
   formatElapsed,
@@ -97,7 +113,7 @@ export function WorkflowManager({
   const [steps, setSteps] = useState<WorkflowStep[]>(() => defaultStepsForAgent(agents[0]?.name));
   const [nextAction, setNextAction] = useState<WorkflowNextAction | null>(null);
   const [stepViewFilter, setStepViewFilter] = useState<StepViewFilter>("all");
-  const [workspaceTab, setWorkspaceTab] = useState<"live" | "history" | "definition">("definition");
+  const [workspaceTab, setWorkspaceTab] = useState<"overview" | "runs" | "files" | "definition">("definition");
   const [selectedHistoryRun, setSelectedHistoryRun] = useState<WorkflowRunRecord | null>(null);
   const [triggerInput, setTriggerInput] = useState("");
   const [showTriggerConfirm, setShowTriggerConfirm] = useState(false);
@@ -164,7 +180,7 @@ export function WorkflowManager({
     const hasBeenTriggered = Boolean(
       workflow && (workflow.phase !== "pending" || workflow.run_id || workflow.summary)
     );
-    setWorkspaceTab(workflow && hasBeenTriggered ? "live" : "definition");
+    setWorkspaceTab(workflow && hasBeenTriggered ? "overview" : "definition");
   }, [workflow?.name, workflow?.run_id, workflow?.phase, workflow?.summary]);
 
   /* step helpers */
@@ -418,97 +434,194 @@ export function WorkflowManager({
   }, [workflow]);
 
   const isFactoryWorkflow = isFactoryWorkflowName(workflow?.name);
+  const totalSteps = wfSummary?.totalSteps ?? steps.length;
+  const doneSteps = wfSummary
+    ? (wfSummary.completedSteps ?? 0) + (wfSummary.failedSteps ?? 0) + (wfSummary.skippedSteps ?? 0)
+    : completedStepCount;
+  const elapsed = isActive && wfSummary?.startedAt ? formatElapsed(wfSummary.startedAt) : undefined;
+  const activeTab = workflow && hasBeenTriggered ? workspaceTab : "definition";
+  const { ManifestButton, ManifestModalComponent } = useManifestViewer({
+    resourceType: "workflow",
+    resourceName: workflow?.name ?? "",
+    namespace: namespace ?? "default",
+    token: token ?? "",
+  });
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Header */}
-      <WorkflowHeader
-        workflowName={workflow?.name ?? null}
-        phase={workflow?.phase ?? "draft"}
-        isActive={isActive}
-        isFactoryWorkflow={isFactoryWorkflow}
-        factoryMode={factoryMode}
-        isRunning={isRunning}
-        isCancelling={isCancelling}
-        isSaving={isSaving}
-        canSubmit={canSubmit}
-        canMutate={canMutate}
-        onRun={() => {
-          setTriggerInput(workflow?.input ?? "");
-          setShowTriggerConfirm(true);
-        }}
-        onCancel={handleCancel}
-        onSave={handleSave}
-        onDelete={() => setDeleteDialogOpen(true)}
-        onOpenComposer={onOpenComposer}
-      />
-
-      {/* Status bar */}
-      <WorkflowStatusBar
-        phase={workflow?.phase ?? "draft"}
-        isActive={isActive}
-        stepsCount={steps.length}
-        wfSummary={wfSummary}
-        uniqueAgentCount={uniqueAgentCount}
-        approvalStepCount={approvalStepCount}
-        completedStepCount={completedStepCount}
-        failedStepCount={failedStepCount}
-        waitingApprovalCount={waitingApprovalCount}
-        elapsed={isActive && wfSummary?.startedAt ? formatElapsed(wfSummary.startedAt) : undefined}
-      />
-
-      {/* Execution brief */}
-      <WorkflowExecutionBrief
-        title={workflowBrief.title}
-        body={workflowBrief.body}
-        nextAction={nextAction}
-      />
-
-      {/* Tabs */}
+    <div className="animate-fade-in">
       <Tabs
-        value={workflow && hasBeenTriggered ? workspaceTab : "definition"}
-        onValueChange={(value) => setWorkspaceTab(value as "live" | "history" | "definition")}
-        className="space-y-6"
+        value={activeTab}
+        onValueChange={(value) => setWorkspaceTab(value as "overview" | "runs" | "files" | "definition")}
+        className="overflow-hidden rounded-lg border border-border/70 bg-background/70 shadow-sm"
       >
-        {workflow && hasBeenTriggered && (
-          <div className="rounded-2xl border border-border/60 bg-card/40 p-2">
-            <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-              <div className="px-2 py-1">
-                <div className="text-xs font-medium text-muted-foreground">Workflow workspace</div>
-                <div className="text-sm font-semibold text-foreground">
-                  Operate, review runs, or edit without leaving this page.
-                </div>
+        <div className="border-b border-border/70 bg-card/70">
+          <div className="flex flex-col gap-4 px-5 py-4 xl:flex-row xl:items-start xl:justify-between">
+            <div className="flex min-w-0 gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-primary/25 bg-primary/10 text-primary">
+                <Workflow className="h-5 w-5" />
               </div>
-              <TabsList className="h-auto w-full flex-wrap justify-start gap-2 rounded-xl bg-transparent p-0 lg:w-auto">
-                <TabsTrigger
-                  value="live"
-                  className="gap-2 rounded-xl border border-border/60 bg-background/70 px-3 py-2 text-xs data-[state=active]:border-primary/30 data-[state=active]:bg-primary/10 data-[state=active]:text-foreground data-[state=active]:shadow-none"
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h1 className="min-w-0 truncate text-lg font-semibold tracking-normal text-foreground">
+                    {workflow?.name ?? "Create workflow"}
+                  </h1>
+                  <Badge
+                    variant={
+                      isActive
+                        ? "default"
+                        : workflow?.phase === "failed" || workflow?.phase === "cancelled"
+                          ? "destructive"
+                          : "secondary"
+                    }
+                    className="capitalize"
+                  >
+                    {workflow?.phase ?? "draft"}
+                  </Badge>
+                  {isFactoryWorkflow && (
+                    <Badge variant="outline" className="border-primary/25 bg-primary/5 text-primary">
+                      Factory
+                    </Badge>
+                  )}
+                </div>
+                <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+                  {workflow?.description || workflowBrief.body}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {workflow?.name && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 rounded-md text-xs"
+                  onClick={() => {
+                    setTriggerInput(workflow?.input ?? "");
+                    setShowTriggerConfirm(true);
+                    setWorkspaceTab("overview");
+                  }}
+                  disabled={isRunning || isActive}
                 >
-                  <Clock className="h-3.5 w-3.5" />
-                  Live run
-                </TabsTrigger>
-                <TabsTrigger
-                  value="history"
-                  className="gap-2 rounded-xl border border-border/60 bg-background/70 px-3 py-2 text-xs data-[state=active]:border-primary/30 data-[state=active]:bg-primary/10 data-[state=active]:text-foreground data-[state=active]:shadow-none"
+                  {isRunning ? <LoaderCircle className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Play className="mr-1.5 h-3.5 w-3.5" />}
+                  {isRunning ? "Running..." : "Run"}
+                </Button>
+              )}
+              {isActive && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="h-9 rounded-md text-xs"
+                  onClick={handleCancel}
+                  disabled={isCancelling}
                 >
-                  <FolderOpen className="h-3.5 w-3.5" />
-                  Runs & Files
-                </TabsTrigger>
-                <TabsTrigger
-                  value="definition"
-                  className="gap-2 rounded-xl border border-border/60 bg-background/70 px-3 py-2 text-xs data-[state=active]:border-primary/30 data-[state=active]:bg-primary/10 data-[state=active]:text-foreground data-[state=active]:shadow-none"
+                  {isCancelling ? <LoaderCircle className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Square className="mr-1.5 h-3.5 w-3.5" />}
+                  {isCancelling ? "Cancelling..." : "Cancel"}
+                </Button>
+              )}
+              {canMutate && (
+                <Button size="sm" className="h-9 rounded-md text-xs" onClick={handleSave} disabled={!canSubmit || isSaving}>
+                  {isSaving ? <LoaderCircle className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Save className="mr-1.5 h-3.5 w-3.5" />}
+                  {isSaving ? "Saving..." : workflow ? "Save" : "Create"}
+                </Button>
+              )}
+              {onOpenComposer && workflow?.name && (
+                <Button variant="outline" size="sm" className="h-9 rounded-md text-xs" onClick={onOpenComposer}>
+                  <Blocks className="mr-1.5 h-3.5 w-3.5" />
+                  Composer
+                </Button>
+              )}
+              {workflow?.name && <ManifestButton />}
+              {workflow?.name && canMutate && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-9 rounded-md text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  onClick={() => setDeleteDialogOpen(true)}
                 >
-                  <Pencil className="h-3.5 w-3.5" />
-                  Definition
-                </TabsTrigger>
-              </TabsList>
+                  <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                  Delete
+                </Button>
+              )}
             </div>
           </div>
-        )}
 
-        {/* Live tab */}
+          <div className="grid border-t border-border/60 md:grid-cols-4">
+            <div className="flex items-center gap-3 border-b border-border/60 px-5 py-3 md:border-b-0 md:border-r">
+              {isActive ? (
+                <LoaderCircle className="h-4 w-4 animate-spin text-primary" />
+              ) : workflow?.phase === "failed" || workflow?.phase === "cancelled" ? (
+                <XCircle className="h-4 w-4 text-destructive" />
+              ) : workflow?.phase === "completed" || workflow?.phase === "succeeded" ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+              ) : (
+                <Clock className="h-4 w-4 text-muted-foreground" />
+              )}
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Status</div>
+                <div className="text-sm font-medium capitalize text-foreground">{workflow?.phase ?? "draft"}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 border-b border-border/60 px-5 py-3 md:border-b-0 md:border-r">
+              <BarChart3 className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Steps</div>
+                <div className="text-sm font-medium text-foreground">{hasBeenTriggered ? `${doneSteps}/${totalSteps}` : steps.length}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 border-b border-border/60 px-5 py-3 md:border-b-0 md:border-r">
+              <Users className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Agents</div>
+                <div className="text-sm font-medium text-foreground">{uniqueAgentCount}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 px-5 py-3">
+              <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                  {elapsed ? "Elapsed" : "Approvals"}
+                </div>
+                <div className="text-sm font-medium text-foreground">
+                  {elapsed ?? (isActive ? waitingApprovalCount : approvalStepCount)}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3 border-t border-border/60 px-5 py-3 lg:flex-row lg:items-center lg:justify-between">
+            <TabsList className="h-auto w-full justify-start gap-1 rounded-md bg-muted/45 p-1 lg:w-auto">
+              {workflow && hasBeenTriggered && (
+                <>
+                  <TabsTrigger value="overview" className="gap-2 rounded px-3 py-2 text-xs">
+                    <Clock className="h-3.5 w-3.5" />
+                    Overview
+                  </TabsTrigger>
+                  <TabsTrigger value="runs" className="gap-2 rounded px-3 py-2 text-xs">
+                    <BarChart3 className="h-3.5 w-3.5" />
+                    Runs
+                  </TabsTrigger>
+                  <TabsTrigger value="files" className="gap-2 rounded px-3 py-2 text-xs">
+                    <FolderOpen className="h-3.5 w-3.5" />
+                    Files
+                  </TabsTrigger>
+                </>
+              )}
+              <TabsTrigger value="definition" className="gap-2 rounded px-3 py-2 text-xs">
+                <Pencil className="h-3.5 w-3.5" />
+                Definition
+              </TabsTrigger>
+            </TabsList>
+            {nextAction && workflow && hasBeenTriggered && activeTab === "overview" && (
+              <div className="min-w-0 truncate text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">{nextAction.action}</span>
+                <span className="ml-2">{nextAction.reason}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
         {workflow && hasBeenTriggered && (
-          <TabsContent value="live" className="mt-0">
+          <TabsContent value="overview" className="m-0 p-5">
             <WorkflowLiveView
               workflow={workflow}
               steps={steps}
@@ -540,24 +653,26 @@ export function WorkflowManager({
           </TabsContent>
         )}
 
-        {/* History tab */}
         {workflow && hasBeenTriggered && (
-          <TabsContent value="history" className="mt-0">
+          <TabsContent value="runs" className="m-0 p-5">
               <WorkflowHistoryView
                 workflow={workflow}
                 selectedHistoryRun={selectedHistoryRun}
                 setSelectedHistoryRun={setSelectedHistoryRun}
-                activeRunAgents={workflowAgents}
                 isActive={isActive}
               />
           </TabsContent>
         )}
 
-        {/* Definition tab */}
-        <TabsContent value="definition" className="mt-0 space-y-6">
-          {/* Definition studio banner */}
+        {workflow && hasBeenTriggered && (
+          <TabsContent value="files" className="m-0 p-5">
+            <WorkflowFilesView agents={workflowAgents} liveUpdatesEnabled={isActive} />
+          </TabsContent>
+        )}
+
+        <TabsContent value="definition" className="m-0 space-y-6 p-5">
           {workflow && (
-            <div className="rounded-2xl border border-border/60 bg-card/40 p-4">
+            <div className="rounded-lg border border-border/60 bg-card/55 p-4">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <div className="text-xs font-medium text-muted-foreground">Definition studio</div>
@@ -570,18 +685,18 @@ export function WorkflowManager({
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-8 rounded-lg text-xs"
-                      onClick={() => setWorkspaceTab("live")}
+                      className="h-8 rounded-md text-xs"
+                      onClick={() => setWorkspaceTab("overview")}
                     >
                       <Clock className="mr-1.5 h-3.5 w-3.5" />
-                      Back to live run
+                      Back to overview
                     </Button>
                   )}
                   {onOpenComposer && (
                     <Button
                       variant="outline"
                       size="sm"
-                      className="h-8 rounded-lg text-xs"
+                      className="h-8 rounded-md text-xs"
                       onClick={onOpenComposer}
                     >
                       <Blocks className="mr-1.5 h-3.5 w-3.5" />
@@ -593,9 +708,8 @@ export function WorkflowManager({
             </div>
           )}
 
-          {/* Form + Sidebar */}
           <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
-            <div className="rounded-2xl border border-border/70 bg-card/55 p-5">
+            <div className="min-w-0">
               <WorkflowDefinitionForm
                 name={name}
                 setName={setName}
@@ -608,7 +722,7 @@ export function WorkflowManager({
                 isEditing={Boolean(workflow)}
               />
             </div>
-            <div className="rounded-2xl border border-border/70 bg-card/55 p-5">
+            <div className="rounded-lg border border-border/70 bg-card/55 p-5">
               <WorkflowSidebar
                 messageBus={messageBus}
                 setMessageBus={setMessageBus}
@@ -623,7 +737,6 @@ export function WorkflowManager({
             </div>
           </div>
 
-          {/* Steps */}
           <WorkflowStepsList
             steps={steps}
             agents={agents}
@@ -636,7 +749,6 @@ export function WorkflowManager({
         </TabsContent>
       </Tabs>
 
-      {/* Error */}
       {error && (
         <div className="mt-4">
           <ErrorBanner error={error} onDismiss={() => setErrorDialogOpen(false)} />
@@ -648,7 +760,6 @@ export function WorkflowManager({
         onClose={() => setErrorDialogOpen(false)}
       />
 
-      {/* Delete dialog */}
       {workflow && (
         <ConfirmDialog
           open={deleteDialogOpen}
@@ -659,6 +770,7 @@ export function WorkflowManager({
           onConfirm={() => onDelete(workflow.name)}
         />
       )}
+      <ManifestModalComponent />
     </div>
   );
 }

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "verify:workflow": "node scripts/verify-workflow-workspace.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
