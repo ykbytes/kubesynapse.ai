@@ -39,7 +39,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: litellm-schema-sync
-          image: "{{ .Values.litellm.image.repository }}:{{ .Values.litellm.image.tag }}"
+          image: {{ include "kubesynapse.imageRef" .Values.litellm.image | quote }}
           imagePullPolicy: {{ .Values.litellm.image.pullPolicy }}
           command: ["/bin/sh", "-lc"]
           args:
@@ -55,7 +55,7 @@ spec:
               mountPath: /work
 {{- if .Values.postgresql.enabled }}
         - name: litellm-db-bootstrap
-          image: "{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
+          image: {{ include "kubesynapse.imageRef" .Values.postgresql.image | quote }}
           imagePullPolicy: {{ .Values.postgresql.image.pullPolicy | default "IfNotPresent" }}
           command: ["/bin/sh", "-lc"]
           args:
@@ -95,7 +95,7 @@ spec:
                   optional: true
 {{- end }}
         - name: litellm-db-init
-          image: "{{ .Values.litellm.image.repository }}:{{ .Values.litellm.image.tag }}"
+          image: {{ include "kubesynapse.imageRef" .Values.litellm.image | quote }}
           imagePullPolicy: {{ .Values.litellm.image.pullPolicy }}
           command: ["/bin/sh", "-lc"]
           args:
@@ -148,7 +148,7 @@ spec:
 {{- end }}
       containers:
         - name: litellm
-          image: "{{ .Values.litellm.image.repository }}:{{ .Values.litellm.image.tag }}"
+          image: {{ include "kubesynapse.imageRef" .Values.litellm.image | quote }}
           imagePullPolicy: {{ .Values.litellm.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false

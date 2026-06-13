@@ -29,6 +29,23 @@ Create a default fully qualified app name.
 {{- end }}
 
 {{/*
+Render an image reference from repository + optional digest/tag.
+Digest wins over tag so callers can opt into immutable image references.
+*/}}
+{{- define "kubesynapse.imageRef" -}}
+{{- $repository := .repository | default "" -}}
+{{- $digest := .digest | default "" | trim -}}
+{{- $tag := .tag | default "" | trim -}}
+{{- if $digest -}}
+{{- printf "%s@%s" $repository $digest -}}
+{{- else if $tag -}}
+{{- printf "%s:%s" $repository $tag -}}
+{{- else -}}
+{{- $repository -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Render pod imagePullSecrets from values.global.imagePullSecrets.
 */}}
 {{- define "kubesynapse.imagePullSecrets" -}}
@@ -59,7 +76,9 @@ Build a JSON object mapping MCP sidecar names to {image, port} for operator auto
 {{- $image := $val.image }}
 {{- $parts := splitList "/" $image }}
 {{- $lastPart := index $parts (sub (len $parts) 1) }}
-{{- if and $val.tag (not (contains "@" $image)) (not (contains ":" $lastPart)) }}
+{{- if and $val.digest (not (contains "@" $image)) }}
+{{- $image = printf "%s@%s" $val.image $val.digest }}
+{{- else if and $val.tag (not (contains "@" $image)) (not (contains ":" $lastPart)) }}
 {{- $image = printf "%s:%s" $val.image $val.tag }}
 {{- end }}
 {{- $_ := set $catalog $key (dict "image" $image "port" $val.port) }}

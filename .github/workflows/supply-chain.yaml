@@ -19,13 +19,15 @@ permissions:
   id-token: write
   packages: write
   security-events: write
+  attestations: write
+  artifact-metadata: write
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAMESPACE: ${{ github.repository_owner }}
+  OPENCODE_IMAGE_NAME: kubesynapse-opencode-rt
 
 jobs:
-  # ── SBOM Generation ───────────────────────────────────────────────
   sbom:
     runs-on: ubuntu-latest
     strategy:
@@ -55,7 +57,6 @@ jobs:
           name: sbom-${{ matrix.component }}
           path: dist/sbom/${{ matrix.component }}.*.json
 
-  # ── Vulnerability Scan ───────────────────────────────────────────
   scan:
     runs-on: ubuntu-latest
     needs: sbom
@@ -79,7 +80,6 @@ jobs:
         with:
           sarif_file: "trivy-results.sarif"
 
-  # ── Cosign Image Signing (on push to main/preprod) ───────────────
   sign-images:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/preprod')
     runs-on: ubuntu-latest
@@ -89,7 +89,6 @@ jobs:
         image:
           - kubesynapse-operator
           - kubesynapse-api-gateway
-          - kubesynapse-opencode-rt
           - kubesynapse-web-ui
     steps:
       - uses: actions/checkout@v4
@@ -110,7 +109,8 @@ jobs:
         run: |
           podman build --format docker \
             -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.image }}:${{ steps.tag.outputs.tag }} \
-            ./${{ matrix.image == 'kubesynapse-operator' && 'operator' || matrix.image == 'kubesynapse-api-gateway' && 'api-gateway' || matrix.image == 'kubesynapse-opencode-rt' && 'opencode-runtime' || 'web-ui' }}
+            ./${{ matrix.image == 'kubesynapse-operator' && 'operator' || matrix.image == 'kubesynapse-api-gateway' && 'api-gateway' || 'web-ui' }}
+          podman push ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.image }}:${{ steps.tag.outputs.tag }}
 
       - name: Sign image with Cosign (keyless)
         run: |
@@ -124,13 +124,102 @@ jobs:
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.image }}:${{ steps.tag.outputs.tag }}
 
-  # ── Attestation ──────────────────────────────────────────────────
-  attest:
+  opencode-runtime-integrity:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/preprod')
     runs-on: ubuntu-latest
-    needs: sign-images
+    needs: scan
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/attest-build-provenance@v1
+
+      - name: Generate image tag
+        id: tag
+        run: |
+          SHA_SHORT=$(git rev-parse --short=7 HEAD)
+          echo "tag=sha-${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          subject-path: "${{ github.workspace }}/**"
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Push OpenCode runtime
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./opencode-runtime
+          file: ./opencode-runtime/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.OPENCODE_IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
+          labels: |
+            org.opencontainers.image.title=KubeSynapse OpenCode Runtime
+            org.opencontainers.image.description=Hardened OpenCode runtime for KubeSynapse
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.tag.outputs.tag }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=opencode-runtime-supply-chain
+          cache-to: type=gha,mode=max,scope=opencode-runtime-supply-chain
+
+      - name: Scan OpenCode runtime image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.OPENCODE_IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign OpenCode runtime image with Cosign (keyless)
+        run: |
+          cosign sign --yes \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.OPENCODE_IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+
+      - name: Verify OpenCode runtime signature
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/.github/workflows/supply-chain.yaml@.*$" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.OPENCODE_IMAGE_NAME }}@${{ steps.build.outputs.digest }} > /dev/null
+
+      - name: Generate OpenCode runtime provenance attestation
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.OPENCODE_IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Install Syft
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Generate OpenCode runtime SBOM
+        run: |
+          mkdir -p dist/sbom
+          syft registry:${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.OPENCODE_IMAGE_NAME }}@${{ steps.build.outputs.digest }} \
+            --output spdx-json=dist/sbom/${{ env.OPENCODE_IMAGE_NAME }}.spdx.json \
+            --output cyclonedx-json=dist/sbom/${{ env.OPENCODE_IMAGE_NAME }}.cdx.json
+
+      - name: Generate OpenCode runtime SBOM attestation
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.OPENCODE_IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: dist/sbom/${{ env.OPENCODE_IMAGE_NAME }}.spdx.json
+          push-to-registry: true
+
+      - name: Upload OpenCode runtime SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-opencode-runtime-image
+          path: dist/sbom/${{ env.OPENCODE_IMAGE_NAME }}.*

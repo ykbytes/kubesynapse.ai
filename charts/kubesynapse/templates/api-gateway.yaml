@@ -84,7 +84,7 @@ spec:
 {{- end }}
       containers:
         - name: api-gateway
-          image: "{{ .Values.apiGateway.image.repository }}:{{ .Values.apiGateway.image.tag }}"
+          image: {{ include "kubesynapse.imageRef" .Values.apiGateway.image | quote }}
           imagePullPolicy: {{ .Values.apiGateway.image.pullPolicy | default "IfNotPresent" }}
           securityContext:
             allowPrivilegeEscalation: false

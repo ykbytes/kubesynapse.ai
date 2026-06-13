@@ -5,13 +5,17 @@ import importlib.util
 import json
 import sys
 import sysconfig
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import importlib_metadata
-from fastapi.exceptions import RequestValidationError
-from importlib_metadata.compat import py39 as importlib_metadata_py39
+try:
+    import importlib_metadata
+    from importlib_metadata.compat import py39 as importlib_metadata_py39
+except ModuleNotFoundError:
+    import importlib.metadata as importlib_metadata
+    importlib_metadata_py39 = types.SimpleNamespace()
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.modules.pop("runtime_events", None)
@@ -25,6 +29,8 @@ _operator_spec.loader.exec_module(_stdlib_operator)
 sys.modules["operator"] = _stdlib_operator
 importlib_metadata.operator = _stdlib_operator
 importlib_metadata_py39.operator = _stdlib_operator
+
+from fastapi.exceptions import RequestValidationError
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "main.py"
 SPEC = importlib.util.spec_from_file_location("opencode_runtime_main_contract", MODULE_PATH)

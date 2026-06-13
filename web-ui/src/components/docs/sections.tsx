@@ -419,7 +419,7 @@ function AgentsSection() {
           headers={["Field", "Type", "Description"]}
           rows={[
             ["runtime.kind", "opencode | pi | mistral-vibe", "Runtime engine selector. opencode is the production runtime (pi and mistral-vibe are alpha)."],
-            ["runtime.opencode.configFiles", "object", "Inline ConfigMap-style files injected into the OpenCode runtime (max 64 files, ~64 KB per file, ~256 KB total; paths ≤ 256 chars)."],
+            ["runtime.opencode.configFiles", "object", "Inline ConfigMap-style files for safe OpenCode config and skills (max 64 files, ~64 KB per file, ~256 KB total; paths ≤ 256 chars). Plugin paths and platform-controlled opencode.json keys such as permission, plugin, mcp, provider, share, and skills are ignored by the runtime security floor."],
             ["runtime.pi.provider", "string", "Pi runtime: provider override (e.g., <code>anthropic</code>, <code>openai</code>)."],
             ["runtime.pi.model", "string", "Pi runtime: model override (e.g., <code>claude-3-sonnet</code>)."],
             ["runtime.pi.thinkingLevel", "low | medium | high", "Pi runtime: chain-of-thought depth."],

@@ -89,7 +89,7 @@ spec:
           emptyDir: {}
       containers:
         - name: operator
-          image: "{{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}"
+          image: {{ include "kubesynapse.imageRef" .Values.operator.image | quote }}
           imagePullPolicy: {{ .Values.operator.image.pullPolicy | default "IfNotPresent" }}
           command: ["kopf"]
           args: ["run", "/app/main.py", "--verbose", "--liveness=http://0.0.0.0:8080/healthz"]
@@ -141,19 +141,19 @@ spec:
             - name: LLM_SECRET_NAME
               value: {{ include "kubesynapse.fullname" . }}-llm-api-keys
             - name: OPENCODE_RUNTIME_IMAGE
-              value: "{{ .Values.opencodeRuntime.image.repository }}:{{ .Values.opencodeRuntime.image.tag }}"
+              value: {{ include "kubesynapse.imageRef" .Values.opencodeRuntime.image | quote }}
             - name: OPENCODE_RUNTIME_IMAGE_PULL_POLICY
               value: {{ .Values.opencodeRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
             - name: PI_RUNTIME_IMAGE
-              value: "{{ .Values.piRuntime.image.repository }}:{{ .Values.piRuntime.image.tag }}"
+              value: {{ include "kubesynapse.imageRef" .Values.piRuntime.image | quote }}
             - name: PI_RUNTIME_IMAGE_PULL_POLICY
               value: {{ .Values.piRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
             - name: MISTRAL_VIBE_RUNTIME_IMAGE
-              value: "{{ .Values.mistralVibeRuntime.image.repository }}:{{ .Values.mistralVibeRuntime.image.tag }}"
+              value: {{ include "kubesynapse.imageRef" .Values.mistralVibeRuntime.image | quote }}
             - name: MISTRAL_VIBE_RUNTIME_IMAGE_PULL_POLICY
               value: {{ .Values.mistralVibeRuntime.image.pullPolicy | default "IfNotPresent" | quote }}
             - name: CREDENTIAL_PROXY_IMAGE
-              value: "{{ .Values.credentialProxy.image.repository }}:{{ .Values.credentialProxy.image.tag }}"
+              value: {{ include "kubesynapse.imageRef" .Values.credentialProxy.image | quote }}
             - name: CREDENTIAL_PROXY_IMAGE_PULL_POLICY
               value: {{ .Values.credentialProxy.image.pullPolicy | default "IfNotPresent" | quote }}
             - name: OPENCODE_DEFAULT_PROVIDER
@@ -163,7 +163,7 @@ spec:
             - name: OPENCODE_ADMIN_OVERRIDES_JSON
               value: {{ $opencodeAdminEnv | toJson | quote }}
             - name: WORKER_IMAGE
-              value: "{{ .Values.operator.workerImage.repository }}:{{ .Values.operator.workerImage.tag }}"
+              value: {{ include "kubesynapse.imageRef" .Values.operator.workerImage | quote }}
             - name: WORKER_IMAGE_PULL_POLICY
               value: {{ .Values.operator.workerImage.pullPolicy | default "IfNotPresent" | quote }}
             - name: IMAGE_PULL_SECRETS

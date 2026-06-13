@@ -23,6 +23,7 @@ litellm:
   image:
     repository: litellm/litellm
     tag: v1.82.3-stable
+    digest: ""
     pullPolicy: IfNotPresent
   replicaCount: 2  # §reliability-P1: minimum 2 replicas for PDB efficacy
   revisionHistoryLimit: 3
@@ -76,6 +77,7 @@ opencodeRuntime:
   image:
     repository: docker.io/kubesynapse/kubesynapse-opencode-rt
     tag: latest
+    digest: ""
     pullPolicy: Always
   provider: litellm
   # §security-P0: Mount a hardened, immutable ConfigMap at /etc/kubesynapse/opencode.json.
@@ -158,6 +160,7 @@ credentialProxy:
   image:
     repository: docker.io/kubesynapse/credential-proxy
     tag: latest
+    digest: ""
     pullPolicy: Always
   resources:
     requests:
@@ -181,6 +184,7 @@ piRuntime:
   image:
     repository: docker.io/kubesynapse/kubesynapse-pi-rt
     tag: latest
+    digest: ""
     pullPolicy: Always
   # §security-P0: Mount a hardened, immutable ConfigMap at /etc/kubesynapse/pi-config/.
   # Prevents extension loading via jiti.import(), SYSTEM.md injection, and !-prefix RCE.
@@ -205,6 +209,7 @@ mistralVibeRuntime:
   image:
     repository: docker.io/kubesynapse/kubesynapse-vibe-rt
     tag: latest
+    digest: ""
     pullPolicy: Always
 
 operator:
@@ -214,11 +219,18 @@ operator:
   image:
     repository: docker.io/kubesynapse/kubesynapse-operator
     tag: latest
+    digest: ""
     pullPolicy: Always
   workerImage:
     repository: docker.io/kubesynapse/kubesynapse-operator
     tag: latest
+    digest: ""
     pullPolicy: Always
+  migrationImage:
+    repository: bitnami/kubectl
+    tag: latest
+    digest: ""
+    pullPolicy: IfNotPresent
   resources:
     requests:
       cpu: "100m"
@@ -275,6 +287,7 @@ apiGateway:
   image:
     repository: docker.io/kubesynapse/kubesynapse-api-gateway
     tag: latest
+    digest: ""
     pullPolicy: Always
   ingressClassName: ""
   ingressHost: ""  # leave empty for a hostless ingress, or set e.g. "agents.mycompany.com"
@@ -333,6 +346,7 @@ postgresql:
   image:
     repository: postgres
     tag: 16-alpine
+    digest: ""
     pullPolicy: IfNotPresent
   service:
     port: 5432
@@ -356,6 +370,7 @@ webUi:
   image:
     repository: docker.io/kubesynapse/kubesynapse-web-ui
     tag: latest
+    digest: ""
     pullPolicy: Always
   service:
     type: ClusterIP
@@ -495,6 +510,7 @@ backup:
   image:
     repository: bitnami/postgresql
     tag: "17"
+    digest: ""
     pullPolicy: IfNotPresent
   s3:
     bucket: ""
@@ -512,6 +528,7 @@ gc:
   image:
     repository: curlimages/curl
     tag: "8.12.1"
+    digest: ""
     pullPolicy: IfNotPresent
 
 # ---------------------------------------------------------------------------

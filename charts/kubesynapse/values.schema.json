@@ -68,6 +68,7 @@
           "properties": {
             "repository": { "type": "string" },
             "tag": { "type": "string" },
+            "digest": { "type": "string", "default": "" },
             "pullPolicy": {
               "type": "string",
               "enum": ["IfNotPresent", "Always", "Never"],
@@ -171,6 +172,7 @@
           "properties": {
             "repository": { "type": "string" },
             "tag": { "type": "string" },
+            "digest": { "type": "string", "default": "" },
             "pullPolicy": { "type": "string", "default": "IfNotPresent" }
           }
         },
@@ -232,6 +234,7 @@
           "properties": {
             "repository": { "type": "string", "default": "docker.io/kubesynapse/credential-proxy" },
             "tag": { "type": "string", "default": "latest" },
+            "digest": { "type": "string", "default": "" },
             "pullPolicy": { "type": "string", "default": "Always" }
           }
         },
@@ -274,6 +277,7 @@
           "properties": {
             "repository": { "type": "string", "default": "kubesynapse-pi-rt" },
             "tag": { "type": "string", "default": "v0.1.0" },
+            "digest": { "type": "string", "default": "" },
             "pullPolicy": { "type": "string", "default": "IfNotPresent" }
           }
         },
@@ -300,6 +304,7 @@
           "properties": {
             "repository": { "type": "string", "default": "kubesynapse-vibe-rt" },
             "tag": { "type": "string", "default": "v0.1.0" },
+            "digest": { "type": "string", "default": "" },
             "pullPolicy": { "type": "string", "default": "IfNotPresent" }
           }
         }
@@ -316,6 +321,7 @@
           "properties": {
             "repository": { "type": "string" },
             "tag": { "type": "string" },
+            "digest": { "type": "string", "default": "" },
             "pullPolicy": { "type": "string", "default": "IfNotPresent" }
           }
         },
@@ -324,6 +330,16 @@
           "properties": {
             "repository": { "type": "string" },
             "tag": { "type": "string" },
+            "digest": { "type": "string", "default": "" },
+            "pullPolicy": { "type": "string", "default": "IfNotPresent" }
+          }
+        },
+        "migrationImage": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string", "default": "bitnami/kubectl" },
+            "tag": { "type": "string", "default": "latest" },
+            "digest": { "type": "string", "default": "" },
             "pullPolicy": { "type": "string", "default": "IfNotPresent" }
           }
         },
@@ -410,6 +426,7 @@
           "properties": {
             "repository": { "type": "string" },
             "tag": { "type": "string" },
+            "digest": { "type": "string", "default": "" },
             "pullPolicy": { "type": "string", "default": "IfNotPresent" }
           }
         },
@@ -493,6 +510,7 @@
           "properties": {
             "repository": { "type": "string" },
             "tag": { "type": "string" },
+            "digest": { "type": "string", "default": "" },
             "pullPolicy": { "type": "string", "default": "IfNotPresent" }
           }
         },
@@ -516,6 +534,7 @@
           "properties": {
             "repository": { "type": "string" },
             "tag": { "type": "string" },
+            "digest": { "type": "string", "default": "" },
             "pullPolicy": { "type": "string", "default": "IfNotPresent" }
           }
         },

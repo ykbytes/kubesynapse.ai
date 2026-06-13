@@ -36,6 +36,7 @@ _RUNTIME_DIR = Path(__file__).resolve().parent
 _OPENAPI_SPEC_PATH = _RUNTIME_DIR / "openapi.json"
 _RUNTIME_LOCAL_MODULES = (
     "analysis",
+    "content_safety",
     "config",
     "invoke",
     "memory",
@@ -260,6 +261,7 @@ from supervisor import (
     _start_opencode_process,
     build_server_env,
     is_shutting_down,
+    opencode_server_auth,
     validate_runtime_startup,
     wait_for_server_ready,
 )
@@ -351,14 +353,16 @@ def runtime_bearer_token() -> str:
 
 def runtime_auth_required() -> bool:
     """Return True when protected runtime endpoints must enforce Bearer auth."""
-    raw = os.getenv(RUNTIME_AUTH_REQUIRED_ENV, "").strip().lower()
-    return raw in ("1", "true", "yes") or bool(runtime_bearer_token())
+    raw = os.getenv(RUNTIME_AUTH_REQUIRED_ENV, "true").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return True
 
 
 def _is_public_runtime_path(path: str) -> bool:
     if path in RUNTIME_AUTH_PUBLIC_PATHS:
         return True
-    return path.startswith("/docs/") or path.startswith("/redoc/") or path.startswith("/openapi")
+    return path.startswith("/docs/") or path.startswith("/redoc/")
 
 
 def build_execution_id(*, thread_id: str | None = None, request_id: str | None = None) -> str:
@@ -714,9 +718,12 @@ def ready() -> JSONResponse:
     opencode_server_healthy = False
     if binary_available and startup_error is None:
         try:
-            with httpx.Client(timeout=5.0) as probe:
-                resp = probe.get(f"http://{OPENCODE_SERVER_HOST}:{OPENCODE_SERVER_PORT}/session")
-                opencode_server_healthy = resp.status_code < 500
+            with httpx.Client(timeout=5.0, trust_env=False) as probe:
+                resp = probe.get(
+                    f"http://{OPENCODE_SERVER_HOST}:{OPENCODE_SERVER_PORT}/global/health",
+                    auth=opencode_server_auth(),
+                )
+                opencode_server_healthy = resp.status_code == 200 and bool(resp.json().get("healthy"))
         except Exception:
             logger.debug("OpenCode server health probe failed", exc_info=True)
     session_registry_writable = False
@@ -999,98 +1006,96 @@ def context_budget(thread_id: str | None = None) -> dict[str, Any]:
 
 @app.post("/invoke/stream")
 async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
-    async with get_invoke_semaphore():
-        use_sync_memory_invoke = "you have persistent memory from prior conversations" in str(
-            request.system or ""
-        ).lower()
-        request_id = _request_execution_seed() or request.caller_request_id
+    use_sync_memory_invoke = "you have persistent memory from prior conversations" in str(
+        request.system or ""
+    ).lower()
+    request_id = _request_execution_seed() or request.caller_request_id
 
-        async def event_generator() -> AsyncIterator[str]:
-        thread_id = request.thread_id or str(uuid.uuid4())
-        execution_id = build_execution_id(
-            thread_id=thread_id,
-            request_id=request_id,
-        )
-        request_with_thread = request.model_copy(update={"thread_id": thread_id})
-        streamed_delta_count = 0
-        start_time = time.monotonic()
+    async def event_generator() -> AsyncIterator[str]:
+        async with get_invoke_semaphore():
+            thread_id = request.thread_id or str(uuid.uuid4())
+            execution_id = build_execution_id(
+                thread_id=thread_id,
+                request_id=request_id,
+            )
+            request_with_thread = request.model_copy(update={"thread_id": thread_id})
+            streamed_delta_count = 0
+            start_time = time.monotonic()
 
-        emit_run_started(
-            execution_id=execution_id,
-            thread_id=thread_id,
-            model=request.model or DEFAULT_MODEL_REF,
-        )
-        yield sse_event("response.started", {"thread_id": thread_id, "source": "opencode"})
+            emit_run_started(
+                execution_id=execution_id,
+                thread_id=thread_id,
+                model=request.model or DEFAULT_MODEL_REF,
+            )
+            yield sse_event("response.started", {"thread_id": thread_id, "source": "opencode"})
 
-        event_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
-        loop = asyncio.get_event_loop()
-        stop_todo_poller = asyncio.Event()
+            event_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+            loop = asyncio.get_event_loop()
+            stop_todo_poller = asyncio.Event()
 
-        def _stream_callback(event_type: str, data: dict[str, Any]) -> None:
-            loop.call_soon_threadsafe(event_queue.put_nowait, {"event": event_type, "data": data})
+            def _stream_callback(event_type: str, data: dict[str, Any]) -> None:
+                loop.call_soon_threadsafe(event_queue.put_nowait, {"event": event_type, "data": data})
 
-        def _run_invoke() -> InvokeResponse:
-            try:
-                if use_sync_memory_invoke:
-                    return invoke_opencode(request_with_thread)
-                return invoke_opencode(request_with_thread, stream_callback=_stream_callback)
-            finally:
-                loop.call_soon_threadsafe(event_queue.put_nowait, None)
-
-        async def _poll_todos() -> None:
-            last_signature: str | None = None
-            while not stop_todo_poller.is_set():
-                session_id = SESSION_REGISTRY.get(thread_id)
-                if session_id:
-                    try:
-                        todos = await asyncio.to_thread(get_session_todos, session_id)
-                        signature = json.dumps(todos, sort_keys=True)
-                        if signature != last_signature:
-                            last_signature = signature
-                            await event_queue.put(
-                                {
-                                    "event": "todo.updated",
-                                    "data": {
-                                        "thread_id": thread_id,
-                                        "session_id": session_id,
-                                        "sessionID": session_id,
-                                        "todos": todos,
-                                        "source": "opencode",
-                                    },
-                                }
-                            )
-                    except Exception:
-                        logger.debug("Todo poller callback failed", exc_info=True)
+            def _run_invoke() -> InvokeResponse:
                 try:
-                    await asyncio.wait_for(stop_todo_poller.wait(), timeout=0.5)
-                except TimeoutError:
-                    continue
+                    if use_sync_memory_invoke:
+                        return invoke_opencode(request_with_thread)
+                    return invoke_opencode(request_with_thread, stream_callback=_stream_callback)
+                finally:
+                    loop.call_soon_threadsafe(event_queue.put_nowait, None)
 
-        async def _poll_questions() -> None:
-            from hitl import HITL_MODE
-            should_auto_approve = HITL_MODE == "disabled"
-            last_ids: set[str] = set()
-            while not stop_todo_poller.is_set():
-                try:
-                    # Auto-approve pending questions in autonomous mode to prevent
-                    # deadlock when OpenCode's permission config uses "ask" mode.
-                    # Without this, headless agents block forever waiting for
-                    # human approval that will never come.
-                    if should_auto_approve:
-                        approved = await asyncio.to_thread(auto_approve_pending_questions)
-                        if approved:
-                            for qid in approved:
+            async def _poll_todos() -> None:
+                last_signature: str | None = None
+                while not stop_todo_poller.is_set():
+                    session_id = SESSION_REGISTRY.get(thread_id)
+                    if session_id:
+                        try:
+                            todos = await asyncio.to_thread(get_session_todos, session_id)
+                            signature = json.dumps(todos, sort_keys=True)
+                            if signature != last_signature:
+                                last_signature = signature
                                 await event_queue.put(
                                     {
-                                        "event": "question.auto_approved",
+                                        "event": "todo.updated",
                                         "data": {
                                             "thread_id": thread_id,
+                                            "session_id": session_id,
+                                            "sessionID": session_id,
+                                            "todos": todos,
                                             "source": "opencode",
-                                            "id": qid,
                                         },
                                     }
                                 )
-                    else:
+                        except Exception:
+                            logger.debug("Todo poller callback failed", exc_info=True)
+                    try:
+                        await asyncio.wait_for(stop_todo_poller.wait(), timeout=0.5)
+                    except TimeoutError:
+                        continue
+
+            async def _poll_questions() -> None:
+                from hitl import HITL_MODE
+                should_auto_approve = HITL_MODE == "disabled"
+                last_ids: set[str] = set()
+                while not stop_todo_poller.is_set():
+                    try:
+                        # Auto-handle only permission prompts in autonomous mode.
+                        # Regular questions are surfaced through the existing HITL
+                        # endpoints rather than guessed with a blanket "Yes".
+                        if should_auto_approve:
+                            approved = await asyncio.to_thread(auto_approve_pending_questions)
+                            if approved:
+                                for qid in approved:
+                                    await event_queue.put(
+                                        {
+                                            "event": "question.auto_approved",
+                                            "data": {
+                                                "thread_id": thread_id,
+                                                "source": "opencode",
+                                                "id": qid,
+                                            },
+                                        }
+                                    )
                         questions = await asyncio.to_thread(list_pending_questions)
                         current_ids = {q.get("id", "") for q in questions if q.get("id")}
                         new_ids = current_ids - last_ids
@@ -1113,126 +1118,126 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                                 thread_id=thread_id,
                             )
                         last_ids = current_ids
-                except Exception:
-                    logger.debug("Question poller callback failed", exc_info=True)
+                    except Exception:
+                        logger.debug("Question poller callback failed", exc_info=True)
+                    try:
+                        await asyncio.wait_for(stop_todo_poller.wait(), timeout=0.3)
+                    except TimeoutError:
+                        continue
+
+            task = asyncio.get_event_loop().run_in_executor(None, _run_invoke)
+            todo_task = asyncio.create_task(_poll_todos())
+            question_task = asyncio.create_task(_poll_questions())
+
+            while True:
                 try:
-                    await asyncio.wait_for(stop_todo_poller.wait(), timeout=0.3)
+                    item = await asyncio.wait_for(event_queue.get(), timeout=10.0)
                 except TimeoutError:
+                    yield ": keepalive\n\n"
                     continue
+                if item is None:
+                    break
+                if item.get("event") == "response.delta":
+                    streamed_delta_count += 1
+                yield sse_event(item["event"], item["data"])
 
-        task = asyncio.get_event_loop().run_in_executor(None, _run_invoke)
-        todo_task = asyncio.create_task(_poll_todos())
-        question_task = asyncio.create_task(_poll_questions())
+            stop_todo_poller.set()
+            with contextlib.suppress(Exception):
+                await todo_task
+            with contextlib.suppress(Exception):
+                await question_task
 
-        while True:
+            # Emit todo.cleared when all todos are done/cancelled after invoke
             try:
-                item = await asyncio.wait_for(event_queue.get(), timeout=10.0)
-            except TimeoutError:
-                yield ": keepalive\n\n"
-                continue
-            if item is None:
-                break
-            if item.get("event") == "response.delta":
-                streamed_delta_count += 1
-            yield sse_event(item["event"], item["data"])
+                final_session = SESSION_REGISTRY.get(thread_id)
+                if final_session:
+                    final_todos = await asyncio.to_thread(get_session_todos, final_session)
+                    if final_todos and all(
+                        t.get("status") in ("completed", "cancelled") for t in final_todos
+                    ):
+                        yield sse_event(
+                            "todo.cleared",
+                            {"thread_id": thread_id, "session_id": final_session, "todos": final_todos, "source": "opencode"},
+                        )
+                        emit_todo_updated(
+                            execution_id=execution_id,
+                            todos=final_todos,
+                            thread_id=thread_id,
+                        )
+            except Exception:
+                logger.debug("Todo stream cleanup failed", exc_info=True)
 
-        stop_todo_poller.set()
-        with contextlib.suppress(Exception):
-            await todo_task
-        with contextlib.suppress(Exception):
-            await question_task
+            try:
+                response = await task
+            except HTTPException as exc:
+                yield sse_event("response.error", {"thread_id": thread_id, "error": str(exc.detail)})
+                emit_run_error(
+                    execution_id=execution_id,
+                    thread_id=thread_id,
+                    error=str(exc.detail)[:2048],
+                )
+                flush_sync_queue()
+                return
+            except Exception as exc:
+                yield sse_event("response.error", {"thread_id": thread_id, "error": str(exc)})
+                emit_run_error(
+                    execution_id=execution_id,
+                    thread_id=thread_id,
+                    error=str(exc)[:2048],
+                )
+                flush_sync_queue()
+                return
 
-        # Emit todo.cleared when all todos are done/cancelled after invoke
-        try:
-            final_session = SESSION_REGISTRY.get(thread_id)
-            if final_session:
-                final_todos = await asyncio.to_thread(get_session_todos, final_session)
-                if final_todos and all(
-                    t.get("status") in ("completed", "cancelled") for t in final_todos
-                ):
-                    yield sse_event(
-                        "todo.cleared",
-                        {"thread_id": thread_id, "session_id": final_session, "todos": final_todos, "source": "opencode"},
-                    )
-                    emit_todo_updated(
-                        execution_id=execution_id,
-                        todos=final_todos,
-                        thread_id=thread_id,
-                    )
-        except Exception:
-            logger.debug("Todo stream cleanup failed", exc_info=True)
+            if response.response and streamed_delta_count == 0:
+                yield sse_event(
+                    "response.delta", {"thread_id": response.thread_id, "delta": response.response, "source": "opencode"}
+                )
 
-        try:
-            response = await task
-        except HTTPException as exc:
-            yield sse_event("response.error", {"thread_id": thread_id, "error": str(exc.detail)})
-            emit_run_error(
+            # Emit tool call events from response
+            for tc in (response.tool_calls or []):
+                emit_tool_call(
+                    execution_id=execution_id,
+                    tool_name=tc.get("name", "unknown"),
+                    tool_args=tc.get("args"),
+                    status=tc.get("status", "completed"),
+                    thread_id=thread_id,
+                )
+
+            duration_ms = int((time.monotonic() - start_time) * 1000)
+            total_tokens = (response.metadata or {}).get("context_budget", {}).get("total_tokens", 0) if response.metadata else 0
+
+            _emit_llm_call_from_response(
                 execution_id=execution_id,
                 thread_id=thread_id,
-                error=str(exc.detail)[:2048],
+                session_id=SESSION_REGISTRY.get(thread_id),
+                response=response,
+                fallback_duration_ms=duration_ms,
             )
-            flush_sync_queue()
-            return
-        except Exception as exc:
-            yield sse_event("response.error", {"thread_id": thread_id, "error": str(exc)})
-            emit_run_error(
-                execution_id=execution_id,
-                thread_id=thread_id,
-                error=str(exc)[:2048],
-            )
-            flush_sync_queue()
-            return
 
-        if response.response and streamed_delta_count == 0:
             yield sse_event(
-                "response.delta", {"thread_id": response.thread_id, "delta": response.response, "source": "opencode"}
+                "response.completed",
+                {
+                    "thread_id": response.thread_id,
+                    "response": response.response,
+                    "model": response.model,
+                    "status": response.status,
+                    "approval_name": response.approval_name,
+                    "a2a": response.a2a,
+                    "warnings": response.warnings,
+                    "artifacts": response.artifacts,
+                    "tool_calls": response.tool_calls,
+                    "metadata": response.metadata,
+                },
             )
 
-        # Emit tool call events from response
-        for tc in (response.tool_calls or []):
-            emit_tool_call(
+            emit_run_completed(
                 execution_id=execution_id,
-                tool_name=tc.get("name", "unknown"),
-                tool_args=tc.get("args"),
-                status=tc.get("status", "completed"),
                 thread_id=thread_id,
+                status=response.status,
+                total_tokens=total_tokens,
+                duration_ms=duration_ms,
             )
-
-        duration_ms = int((time.monotonic() - start_time) * 1000)
-        total_tokens = (response.metadata or {}).get("context_budget", {}).get("total_tokens", 0) if response.metadata else 0
-
-        _emit_llm_call_from_response(
-            execution_id=execution_id,
-            thread_id=thread_id,
-            session_id=SESSION_REGISTRY.get(thread_id),
-            response=response,
-            fallback_duration_ms=duration_ms,
-        )
-
-        yield sse_event(
-            "response.completed",
-            {
-                "thread_id": response.thread_id,
-                "response": response.response,
-                "model": response.model,
-                "status": response.status,
-                "approval_name": response.approval_name,
-                "a2a": response.a2a,
-                "warnings": response.warnings,
-                "artifacts": response.artifacts,
-                "tool_calls": response.tool_calls,
-                "metadata": response.metadata,
-            },
-        )
-
-        emit_run_completed(
-            execution_id=execution_id,
-            thread_id=thread_id,
-            status=response.status,
-            total_tokens=total_tokens,
-            duration_ms=duration_ms,
-        )
-        flush_sync_queue()
+            flush_sync_queue()
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -1318,12 +1323,11 @@ def download_artifact(path: str) -> FileResponse:
 @app.get("/artifacts/list")
 def list_artifacts(root: str = "") -> dict[str, Any]:
     """Walk allowed directories and return a flat list of files."""
-    import tempfile
-    allowed_roots = [Path(OPENCODE_WORKDIR).resolve(), Path(HOME_DIR).resolve(), Path(tempfile.gettempdir()).resolve()]
+    allowed_roots = [Path(OPENCODE_WORKDIR).resolve()]
     if root:
         target = Path(root).expanduser().resolve()
         if not any(path_is_within(target, r) for r in allowed_roots):
-            raise HTTPException(status_code=400, detail=f"root '{root}' is outside the allowed runtime roots")
+            raise HTTPException(status_code=400, detail=f"root '{root}' is outside the workspace artifact roots")
         if not target.is_dir():
             raise HTTPException(status_code=404, detail=f"root '{root}' is not a directory")
         walk_roots = [target]

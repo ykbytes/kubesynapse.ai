@@ -34,7 +34,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: pg-backup
-              image: {{ .Values.backup.image.repository | default "bitnami/postgresql" }}:{{ .Values.backup.image.tag | default "17" }}
+              image: {{ include "kubesynapse.imageRef" (mergeOverwrite (dict "repository" "bitnami/postgresql" "tag" "17") (.Values.backup.image | default dict)) | quote }}
               imagePullPolicy: {{ .Values.backup.image.pullPolicy | default "IfNotPresent" }}
               securityContext:
                 allowPrivilegeEscalation: false

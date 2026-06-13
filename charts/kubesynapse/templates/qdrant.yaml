@@ -35,7 +35,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: qdrant
-          image: "{{ .Values.qdrant.image.repository }}:{{ .Values.qdrant.image.tag }}"
+          image: {{ include "kubesynapse.imageRef" .Values.qdrant.image | quote }}
           imagePullPolicy: {{ .Values.qdrant.image.pullPolicy | default "IfNotPresent" }}
           workingDir: /qdrant
           env:

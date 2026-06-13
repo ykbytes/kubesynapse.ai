@@ -86,7 +86,7 @@ def validate_cross_namespace_reference(
     source_ns: str | None,
     target_ns: str | None,
     config: dict[str, Any] | None,
-    field: str: "Field reference",
+    field: str = "Field reference",
 ) -> None:
     """§5.3 — Validate cross-namespace reference against policy rules.
     

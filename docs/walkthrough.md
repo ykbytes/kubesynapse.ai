@@ -67,7 +67,7 @@ What the runtime does today:
 
 Key runtime design points:
 
-- `spec.runtime.opencode.configFiles` is the supported per-agent config injection model
+- `spec.runtime.opencode.configFiles` is the supported per-agent config injection model for safe config files and skills; plugins, MCP, provider routing, sharing, and permission floors are platform-controlled
 - skill files and config files are both materialized into the runtime workspace
 - direct A2A delegation is validated through policy and gateway reachability data
 - runtime memory and session behavior are now part of the gateway and runtime contract, not just an internal checkpoint mechanism

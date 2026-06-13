@@ -107,9 +107,11 @@ spec:
                           type: object
                           description: |
                             Optional map of relative OpenCode config-root paths to file contents,
-                            for example agents/reviewer.md, plugins/custom.ts, skills/foo/SKILL.md,
-                            or opencode.json. Agent-specific entries override chart-wide
-                            OPENCODE_RUNTIME_CONFIG_FILES_JSON defaults by path.
+                            for example agents/reviewer.md, skills/foo/SKILL.md, or opencode.json.
+                            User-provided plugin paths and platform-controlled opencode.json keys
+                            such as permission, plugin, mcp, provider, share, and skills are ignored
+                            by the runtime security floor. Use AgentPolicy, MCPConnection resources,
+                            or admin OPENCODE_* overrides for those controls.
                           additionalProperties:
                             x-kubernetes-preserve-unknown-fields: true
                     pi:

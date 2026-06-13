@@ -132,6 +132,27 @@ jobs:
           version: v3.14.0
       - name: Helm Lint
         run: helm lint ./charts/kubesynapse
+      - name: Verify Digest Image Rendering
+        run: |
+          helm template kubesynapse ./charts/kubesynapse \
+            --set platformSecrets.native.litellmMasterKey=sk-test-master-key-1234567890 \
+            --set platformSecrets.native.apiGatewaySharedToken=shared-token-1234567890 \
+            --set platformSecrets.native.runtimeBearerToken=runtime-token-1234567890 \
+            --set platformSecrets.native.databasePassword=db-pass-1234567890 \
+            --set platformSecrets.native.jwtSecret=jwt-secret-1234567890 \
+            --set platformSecrets.native.opencodeServerPassword=server-pass-1234567890 \
+            --set opencodeRuntime.image.repository=example.com/opencode \
+            --set opencodeRuntime.image.tag=v1 \
+            --set opencodeRuntime.image.digest=sha256:deadbeef \
+            --set operator.image.repository=example.com/operator \
+            --set operator.image.tag=v1 \
+            --set operator.workerImage.repository=example.com/worker \
+            --set operator.workerImage.tag=v1 \
+            --set apiGateway.image.repository=example.com/gateway \
+            --set apiGateway.image.tag=v1 \
+            --set webUi.image.repository=example.com/web \
+            --set webUi.image.tag=v1 > /tmp/chart-render.yaml
+          grep -q 'value: "example.com/opencode@sha256:deadbeef"' /tmp/chart-render.yaml
 
   build-and-push:
     runs-on: ubuntu-latest

@@ -31,7 +31,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: gc
-              image: {{ .Values.gc.image.repository | default "curlimages/curl" }}:{{ .Values.gc.image.tag | default "8.12.1" }}
+              image: {{ include "kubesynapse.imageRef" (mergeOverwrite (dict "repository" "curlimages/curl" "tag" "8.12.1") (.Values.gc.image | default dict)) | quote }}
               imagePullPolicy: {{ .Values.gc.image.pullPolicy | default "IfNotPresent" }}
               securityContext:
                 allowPrivilegeEscalation: false

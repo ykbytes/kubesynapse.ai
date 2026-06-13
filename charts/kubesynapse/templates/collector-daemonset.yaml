@@ -35,7 +35,7 @@ spec:
           emptyDir: {}
       containers:
         - name: collector
-          image: "{{ .Values.collector.image.repository }}:{{ .Values.collector.image.tag }}"
+          image: {{ include "kubesynapse.imageRef" .Values.collector.image | quote }}
           imagePullPolicy: {{ .Values.collector.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false

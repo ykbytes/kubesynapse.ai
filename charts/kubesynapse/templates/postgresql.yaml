@@ -44,7 +44,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: fix-permissions
-          image: "{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
+          image: {{ include "kubesynapse.imageRef" .Values.postgresql.image | quote }}
           command: ["sh", "-c", "chown -R 70:70 /var/lib/postgresql/data"]
           securityContext:
             runAsNonRoot: false
@@ -54,7 +54,7 @@ spec:
               mountPath: /var/lib/postgresql/data
       containers:
         - name: postgresql
-          image: "{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
+          image: {{ include "kubesynapse.imageRef" .Values.postgresql.image | quote }}
           imagePullPolicy: {{ .Values.postgresql.image.pullPolicy | default "IfNotPresent" }}
           securityContext:
             allowPrivilegeEscalation: false

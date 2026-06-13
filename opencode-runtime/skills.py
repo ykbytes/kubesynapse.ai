@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import ipaddress
 import re
 import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 from config import (
@@ -45,8 +47,16 @@ from config import (
     _parse_json_env,
     build_litellm_base_url,
 )
+from runtime_permissions import (
+    SAFE_DEFAULT_PERMISSION,
+    bash_permission_with_denylist,
+    clamp_permissions_to_ceiling,
+    load_permission_ceiling,
+    require_immutable_config,
+)
 
 from utils import dedupe_items, normalize_relative_path, serialize_file_content
+from content_safety import sanitize_skill_body
 
 logger = logging.getLogger("opencode-runtime")
 
@@ -66,6 +76,147 @@ def _provider_proxy_base_url(provider_id: str) -> str | None:
 
 def _credential_proxy_enabled() -> bool:
     return os.getenv("CREDENTIAL_PROXY_ENABLED", "false").strip().lower() in ("true", "1", "yes")
+
+
+_USER_OVERRIDE_DENY_KEYS: frozenset[str] = frozenset({
+    "permission",
+    "plugin",
+    "plugins",
+    "skills",
+    "mcp",
+    "provider",
+    "share",
+    "compaction",
+})
+_AGENT_OVERRIDE_DENY_KEYS: frozenset[str] = frozenset({"permission", "prompt", "tools"})
+_TRUSTED_AUTH_PROVIDER_IDS: frozenset[str] = frozenset({
+    "opencode",
+    "opencode-go",
+    "openai-compatible",
+    "github-copilot",
+})
+_DEFAULT_TRUSTED_LLM_HOST_SUFFIXES: frozenset[str] = frozenset({
+    "opencode.ai",
+    "openai.com",
+    "anthropic.com",
+    "googleapis.com",
+    "generativelanguage.googleapis.com",
+    "githubcopilot.com",
+})
+_SAFE_LLM_HEADERS: frozenset[str] = frozenset({
+    "authorization",
+    "api-key",
+    "x-api-key",
+    "anthropic-version",
+    "openai-organization",
+    "openai-project",
+})
+
+
+def _trusted_llm_host_suffixes() -> set[str]:
+    extra = {
+        item.strip().lower().lstrip(".")
+        for item in os.getenv("OPENCODE_TRUSTED_LLM_HOSTS", "").split(",")
+        if item.strip()
+    }
+    return set(_DEFAULT_TRUSTED_LLM_HOST_SUFFIXES) | extra
+
+
+def _is_trusted_llm_base_url(url: str) -> bool:
+    """Return True when an LLM base URL targets an admin-trusted host."""
+    if not isinstance(url, str) or not url.strip():
+        return False
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = (parsed.hostname or "").lower().strip()
+    if not host:
+        return False
+    suffixes = _trusted_llm_host_suffixes()
+    return host in suffixes or any(host.endswith("." + suffix) for suffix in suffixes)
+
+
+def _sanitize_provider_headers(headers: Any) -> dict[str, str]:
+    """Keep only provider headers that cannot smuggle arbitrary HTTP behavior."""
+    if not isinstance(headers, dict):
+        return {}
+    safe: dict[str, str] = {}
+    for raw_key, raw_value in headers.items():
+        key = str(raw_key or "").strip()
+        value = str(raw_value or "").strip()
+        if not key or not value:
+            continue
+        if key.lower() not in _SAFE_LLM_HEADERS:
+            continue
+        if any((ord(ch) < 0x20 and ch not in "\t") for ch in value):
+            continue
+        if len(value) > 4096:
+            continue
+        safe[key] = value
+    return safe
+
+
+def _is_allowed_remote_mcp_url(url: str) -> bool:
+    """Return True when a structured remote MCP URL avoids obvious SSRF targets."""
+    if os.getenv("OPENCODE_ALLOW_PRIVATE_MCP_URLS", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    if not host or host in {"localhost", "metadata.google.internal"}:
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True
+    return not (
+        ip.is_loopback
+        or ip.is_link_local
+        or ip.is_private
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _strip_dangerous_user_keys(overrides: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
+    """Drop user config keys that are controlled by the platform security floor."""
+    if not isinstance(overrides, dict):
+        return overrides
+    cleaned: dict[str, Any] = {}
+    for key, value in overrides.items():
+        if key in _USER_OVERRIDE_DENY_KEYS:
+            warnings.append(
+                f"User config key '{key}' is platform-controlled and was ignored."
+            )
+            continue
+        if key == "agent" and isinstance(value, dict):
+            cleaned_agents: dict[str, Any] = {}
+            for agent_name, agent_spec in value.items():
+                if not isinstance(agent_spec, dict):
+                    cleaned_agents[agent_name] = agent_spec
+                    continue
+                cleaned_spec: dict[str, Any] = {}
+                for agent_key, agent_value in agent_spec.items():
+                    if agent_key in _AGENT_OVERRIDE_DENY_KEYS:
+                        warnings.append(
+                            f"User config agent.{agent_name}.{agent_key} is platform-controlled and was ignored."
+                        )
+                        continue
+                    cleaned_spec[agent_key] = agent_value
+                cleaned_agents[agent_name] = cleaned_spec
+            cleaned["agent"] = cleaned_agents
+            continue
+        cleaned[key] = value
+    return cleaned
+
+
+def _is_blocked_runtime_config_path(relative_path: str) -> bool:
+    parts = [part.lower() for part in str(relative_path).replace("\\", "/").split("/") if part]
+    if not parts:
+        return False
+    return parts[0] in {"plugin", "plugins"}
 
 # Mutable runtime config populated during lifespan startup
 SKILL_RUNTIME_CONFIG: dict[str, Any] = {
@@ -210,13 +361,23 @@ def materialize_opencode_config_files(base_config: dict[str, Any] | None = None)
 
     merged_base_config = base_config
     if base_config is not None:
-        merged_base_config = deep_merge_config(base_config, load_opencode_config_overrides())
+        merge_warnings: list[str] = []
+        safe_overrides = _strip_dangerous_user_keys(load_opencode_config_overrides(), merge_warnings)
+        for warning in merge_warnings:
+            logger.warning(warning)
+        merged_base_config = deep_merge_config(base_config, safe_overrides)
 
     written_files: list[str] = []
     root = Path(OPENCODE_CONFIG_DIR)
     for raw_path, raw_content in payload.items():
         relative_path = normalize_relative_path(str(raw_path), source=OPENCODE_RUNTIME_CONFIG_FILES_ENV)
         if relative_path == "opencode.json" and merged_base_config is not None:
+            continue
+        if _is_blocked_runtime_config_path(relative_path):
+            logger.warning(
+                "Skipping user-provided OpenCode plugin file '%s'; plugins must be enabled through admin allowlists.",
+                relative_path,
+            )
             continue
         target = root / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -275,7 +436,7 @@ def materialize_skill_files() -> tuple[list[str], list[dict[str, str]], list[str
     skills_root = Path(OPENCODE_CONFIG_DIR) / "skills"
 
     for raw_path, raw_content in skill_files.items():
-        content = str(raw_content)
+        content = sanitize_skill_body(str(raw_content), source=f"skill:{raw_path}")
         skill_name, skill_description, skill_warnings = parse_skill_frontmatter(str(raw_path), content)
         warnings.extend(skill_warnings)
         if skill_name in seen_names:
@@ -439,6 +600,11 @@ def build_structured_mcp_config(connections: list[dict[str, Any]]) -> tuple[dict
         if not url:
             warnings.append(f"Skipping MCP connection '{config_key}' because no runtime URL was provided.")
             continue
+        if not _is_allowed_remote_mcp_url(url):
+            warnings.append(
+                f"Skipping MCP connection '{config_key}' because its runtime URL is not permitted by the MCP SSRF guard."
+            )
+            continue
 
         if credential_proxy_enabled and any(isinstance(header, dict) and str(header.get("envVar") or "").strip() for header in (runtime.get("headers") or [])):
             config[config_key] = {
@@ -520,10 +686,35 @@ def _apply_immutable_security_constraints(
     user-provided config_overrides cannot relax them. Admin env overrides
     (applied later) CAN selectively override them.
     """
-    _SECURITY_FLOOR_KEYS = ("plugin", "skills", "permission")
+    _SECURITY_FLOOR_KEYS = ("plugin", "skills", "permission", "compaction", "share")
     for key in _SECURITY_FLOOR_KEYS:
         if key in immutable_base:
             config[key] = immutable_base[key]
+
+    immutable_mcp = immutable_base.get("mcp")
+    if isinstance(immutable_mcp, dict) and immutable_mcp:
+        config["mcp"] = immutable_mcp
+
+    immutable_provider = immutable_base.get("provider")
+    if isinstance(immutable_provider, dict) and immutable_provider:
+        runtime_provider = config.get("provider") if isinstance(config.get("provider"), dict) else {}
+        merged_provider: dict[str, Any] = dict(runtime_provider)
+        for provider_id, admin_block in immutable_provider.items():
+            if not isinstance(admin_block, dict) or not admin_block:
+                continue
+            current = merged_provider.get(provider_id)
+            if not isinstance(current, dict):
+                current = {}
+                merged_provider[provider_id] = current
+            if isinstance(admin_block.get("options"), dict):
+                current_options = current.get("options") if isinstance(current.get("options"), dict) else {}
+                current["options"] = deep_merge_config(current_options, admin_block["options"])
+            if admin_block.get("models"):
+                current["models"] = admin_block["models"]
+            for key, value in admin_block.items():
+                if key not in {"options", "models"}:
+                    current[key] = value
+        config["provider"] = merged_provider
     return config
 
 
@@ -571,8 +762,6 @@ def _apply_failclosed_security_baseline(config: dict[str, Any]) -> None:
     "allow"`` default. We pin plugins/skills off and drop to a restrictive
     permission set that still allows read-only discovery tools.
     """
-    from runtime_permissions import SAFE_DEFAULT_PERMISSION
-
     logger.error(
         "Immutable OpenCode config is REQUIRED but was not loaded; failing closed "
         "with a restrictive permission baseline (bash=deny, edit/write=ask)."
@@ -580,6 +769,8 @@ def _apply_failclosed_security_baseline(config: dict[str, Any]) -> None:
     config["permission"] = json.loads(json.dumps(SAFE_DEFAULT_PERMISSION))
     config["plugin"] = []
     config["skills"] = {"urls": []}
+    config["mcp"] = {}
+    config["share"] = "disabled"
 
 
 def _apply_admin_provider_overrides(config: dict[str, Any]) -> None:
@@ -749,7 +940,15 @@ def build_generated_config(
         if provider_proxy_base_url:
             provider_block.setdefault("options", {})["baseURL"] = provider_proxy_base_url
         elif "OPENAI_BASE_URL" in resolved:
-            provider_block.setdefault("options", {})["baseURL"] = resolved["OPENAI_BASE_URL"]
+            base_url = str(resolved["OPENAI_BASE_URL"]).strip()
+            if base_url and _is_trusted_llm_base_url(base_url):
+                provider_block.setdefault("options", {})["baseURL"] = base_url
+            else:
+                logger.warning(
+                    "Provider %s OPENAI_BASE_URL %r is not in the trusted LLM host allowlist; ignoring.",
+                    provider_id,
+                    base_url,
+                )
         elif provider_id == "opencode-go":
             provider_block.setdefault("options", {})["baseURL"] = "https://opencode.ai/zen/go/v1"
         elif provider_id == "opencode":
@@ -761,12 +960,10 @@ def build_generated_config(
             if auth_content:
                 try:
                     auth_data = json.loads(auth_content)
-                    for key in (provider_id, provider_id.replace("-go", ""), provider_id.replace("-", "")):
-                        entry = auth_data.get(key)
+                    if isinstance(auth_data, dict) and provider_id in _TRUSTED_AUTH_PROVIDER_IDS:
+                        entry = auth_data.get(provider_id)
                         if isinstance(entry, dict) and entry.get("type") == "api":
                             api_key = str(entry.get("key", "")).strip()
-                            if api_key:
-                                break
                 except (json.JSONDecodeError, TypeError):
                     pass
         if provider_proxy_base_url:
@@ -831,11 +1028,25 @@ def build_generated_config(
                     "name": provider_name,
                 }
                 if provider_base_url:
-                    provider_block.setdefault("options", {})["baseURL"] = provider_base_url
+                    if _is_trusted_llm_base_url(provider_base_url):
+                        provider_block.setdefault("options", {})["baseURL"] = provider_base_url
+                    else:
+                        logger.warning(
+                            "OPENCODE_SELECTED_PROVIDER_JSON.base_url %r is not in the trusted LLM host allowlist; ignoring.",
+                            provider_base_url,
+                        )
                 if isinstance(provider_headers, dict) and provider_headers:
-                    provider_block.setdefault("options", {})["headers"] = {
-                        str(k): str(v) for k, v in provider_headers.items()
-                    }
+                    safe_headers = _sanitize_provider_headers(provider_headers)
+                    if safe_headers:
+                        provider_block.setdefault("options", {})["headers"] = safe_headers
+                    dropped_headers = [
+                        str(k) for k in provider_headers if str(k).strip().lower() not in _SAFE_LLM_HEADERS
+                    ]
+                    if dropped_headers:
+                        logger.warning(
+                            "OPENCODE_SELECTED_PROVIDER_JSON.headers dropped non-allowlisted header(s): %s",
+                            sorted(dropped_headers),
+                        )
                 if provider_model_list:
                     provider_block["models"] = {
                         model_id: {
@@ -855,8 +1066,10 @@ def build_generated_config(
         config["provider"] = provider
     if mcp_config:
         config["mcp"] = mcp_config
+    config["share"] = "disabled"
     if config_overrides:
-        config = deep_merge_config(config, config_overrides)
+        safe_overrides = _strip_dangerous_user_keys(config_overrides, warnings)
+        config = deep_merge_config(config, safe_overrides)
 
     # §security-P1: Layer immutable security constraints on top of runtime
     # config. The immutable ConfigMap provides the security FLOOR — runtime
@@ -868,8 +1081,6 @@ def build_generated_config(
         # §security-P0: Fail CLOSED when the immutable config is mandated but
         # absent. Without this, a failed/tampered mount would silently grant
         # the wide-open ``permission: "allow"`` default.
-        from runtime_permissions import require_immutable_config
-
         if require_immutable_config():
             _apply_failclosed_security_baseline(config)
 
@@ -884,12 +1095,6 @@ def build_generated_config(
     # injects OPENCODE_ADMIN_PERMISSION_CEILING_JSON from
     # AgentPolicy.toolPolicy.adminToolCeiling. Clamping only ever TIGHTENS
     # permissions — it can never grant more than the floor already allows.
-    from runtime_permissions import (
-        bash_permission_with_denylist,
-        clamp_permissions_to_ceiling,
-        load_permission_ceiling,
-    )
-
     ceiling = load_permission_ceiling()
     if ceiling:
         config["permission"] = clamp_permissions_to_ceiling(config.get("permission"), ceiling)

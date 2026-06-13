@@ -59,6 +59,23 @@ helm upgrade --install kubesynapse ./charts/kubesynapse \
 	--set-file skillsCatalog.catalogJson=catalog/skills-catalog.json
 ```
 
+## Release Chart Image Pinning
+
+The checked-in source chart keeps convenience image tags for local and branch-based
+installs. The published OCI release chart rewrites `opencodeRuntime.image` to the
+release tag and digest so OpenCode runtime pods pull an immutable image by default.
+
+If you install from source and want the same behavior, set both the tag and digest:
+
+```yaml
+opencodeRuntime:
+  image:
+    repository: docker.io/kubesynapse/kubesynapse-opencode-rt
+    tag: "1.2.3"
+    digest: "sha256:..."
+    pullPolicy: IfNotPresent
+```
+
 ## Bootstrap Behavior
 
 - LiteLLM schema initialization is automatic.
@@ -132,6 +149,10 @@ The OpenCode runtime ships hardened by default across four defense layers:
 Admin overrides are configured under `opencodeRuntime.admin` and are injected
 into every agent runtime pod. These override user-provided env vars and
 cannot be circumvented by agent CRDs.
+
+Release builds also attach OpenCode runtime SBOM and provenance attestations to
+the OCI image and sign the pushed digest with Cosign. Consumers can verify the
+published image before rollout and then pin the same digest in Helm values.
 
 ```yaml
 opencodeRuntime:

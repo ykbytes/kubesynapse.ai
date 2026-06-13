@@ -1,5 +1,5 @@
 # Multi-stage build for minimal image size and attack surface
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 WORKDIR /tmp/build
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -15,10 +15,11 @@ FROM python:3.11-slim
 
 # §6.5 — Security hardening: non-root, no capabilities, read-only filesystem
 ARG OPERATOR_UID=999
-ARG OPERATOR_GID=999
+ARG OPERATOR_GID=37
 
-RUN groupadd -r -g ${OPERATOR_GID} operator && \
-    useradd -r -u ${OPERATOR_UID} -g operator -s /usr/sbin/nologin -d /nonexistent operator
+RUN set -eux; \
+    getent group operator >/dev/null || groupadd -r -g "${OPERATOR_GID}" operator; \
+    getent passwd operator >/dev/null || useradd -r -u "${OPERATOR_UID}" -g operator -s /usr/sbin/nologin -d /nonexistent operator
 
 # Install runtime dependencies only (no build tools)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -46,9 +47,9 @@ RUN chown -R operator:operator /app && \
 
 USER operator
 
-# Health check (requires curl or similar; relies on /healthz HTTP endpoint)
+# Health check via stdlib to keep the runtime image minimal.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD /usr/bin/curl -f http://localhost:8080/healthz || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)" || exit 1
 
 # Set environment defaults
 ENV OPERATOR_LOG_LEVEL=INFO

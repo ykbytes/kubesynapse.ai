@@ -38,7 +38,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: nats
-          image: "{{ .Values.nats.image.repository }}:{{ .Values.nats.image.tag }}"
+          image: {{ include "kubesynapse.imageRef" .Values.nats.image | quote }}
           imagePullPolicy: {{ .Values.nats.image.pullPolicy | default "IfNotPresent" }}
           securityContext:
             allowPrivilegeEscalation: false

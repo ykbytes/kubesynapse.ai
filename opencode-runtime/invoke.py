@@ -100,6 +100,7 @@ from prompts import (
     get_task_type_prompt,
 )
 from sanitize_secrets import redact_secrets
+from content_safety import sanitize_a2a_data_part, sanitize_a2a_text_part
 from session import SESSION_REGISTRY
 from skills import SKILL_RUNTIME_CONFIG
 from workspace import get_or_refresh_snapshot
@@ -277,13 +278,10 @@ def extract_text_from_a2a_parts(parts: Any) -> str:
             continue
         text = raw_part.get("text")
         if isinstance(text, str) and text.strip():
-            chunks.append(text)
+            chunks.append(sanitize_a2a_text_part(text, source="a2a.text"))
             continue
         if "data" in raw_part:
-            try:
-                rendered = json.dumps(raw_part.get("data"), ensure_ascii=False, default=str)
-            except TypeError:
-                rendered = str(raw_part.get("data"))
+            rendered = sanitize_a2a_data_part(raw_part.get("data"), source="a2a.data")
             if rendered.strip():
                 chunks.append(rendered)
     return "\n\n".join(chunk for chunk in chunks if chunk.strip()).strip()

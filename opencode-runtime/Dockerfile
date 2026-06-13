@@ -1,22 +1,26 @@
 # OpenCode Runtime for KubeSynapse
 # Multi-stage: official opencode binary + Python wrapper
 #
-# To update the opencode version:
-#   docker build --build-arg OPENCODE_TAG=latest .
-#   docker build --build-arg OPENCODE_TAG=v1.30.0 .
+# To pin the upstream runtime or Python base image:
+#   docker build --build-arg OPENCODE_IMAGE=ghcr.io/anomalyco/opencode@sha256:<digest> .
+#   docker build --build-arg PYTHON_IMAGE=python:3.12-alpine .
 
 # ── Stage 1: Extract opencode binary from official image ──
-FROM ghcr.io/anomalyco/opencode:latest AS opencode-bin
+ARG OPENCODE_IMAGE=ghcr.io/anomalyco/opencode:latest
+ARG PYTHON_IMAGE=python:3.12-alpine
+FROM ${OPENCODE_IMAGE} AS opencode-bin
 
 # ── Stage 2: Build Python dependencies ──
-FROM python:3.12-alpine AS builder
+ARG PYTHON_IMAGE
+FROM ${PYTHON_IMAGE} AS builder
 
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
 # ── Stage 3: Minimal runtime ──
-FROM python:3.12-alpine
+ARG PYTHON_IMAGE
+FROM ${PYTHON_IMAGE}
 
 # Copy opencode binary (both stages use musl/Alpine, binary compatible)
 COPY --from=opencode-bin /usr/local/bin/opencode /usr/local/bin/opencode
@@ -31,7 +35,7 @@ COPY --from=builder /root/.local/lib/python3.12/site-packages /usr/local/lib/pyt
 # Copy console scripts (uvicorn, etc.) from builder
 COPY --from=builder /root/.local/bin /usr/local/bin/
 
-COPY main.py hitl.py config.py tracing.py utils.py prompts.py models.py session.py skills.py opencode_client.py analysis.py invoke.py supervisor.py workspace.py sanitize_secrets.py runtime_events.py worker.py runtime_permissions.py ./
+COPY main.py hitl.py config.py tracing.py utils.py prompts.py models.py session.py skills.py opencode_client.py analysis.py invoke.py supervisor.py workspace.py sanitize_secrets.py content_safety.py runtime_events.py worker.py runtime_permissions.py ./
 COPY providers.py ./
 COPY memory/ ./memory/
 

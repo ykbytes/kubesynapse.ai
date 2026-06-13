@@ -1,14 +1,24 @@
 import base64
 import copy
 import importlib
+import importlib.util
 import json
 import sys
+import sysconfig
 import types
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+_stdlib_operator_path = Path(sysconfig.get_paths()["stdlib"]) / "operator.py"
+_operator_spec = importlib.util.spec_from_file_location("python_stdlib_operator", _stdlib_operator_path)
+if _operator_spec is None or _operator_spec.loader is None:
+    raise RuntimeError("Failed to load stdlib operator module for operator tests")
+_stdlib_operator = importlib.util.module_from_spec(_operator_spec)
+_operator_spec.loader.exec_module(_stdlib_operator)
+sys.modules["operator"] = _stdlib_operator
 
 
 def _passthrough_decorator(*args, **kwargs):

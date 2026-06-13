@@ -110,7 +110,7 @@ spec:
             sizeLimit: 64Mi
       containers:
         - name: web-ui
-          image: "{{ .Values.webUi.image.repository }}:{{ .Values.webUi.image.tag }}"
+          image: {{ include "kubesynapse.imageRef" .Values.webUi.image | quote }}
           imagePullPolicy: {{ .Values.webUi.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false

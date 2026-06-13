@@ -38,7 +38,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: redis
-          image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          image: {{ include "kubesynapse.imageRef" .Values.redis.image | quote }}
           imagePullPolicy: {{ .Values.redis.image.pullPolicy | default "IfNotPresent" }}
           securityContext:
             allowPrivilegeEscalation: false

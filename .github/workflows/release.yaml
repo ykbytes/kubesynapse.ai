@@ -9,15 +9,17 @@ permissions:
   contents: write
   packages: write
   id-token: write
+  attestations: write
+  artifact-metadata: write
 
 env:
   REGISTRY_GHCR: ghcr.io
   REGISTRY_DOCKERHUB: docker.io
   IMAGE_NAMESPACE_GHCR: ${{ github.repository_owner }}
   IMAGE_NAMESPACE_DOCKERHUB: kubesynapse
+  OPENCODE_IMAGE_NAME: kubesynapse-opencode-rt
 
 jobs:
-  # ── Container Images ──────────────────────────────────────────────
   build-images:
     runs-on: ubuntu-latest
     outputs:
@@ -37,13 +39,10 @@ jobs:
 
       - name: Build & Push Operator
         run: |
-          # GHCR
           podman build --format docker -t ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-operator:${{ steps.version.outputs.version }} ./operator
           podman push ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-operator:${{ steps.version.outputs.version }}
-          # Docker Hub
           podman tag ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-operator:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-operator:${{ steps.version.outputs.version }}
           podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-operator:${{ steps.version.outputs.version }}
-          # latest tag
           podman tag ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-operator:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-operator:latest
           podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-operator:latest
 
@@ -56,15 +55,6 @@ jobs:
           podman tag ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-api-gateway:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-api-gateway:latest
           podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-api-gateway:latest
 
-      - name: Build & Push OpenCode Runtime
-        run: |
-          podman build --format docker -t ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-opencode-rt:${{ steps.version.outputs.version }} ./opencode-runtime
-          podman push ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-opencode-rt:${{ steps.version.outputs.version }}
-          podman tag ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-opencode-rt:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-opencode-rt:${{ steps.version.outputs.version }}
-          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-opencode-rt:${{ steps.version.outputs.version }}
-          podman tag ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-opencode-rt:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-opencode-rt:latest
-          podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-opencode-rt:latest
-
       - name: Build & Push Web UI
         run: |
           podman build --format docker -t ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/kubesynapse-web-ui:${{ steps.version.outputs.version }} ./web-ui
@@ -74,47 +64,228 @@ jobs:
           podman tag ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-web-ui:${{ steps.version.outputs.version }} ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-web-ui:latest
           podman push ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/kubesynapse-web-ui:latest
 
-      - name: Generate SBOMs
+      - name: Generate SBOMs for non-OpenCode images
         run: |
           mkdir -p dist/sbom
-          for img in kubesynapse-operator kubesynapse-api-gateway kubesynapse-opencode-rt kubesynapse-web-ui; do
+          for img in kubesynapse-operator kubesynapse-api-gateway kubesynapse-web-ui; do
             podman run --rm aquasec/trivy image \
               --format spdx-json \
               --output dist/sbom/${img}.spdx.json \
               ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/${img}:${{ steps.version.outputs.version }}
           done
 
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
       - name: Sign GHCR images with cosign
         run: |
-          for img in kubesynapse-operator kubesynapse-api-gateway kubesynapse-opencode-rt kubesynapse-web-ui; do
+          for img in kubesynapse-operator kubesynapse-api-gateway kubesynapse-web-ui; do
             cosign sign --yes ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/${img}:${{ steps.version.outputs.version }}
           done
 
       - name: Sign Docker Hub images with cosign
         run: |
-          for img in kubesynapse-operator kubesynapse-api-gateway kubesynapse-opencode-rt kubesynapse-web-ui; do
+          for img in kubesynapse-operator kubesynapse-api-gateway kubesynapse-web-ui; do
             cosign sign --yes ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/${img}:${{ steps.version.outputs.version }}
           done
 
       - name: Upload SBOMs
         uses: actions/upload-artifact@v4
         with:
-          name: sboms
+          name: sboms-core
           path: dist/sbom/
 
-  # ── Helm Chart → OCI ─────────────────────────────────────────────
+  build-opencode-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & Push OpenCode Runtime
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./opencode-runtime
+          file: ./opencode-runtime/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/${{ env.OPENCODE_IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/${{ env.OPENCODE_IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/${{ env.OPENCODE_IMAGE_NAME }}:latest
+          labels: |
+            org.opencontainers.image.title=KubeSynapse OpenCode Runtime
+            org.opencontainers.image.description=Hardened OpenCode runtime for KubeSynapse
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=opencode-runtime-release
+          cache-to: type=gha,mode=max,scope=opencode-runtime-release
+
+      - name: Scan OpenCode runtime image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/${{ env.OPENCODE_IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign OpenCode runtime images
+        run: |
+          cosign sign --yes ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/${{ env.OPENCODE_IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          cosign sign --yes ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/${{ env.OPENCODE_IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+
+      - name: Verify OpenCode runtime signatures
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/.github/workflows/release.yaml@.*$" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/${{ env.OPENCODE_IMAGE_NAME }}@${{ steps.build.outputs.digest }} > /dev/null
+          cosign verify \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/.github/workflows/release.yaml@.*$" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/${{ env.OPENCODE_IMAGE_NAME }}@${{ steps.build.outputs.digest }} > /dev/null
+
+      - name: Generate provenance attestation for OpenCode runtime (GHCR)
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/${{ env.OPENCODE_IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Generate provenance attestation for OpenCode runtime (Docker Hub)
+        uses: actions/attest@v4
+        with:
+          subject-name: index.docker.io/${{ env.IMAGE_NAMESPACE_DOCKERHUB }}/${{ env.OPENCODE_IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Install Syft
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Generate OpenCode runtime SBOM
+        run: |
+          mkdir -p dist/sbom dist/image-metadata
+          syft registry:${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/${{ env.OPENCODE_IMAGE_NAME }}@${{ steps.build.outputs.digest }} \
+            --output spdx-json=dist/sbom/${{ env.OPENCODE_IMAGE_NAME }}.spdx.json \
+            --output cyclonedx-json=dist/sbom/${{ env.OPENCODE_IMAGE_NAME }}.cdx.json
+
+      - name: Generate OpenCode runtime SBOM attestation
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAMESPACE_GHCR }}/${{ env.OPENCODE_IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: dist/sbom/${{ env.OPENCODE_IMAGE_NAME }}.spdx.json
+          push-to-registry: true
+
+      - name: Write OpenCode runtime release metadata
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          metadata = {
+              "repository": "docker.io/kubesynapse/kubesynapse-opencode-rt",
+              "tag": "${{ steps.version.outputs.version }}",
+              "digest": "${{ steps.build.outputs.digest }}",
+              "pullPolicy": "IfNotPresent",
+          }
+          Path("dist/image-metadata").mkdir(parents=True, exist_ok=True)
+          Path("dist/image-metadata/opencode-runtime.json").write_text(json.dumps(metadata, indent=2))
+          PY
+
+      - name: Upload OpenCode runtime SBOMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sboms-opencode-runtime
+          path: dist/sbom/${{ env.OPENCODE_IMAGE_NAME }}.*
+
+      - name: Upload OpenCode runtime metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-runtime-image-metadata
+          path: dist/image-metadata/opencode-runtime.json
+
   helm-oci:
     runs-on: ubuntu-latest
-    needs: build-images
+    needs: [build-images, build-opencode-runtime]
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v3
         with:
           version: v3.14.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: opencode-runtime-image-metadata
+          path: dist/image-metadata
 
       - name: Determine version
         id: version
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Pin OpenCode runtime defaults for the release chart
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          values_path = Path("charts/kubesynapse/values.yaml")
+          metadata = json.loads(Path("dist/image-metadata/opencode-runtime.json").read_text())
+          lines = values_path.read_text().splitlines()
+
+          in_runtime = False
+          in_image = False
+          for index, line in enumerate(lines):
+              stripped = line.strip()
+              if stripped == "opencodeRuntime:":
+                  in_runtime = True
+                  in_image = False
+                  continue
+              if in_runtime and not line.startswith("  "):
+                  in_runtime = False
+                  in_image = False
+              if in_runtime and stripped == "image:":
+                  in_image = True
+                  continue
+              if in_image and not line.startswith("    "):
+                  in_image = False
+              if not (in_runtime and in_image):
+                  continue
+              if stripped.startswith("tag:"):
+                  lines[index] = f"    tag: {metadata['tag']}"
+              elif stripped.startswith("digest:"):
+                  lines[index] = f"    digest: \"{metadata['digest']}\""
+              elif stripped.startswith("pullPolicy:"):
+                  lines[index] = f"    pullPolicy: {metadata['pullPolicy']}"
+
+          values_path.write_text("\n".join(lines) + "\n")
+          PY
 
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login "${{ env.REGISTRY_GHCR }}" -u "${{ github.actor }}" --password-stdin
@@ -139,10 +310,9 @@ jobs:
           name: helm-chart
           path: dist/kubesynapse-*.tgz
 
-  # ── GitHub Release ────────────────────────────────────────────────
   github-release:
     runs-on: ubuntu-latest
-    needs: [build-images, helm-oci]
+    needs: [build-images, build-opencode-runtime, helm-oci]
     steps:
       - uses: actions/checkout@v4
         with:

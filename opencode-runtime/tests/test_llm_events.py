@@ -3,12 +3,17 @@ from __future__ import annotations
 import importlib.util
 import sys
 import sysconfig
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import importlib_metadata
-from importlib_metadata.compat import py39 as importlib_metadata_py39
+try:
+    import importlib_metadata
+    from importlib_metadata.compat import py39 as importlib_metadata_py39
+except ModuleNotFoundError:
+    import importlib.metadata as importlib_metadata
+    importlib_metadata_py39 = types.SimpleNamespace()
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.modules.pop("runtime_events", None)

@@ -5,11 +5,16 @@ import os
 import sys
 import sysconfig
 import time
+import types
 from pathlib import Path
 from unittest.mock import patch
 
-import importlib_metadata
-from importlib_metadata.compat import py39 as importlib_metadata_py39
+try:
+    import importlib_metadata
+    from importlib_metadata.compat import py39 as importlib_metadata_py39
+except ModuleNotFoundError:
+    import importlib.metadata as importlib_metadata
+    importlib_metadata_py39 = types.SimpleNamespace()
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -25,8 +30,15 @@ importlib_metadata_py39.operator = _stdlib_operator
 
 
 def _fresh_runtime_events_module():
-    sys.modules.pop("runtime_events", None)
-    return importlib.import_module("runtime_events")
+    module_path = Path(__file__).resolve().parents[1] / "runtime_events.py"
+    spec = importlib.util.spec_from_file_location("opencode_runtime_events_test", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Failed to load opencode-runtime runtime_events module for tests")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules.pop(spec.name, None)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_sync_runtime_events_flush_on_idle_timeout() -> None:
