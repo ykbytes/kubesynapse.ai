@@ -1,5 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, Loader2, RefreshCw, Shield, ShieldCheck, UserPlus } from "lucide-react";
+import {
+  AlertCircle,
+  Building2,
+  KeyRound,
+  Loader2,
+  LockKeyhole,
+  LogOut,
+  RefreshCw,
+  ShieldCheck,
+  UserPlus,
+  Users,
+} from "lucide-react";
 import { toast } from "sonner";
 import { changePassword, createUser, listUsers, updateUser } from "@/lib/api";
 import {
@@ -11,7 +22,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import {
   Select,
   SelectContent,
@@ -23,7 +33,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -61,6 +70,26 @@ function draftFromUser(user: AdminUser): EditableUserDraft {
 
 function sortUsers(users: AdminUser[]): AdminUser[] {
   return [...users].sort((left, right) => left.username.localeCompare(right.username));
+}
+
+function providerLabel(provider: string): string {
+  if (provider === "shared_token") return "Shared access";
+  if (provider === "local") return "Local account";
+  if (provider === "ldap") return "Directory account";
+  if (provider === "oidc") return "Managed identity";
+  if (provider === "saml") return "SAML identity";
+  return provider.replace(/_/g, " ");
+}
+
+function accountDisplayLabel(currentUser: AuthenticatedUser | null, token: string): string {
+  if (!token.trim()) return "Connect";
+  if (!currentUser) return "Connected";
+  const displayName = currentUser.display_name.trim();
+  if (displayName && displayName.toLowerCase() !== "shared token") {
+    return displayName;
+  }
+  if (currentUser.role === "admin") return "Platform Admin";
+  return "Account";
 }
 
 interface ConnectionDialogProps {
@@ -331,71 +360,458 @@ export function ConnectionDialog({
   const ssoProviders = useMemo(() => buildAuthProviderOptions(oidcProviders, samlProviders), [oidcProviders, samlProviders]);
   const primarySsoProvider = ssoProviders[0] ?? null;
   const secondarySsoProviders = ssoProviders.slice(1);
+  const currentUserNamespaces = currentUser
+    ? currentUser.allowed_namespaces.length > 0
+      ? namespacesToText(currentUser.allowed_namespaces)
+      : "No namespace scope assigned"
+    : "";
+  const accountLabel = accountDisplayLabel(currentUser, token);
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => { setOpen(nextOpen); if (nextOpen) onClearConnectionError(); }}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm">
-          <Shield className="h-4 w-4" />
-          <span>{token.trim() ? (currentUser ? currentUser.display_name : "Connected") : "Connect"}</span>
+        <Button variant="outline" size="sm" className="h-8 gap-2 rounded-lg border-border/70 bg-card/80 px-3 text-sm shadow-sm">
+          <ShieldCheck className="h-4 w-4 text-primary" />
+          <span className="max-w-[10rem] truncate">{accountLabel}</span>
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-4xl">
-        <DialogHeader>
-          <DialogTitle>Gateway Access</DialogTitle>
-          <DialogDescription>
-            Use managed sign-in for interactive access. Keep bearer tokens for scripts, CI, and automation.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-4 py-4">
-          <div className="grid gap-2">
-            <Label htmlFor="namespace">Namespace</Label>
-            <Input
-              id="namespace"
-              value={namespace}
-              onChange={(e) => onNamespaceChange(e.target.value)}
-              placeholder="default"
-            />
-          </div>
-          {currentUser ? (
-            <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
-              <div className="font-semibold text-foreground">{currentUser.display_name}</div>
-              <div className="text-muted-foreground">{currentUser.username}</div>
-              <div className="text-muted-foreground">
-                {currentUser.role} via {currentUser.auth_provider}
-              </div>
-              <div className="mt-2 text-xs text-muted-foreground">
-                Allowed namespaces: {currentUser.allowed_namespaces.length > 0 ? namespacesToText(currentUser.allowed_namespaces) : "none"}
-              </div>
-              <div className="mt-3 flex justify-end">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    onLogout();
-                    setOpen(false);
-                  }}
-                >
-                  Sign out
-                </Button>
+      <DialogContent className="max-h-[88vh] overflow-hidden p-0 sm:max-w-5xl">
+        {currentUser ? (
+          <div className="flex max-h-[88vh] flex-col overflow-hidden bg-background text-foreground">
+            <div className="border-b border-border/70 bg-muted/30 px-6 py-5">
+              <DialogHeader className="pr-10">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <DialogTitle className="text-xl">Account & Access</DialogTitle>
+                    <DialogDescription className="mt-2 max-w-2xl">
+                      Manage your browser session, namespace context, and user access without exposing credentials.
+                    </DialogDescription>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      onClick={() => void onRefreshCurrentUser()}
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                      Refresh
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      onClick={() => {
+                        onLogout();
+                        setOpen(false);
+                      }}
+                    >
+                      <LogOut className="h-4 w-4" />
+                      Sign out
+                    </Button>
+                  </div>
+                </div>
+              </DialogHeader>
+            </div>
+
+            <div className="min-h-0 overflow-y-auto px-6 py-5">
+              <div className="grid gap-5 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
+                <div className="space-y-4">
+                  <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
+                    <div className="flex items-start gap-3">
+                      <div className="rounded-lg border border-primary/20 bg-primary/10 p-2 text-primary">
+                        <ShieldCheck className="h-5 w-5" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="truncate text-base font-semibold text-foreground">{accountLabel}</div>
+                        <div className="mt-1 truncate text-sm text-muted-foreground">{currentUser.username}</div>
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-2 text-sm">
+                      <div className="flex items-center justify-between gap-3 rounded-lg bg-muted/50 px-3 py-2">
+                        <span className="text-muted-foreground">Role</span>
+                        <span className="font-medium capitalize text-foreground">{currentUser.role}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3 rounded-lg bg-muted/50 px-3 py-2">
+                        <span className="text-muted-foreground">Identity</span>
+                        <span className="font-medium text-foreground">{providerLabel(currentUser.auth_provider)}</span>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
+                    <div className="flex items-start gap-3">
+                      <div className="rounded-lg border border-border bg-muted/50 p-2 text-muted-foreground">
+                        <Building2 className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-semibold text-foreground">Workspace context</div>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Requests use this namespace unless a page overrides it.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-2">
+                      <Label htmlFor="namespace">Namespace</Label>
+                      <Input
+                        id="namespace"
+                        value={namespace}
+                        onChange={(e) => onNamespaceChange(e.target.value)}
+                        placeholder="default"
+                      />
+                    </div>
+                    <div className="mt-3 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                      Allowed namespaces: {currentUserNamespaces}
+                    </div>
+                  </section>
+
+                  <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
+                    <div className="flex items-start gap-3">
+                      <div className="rounded-lg border border-border bg-muted/50 p-2 text-muted-foreground">
+                        <LockKeyhole className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-semibold text-foreground">Account security</div>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Password changes are available for local accounts.
+                        </p>
+                      </div>
+                    </div>
+                    {canChangePassword ? (
+                      <div className="mt-4 grid gap-3">
+                        <div className="grid gap-2">
+                          <Label htmlFor="current-password">Current password</Label>
+                          <Input
+                            id="current-password"
+                            type="password"
+                            value={currentPassword}
+                            onChange={(e) => setCurrentPassword(e.target.value)}
+                            placeholder="Enter current password"
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="new-password">New password</Label>
+                          <Input
+                            id="new-password"
+                            type="password"
+                            value={newPassword}
+                            onChange={(e) => setNewPassword(e.target.value)}
+                            placeholder="At least 8 characters"
+                          />
+                        </div>
+                        {passwordError ? (
+                          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                            {passwordError}
+                          </div>
+                        ) : null}
+                        <Button className="justify-self-end" onClick={() => void handleChangePassword()} disabled={passwordBusy}>
+                          {passwordBusy ? "Updating..." : "Change password"}
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="mt-4 rounded-lg border border-border bg-muted/30 px-3 py-3 text-sm text-muted-foreground">
+                        Password policy is managed by {providerLabel(currentUser.auth_provider)}.
+                      </div>
+                    )}
+                  </section>
+                </div>
+
+                {isAdmin ? (
+                  <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="flex items-start gap-3">
+                        <div className="rounded-lg border border-primary/20 bg-primary/10 p-2 text-primary">
+                          <Users className="h-5 w-5" />
+                        </div>
+                        <div>
+                          <div className="text-sm font-semibold text-foreground">Team access</div>
+                          <p className="mt-1 max-w-xl text-xs text-muted-foreground">
+                            Create local users and adjust role, active state, or namespace scope.
+                          </p>
+                        </div>
+                      </div>
+                      <Button variant="outline" size="sm" className="gap-2" onClick={() => void handleRefreshUsers()} disabled={adminLoading}>
+                        <RefreshCw className={adminLoading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
+                        {adminLoading ? "Refreshing" : "Refresh"}
+                      </Button>
+                    </div>
+
+                    {adminError ? (
+                      <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                        {adminError}
+                      </div>
+                    ) : null}
+
+                    <div className="mt-4 rounded-xl border border-border bg-muted/25 p-4">
+                      <div className="mb-3 text-sm font-semibold text-foreground">Create local user</div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="grid gap-2">
+                          <Label htmlFor="create-username">Username</Label>
+                          <Input
+                            id="create-username"
+                            value={createUsername}
+                            onChange={(e) => setCreateUsername(e.target.value)}
+                            placeholder="new-user"
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="create-password">Password</Label>
+                          <Input
+                            id="create-password"
+                            type="password"
+                            value={createUserPassword}
+                            onChange={(e) => setCreateUserPassword(e.target.value)}
+                            placeholder="At least 8 characters"
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="create-display-name">Display name</Label>
+                          <Input
+                            id="create-display-name"
+                            value={createDisplayName}
+                            onChange={(e) => setCreateDisplayName(e.target.value)}
+                            placeholder="Jane Doe"
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="create-email">Email</Label>
+                          <Input
+                            id="create-email"
+                            type="email"
+                            value={createEmail}
+                            onChange={(e) => setCreateEmail(e.target.value)}
+                            placeholder="jane@example.com"
+                          />
+                        </div>
+                      </div>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)]">
+                        <div className="grid gap-2">
+                          <Label htmlFor="create-role">Role</Label>
+                          <Select value={createRole} onValueChange={(v) => setCreateRole(v as UserRole)}>
+                            <SelectTrigger id="create-role" className="h-9">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {USER_ROLES.map((role) => (
+                                <SelectItem key={role} value={role}>
+                                  {role}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="grid gap-2">
+                          <Label htmlFor="create-namespaces">Additional namespaces</Label>
+                          <Input
+                            id="create-namespaces"
+                            value={createAllowedNamespaces}
+                            onChange={(e) => setCreateAllowedNamespaces(e.target.value)}
+                            placeholder="team-a, finance"
+                          />
+                        </div>
+                      </div>
+                      <div className="mt-4 flex justify-end">
+                        <Button onClick={() => void handleCreateUser()} disabled={createUserBusy}>
+                          {createUserBusy ? "Creating..." : "Create user"}
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid max-h-[24rem] gap-3 overflow-y-auto pr-1">
+                      {adminUsers.length === 0 ? (
+                        <div className="rounded-lg border border-dashed border-border bg-muted/20 px-4 py-6 text-center text-sm text-muted-foreground">
+                          No local or federated users are registered yet.
+                        </div>
+                      ) : (
+                        adminUsers.map((user) => {
+                          const draft = adminUserDrafts[String(user.id)] ?? draftFromUser(user);
+                          return (
+                            <div key={user.id} className="rounded-xl border border-border bg-background p-4">
+                              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-semibold text-foreground">{user.username}</div>
+                                  <div className="mt-1 text-xs text-muted-foreground">
+                                    {providerLabel(user.auth_provider)} {user.last_login_at ? `- last login ${user.last_login_at}` : "- never logged in"}
+                                  </div>
+                                </div>
+                                <div className={user.is_active ? "text-xs font-medium text-emerald-600" : "text-xs font-medium text-muted-foreground"}>
+                                  {user.is_active ? "Active" : "Disabled"}
+                                </div>
+                              </div>
+
+                              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                <div className="grid gap-2">
+                                  <Label htmlFor={`user-display-${user.id}`}>Display name</Label>
+                                  <Input
+                                    id={`user-display-${user.id}`}
+                                    value={draft.displayName}
+                                    onChange={(e) =>
+                                      setAdminUserDrafts((current) => ({
+                                        ...current,
+                                        [String(user.id)]: { ...draft, displayName: e.target.value },
+                                      }))
+                                    }
+                                  />
+                                </div>
+                                <div className="grid gap-2">
+                                  <Label htmlFor={`user-role-${user.id}`}>Role</Label>
+                                  <Select
+                                    value={draft.role}
+                                    onValueChange={(v) =>
+                                      setAdminUserDrafts((current) => ({
+                                        ...current,
+                                        [String(user.id)]: { ...draft, role: v as UserRole },
+                                      }))
+                                    }
+                                  >
+                                    <SelectTrigger id={`user-role-${user.id}`} className="h-9">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {USER_ROLES.map((role) => (
+                                        <SelectItem key={role} value={role}>
+                                          {role}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              </div>
+
+                              <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_7rem] sm:items-end">
+                                <div className="grid gap-2">
+                                  <Label htmlFor={`user-namespaces-${user.id}`}>Allowed namespaces</Label>
+                                  <Input
+                                    id={`user-namespaces-${user.id}`}
+                                    value={draft.allowedNamespaces}
+                                    onChange={(e) =>
+                                      setAdminUserDrafts((current) => ({
+                                        ...current,
+                                        [String(user.id)]: { ...draft, allowedNamespaces: e.target.value },
+                                      }))
+                                    }
+                                    placeholder="default, team-a"
+                                  />
+                                </div>
+                                <label className="flex h-9 items-center gap-2 rounded-md border border-border bg-muted/30 px-3 text-sm text-foreground">
+                                  <input
+                                    type="checkbox"
+                                    checked={draft.isActive}
+                                    onChange={(e) =>
+                                      setAdminUserDrafts((current) => ({
+                                        ...current,
+                                        [String(user.id)]: { ...draft, isActive: e.target.checked },
+                                      }))
+                                    }
+                                    className="h-4 w-4 rounded border-input"
+                                  />
+                                  Active
+                                </label>
+                              </div>
+
+                              <div className="mt-3 flex items-center justify-between gap-3">
+                                <div className="truncate text-xs text-muted-foreground">{user.email || "No email"}</div>
+                                <Button size="sm" onClick={() => void handleSaveUser(user)} disabled={adminSavingUserId === user.id}>
+                                  {adminSavingUserId === user.id ? "Saving..." : "Save changes"}
+                                </Button>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </section>
+                ) : (
+                  <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
+                    <div className="text-sm font-semibold text-foreground">Access level</div>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      Your current role can run and inspect workflows in the allowed namespace scope. User management is available to administrators.
+                    </p>
+                  </section>
+                )}
               </div>
             </div>
-          ) : null}
-          <div className="grid gap-2">
-            <Label htmlFor="token">API Token</Label>
-            <Input
-              id="token"
-              type="password"
-              value={token}
-              onChange={(e) => onTokenChange(e.target.value)}
-              placeholder="Bearer token"
-            />
+
+            {connectionError ? (
+              <div className="border-t border-border/70 px-6 py-3">
+                <div className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                  {connectionError}
+                </div>
+              </div>
+            ) : null}
           </div>
-          {!currentUser && (authConfig?.browser_auth_enabled || passwordProviders.length > 0 || oidcProviders.length > 0 || samlProviders.length > 0) && (
+        ) : (
+          <div className="flex max-h-[88vh] flex-col overflow-hidden bg-background text-foreground">
+            <div className="border-b border-border/70 bg-muted/30 px-6 py-5">
+              <DialogHeader className="pr-10">
+                <DialogTitle className="text-xl">Connect to KubeSynapse</DialogTitle>
+                <DialogDescription className="mt-2 max-w-2xl">
+                  Use managed sign-in for people, or a bearer token for automation and recovery access.
+                </DialogDescription>
+              </DialogHeader>
+            </div>
+            <div className="min-h-0 overflow-y-auto px-6 py-5">
+              <div className="grid gap-5 lg:grid-cols-[minmax(0,21rem)_minmax(0,1fr)]">
+                <div className="space-y-4">
+                  <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
+                    <div className="flex items-start gap-3">
+                      <div className="rounded-lg border border-border bg-muted/50 p-2 text-muted-foreground">
+                        <Building2 className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-semibold text-foreground">Workspace context</div>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Choose the namespace for this console session.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-2">
+                      <Label htmlFor="namespace">Namespace</Label>
+                      <Input
+                        id="namespace"
+                        value={namespace}
+                        onChange={(e) => onNamespaceChange(e.target.value)}
+                        placeholder="default"
+                      />
+                    </div>
+                  </section>
+
+                  {!currentUser ? (
+                    <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
+                      <div className="flex items-start gap-3">
+                        <div className="rounded-lg border border-border bg-muted/50 p-2 text-muted-foreground">
+                          <KeyRound className="h-5 w-5" />
+                        </div>
+                        <div>
+                          <div className="text-sm font-semibold text-foreground">Automation bearer token</div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Intended for non-interactive access and bootstrap recovery.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-4 grid gap-2">
+                        <Label htmlFor="token">Bearer token</Label>
+                        <Input
+                          id="token"
+                          type="password"
+                          value={token}
+                          onChange={(e) => onTokenChange(e.target.value)}
+                          placeholder="Paste bearer token"
+                        />
+                      </div>
+                      <Button onClick={handleConnect} disabled={isConnecting} className="mt-4 w-full gap-2">
+                        {isConnecting && <Loader2 className="h-4 w-4 animate-spin" />}
+                        {isConnecting ? "Connecting..." : "Connect with token"}
+                      </Button>
+                    </section>
+                  ) : null}
+                </div>
+                <div className="space-y-4">
+                  {(authConfig?.browser_auth_enabled || passwordProviders.length > 0 || oidcProviders.length > 0 || samlProviders.length > 0) && (
             <>
-              <Separator />
               {ssoProviders.length > 0 && (
-                <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">
+                <section className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm shadow-sm">
                   <div className="flex items-start gap-3">
                     <div className="rounded-lg bg-background/90 p-2 text-primary shadow-sm">
                       <ShieldCheck className="h-4 w-4" />
@@ -407,10 +823,10 @@ export function ConnectionDialog({
                       </p>
                     </div>
                   </div>
-                </div>
+                </section>
               )}
               {passwordProviders.length > 0 && (
-                <div className="grid gap-3">
+                <section className="grid gap-3 rounded-xl border border-border bg-card p-4 shadow-sm">
                   {isBootstrapping && (
                     <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-3 text-sm">
                       <div className="flex items-center gap-2 font-medium text-primary">
@@ -517,10 +933,10 @@ export function ConnectionDialog({
                   <Button onClick={handlePasswordSubmit} disabled={authBusy}>
                     {authBusy ? "Working..." : registerMode && passwordProvider === "local" ? "Create account" : "Sign in"}
                   </Button>
-                </div>
+                </section>
               )}
               {ssoProviders.length > 0 && (
-                <div className="grid gap-3">
+                <section className="grid gap-3 rounded-xl border border-border bg-card p-4 shadow-sm">
                   <div>
                     <div className="text-sm font-medium">Managed sign-in</div>
                     <div className="text-xs text-muted-foreground">
@@ -559,277 +975,21 @@ export function ConnectionDialog({
                       ))}
                     </div>
                   )}
-                </div>
+                </section>
               )}
             </>
           )}
-          {currentUser && (
-            <>
-              <Separator />
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div className="grid gap-3 rounded-lg border border-border bg-muted/30 p-4">
-                  <div>
-                    <div className="text-sm font-medium text-foreground">Account</div>
-                    <div className="text-xs text-muted-foreground">
-                      Manage your current session and local password settings.
+                  {connectionError ? (
+                    <div className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                      {connectionError}
                     </div>
-                  </div>
-                  {canChangePassword ? (
-                    <>
-                      <div className="grid gap-2">
-                        <Label htmlFor="current-password">Current password</Label>
-                        <Input
-                          id="current-password"
-                          type="password"
-                          value={currentPassword}
-                          onChange={(e) => setCurrentPassword(e.target.value)}
-                          placeholder="Enter current password"
-                        />
-                      </div>
-                      <div className="grid gap-2">
-                        <Label htmlFor="new-password">New password</Label>
-                        <Input
-                          id="new-password"
-                          type="password"
-                          value={newPassword}
-                          onChange={(e) => setNewPassword(e.target.value)}
-                          placeholder="At least 8 characters"
-                        />
-                      </div>
-                      {passwordError ? (
-                        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                          {passwordError}
-                        </div>
-                      ) : null}
-                      <div className="flex justify-end">
-                        <Button onClick={() => void handleChangePassword()} disabled={passwordBusy}>
-                          {passwordBusy ? "Updating..." : "Change password"}
-                        </Button>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="rounded-md border border-border bg-background/60 px-3 py-2 text-sm text-muted-foreground">
-                      Password changes are managed by your {currentUser.auth_provider} identity provider.
-                    </div>
-                  )}
+                  ) : null}
                 </div>
-
-                {isAdmin ? (
-                  <div className="grid gap-4 rounded-lg border border-border bg-muted/30 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium text-foreground">Local users</div>
-                        <div className="text-xs text-muted-foreground">
-                          Create local accounts and adjust roles, namespace scope, or active state.
-                        </div>
-                      </div>
-                      <Button variant="outline" size="sm" onClick={() => void handleRefreshUsers()} disabled={adminLoading}>
-                        <RefreshCw className={adminLoading ? "animate-spin" : ""} />
-                        <span>{adminLoading ? "Refreshing" : "Refresh"}</span>
-                      </Button>
-                    </div>
-                    {adminError ? (
-                      <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                        {adminError}
-                      </div>
-                    ) : null}
-
-                    <div className="grid gap-3 rounded-md border border-border bg-background/70 p-3">
-                      <div className="text-sm font-medium text-foreground">Create user</div>
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <div className="grid gap-2">
-                          <Label htmlFor="create-username">Username</Label>
-                          <Input
-                            id="create-username"
-                            value={createUsername}
-                            onChange={(e) => setCreateUsername(e.target.value)}
-                            placeholder="new-user"
-                          />
-                        </div>
-                        <div className="grid gap-2">
-                          <Label htmlFor="create-password">Password</Label>
-                          <Input
-                            id="create-password"
-                            type="password"
-                            value={createUserPassword}
-                            onChange={(e) => setCreateUserPassword(e.target.value)}
-                            placeholder="At least 8 characters"
-                          />
-                        </div>
-                        <div className="grid gap-2">
-                          <Label htmlFor="create-display-name">Display name</Label>
-                          <Input
-                            id="create-display-name"
-                            value={createDisplayName}
-                            onChange={(e) => setCreateDisplayName(e.target.value)}
-                            placeholder="Jane Doe"
-                          />
-                        </div>
-                        <div className="grid gap-2">
-                          <Label htmlFor="create-email">Email</Label>
-                          <Input
-                            id="create-email"
-                            type="email"
-                            value={createEmail}
-                            onChange={(e) => setCreateEmail(e.target.value)}
-                            placeholder="jane@example.com"
-                          />
-                        </div>
-                      </div>
-                      <div className="grid gap-3 sm:grid-cols-[minmax(0,160px)_minmax(0,1fr)]">
-                        <div className="grid gap-2">
-                          <Label htmlFor="create-role">Role</Label>
-                          <Select value={createRole} onValueChange={(v) => setCreateRole(v as UserRole)}>
-                            <SelectTrigger id="create-role" className="h-9">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {USER_ROLES.map((role) => (
-                                <SelectItem key={role} value={role}>
-                                  {role}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="grid gap-2">
-                          <Label htmlFor="create-namespaces">Additional namespaces</Label>
-                          <Input
-                            id="create-namespaces"
-                            value={createAllowedNamespaces}
-                            onChange={(e) => setCreateAllowedNamespaces(e.target.value)}
-                            placeholder="team-a, finance"
-                          />
-                        </div>
-                      </div>
-                      <div className="flex justify-end">
-                        <Button onClick={() => void handleCreateUser()} disabled={createUserBusy}>
-                          {createUserBusy ? "Creating..." : "Create local user"}
-                        </Button>
-                      </div>
-                    </div>
-
-                    <div className="grid gap-3">
-                      {adminUsers.length === 0 ? (
-                        <div className="rounded-md border border-border bg-background/60 px-3 py-2 text-sm text-muted-foreground">
-                          No local or federated users are registered yet.
-                        </div>
-                      ) : (
-                        adminUsers.map((user) => {
-                          const draft = adminUserDrafts[String(user.id)] ?? draftFromUser(user);
-                          return (
-                            <div key={user.id} className="grid gap-3 rounded-md border border-border bg-background/70 p-3">
-                              <div className="flex items-start justify-between gap-3">
-                                <div>
-                                  <div className="text-sm font-medium text-foreground">{user.username}</div>
-                                  <div className="text-xs text-muted-foreground">
-                                    {user.auth_provider} {user.last_login_at ? `· last login ${user.last_login_at}` : "· never logged in"}
-                                  </div>
-                                </div>
-                                <div className="text-xs text-muted-foreground">
-                                  {user.is_active ? "active" : "disabled"}
-                                </div>
-                              </div>
-
-                              <div className="grid gap-3 sm:grid-cols-2">
-                                <div className="grid gap-2">
-                                  <Label htmlFor={`user-display-${user.id}`}>Display name</Label>
-                                  <Input
-                                    id={`user-display-${user.id}`}
-                                    value={draft.displayName}
-                                    onChange={(e) =>
-                                      setAdminUserDrafts((current) => ({
-                                        ...current,
-                                        [String(user.id)]: { ...draft, displayName: e.target.value },
-                                      }))
-                                    }
-                                  />
-                                </div>
-                                <div className="grid gap-2">
-                                  <Label htmlFor={`user-role-${user.id}`}>Role</Label>
-                                  <Select
-                                    value={draft.role}
-                                    onValueChange={(v) =>
-                                      setAdminUserDrafts((current) => ({
-                                        ...current,
-                                        [String(user.id)]: { ...draft, role: v as UserRole },
-                                      }))
-                                    }
-                                  >
-                                    <SelectTrigger id={`user-role-${user.id}`} className="h-9">
-                                      <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {USER_ROLES.map((role) => (
-                                        <SelectItem key={role} value={role}>
-                                          {role}
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                </div>
-                              </div>
-
-                              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_120px] sm:items-end">
-                                <div className="grid gap-2">
-                                  <Label htmlFor={`user-namespaces-${user.id}`}>Allowed namespaces</Label>
-                                  <Input
-                                    id={`user-namespaces-${user.id}`}
-                                    value={draft.allowedNamespaces}
-                                    onChange={(e) =>
-                                      setAdminUserDrafts((current) => ({
-                                        ...current,
-                                        [String(user.id)]: { ...draft, allowedNamespaces: e.target.value },
-                                      }))
-                                    }
-                                    placeholder="default, team-a"
-                                  />
-                                </div>
-                                <label className="flex items-center gap-2 text-sm text-foreground">
-                                  <input
-                                    type="checkbox"
-                                    checked={draft.isActive}
-                                    onChange={(e) =>
-                                      setAdminUserDrafts((current) => ({
-                                        ...current,
-                                        [String(user.id)]: { ...draft, isActive: e.target.checked },
-                                      }))
-                                    }
-                                    className="h-4 w-4 rounded border-input"
-                                  />
-                                  Active
-                                </label>
-                              </div>
-
-                              <div className="flex items-center justify-between gap-3">
-                                <div className="text-xs text-muted-foreground">{user.email || "No email"}</div>
-                                <Button size="sm" onClick={() => void handleSaveUser(user)} disabled={adminSavingUserId === user.id}>
-                                  {adminSavingUserId === user.id ? "Saving..." : "Save"}
-                                </Button>
-                              </div>
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  </div>
-                ) : null}
               </div>
-            </>
-          )}
-        </div>
-        {connectionError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive flex items-center gap-2">
-            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-            {connectionError}
+            </div>
           </div>
         )}
-        <DialogFooter>
-          <Button onClick={handleConnect} disabled={isConnecting} className="gap-2">
-            {isConnecting && <Loader2 className="h-4 w-4 animate-spin" />}
-            {isConnecting ? "Connecting..." : currentUser ? "Refresh access" : "Connect"}
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

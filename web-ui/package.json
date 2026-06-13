@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "verify:workflow": "node scripts/verify-workflow-workspace.mjs",
+    "verify:account-dialog": "node scripts/verify-account-dialog.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
