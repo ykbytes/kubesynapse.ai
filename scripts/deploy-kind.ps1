@@ -105,6 +105,77 @@ function Sync-PostgresPassword {
   Invoke-Checked -FilePath "kubectl" -Arguments $psqlArgs -Description "Synchronizing PostgreSQL password for existing release '$ReleaseName'"
 }
 
+function Reset-ImmutableRuntimeConfigMaps {
+  param(
+    [string]$Namespace,
+    [string]$ClusterContext,
+    [string]$ReleaseName
+  )
+
+  $configMaps = @(
+    "$ReleaseName-opencode-safe-config",
+    "$ReleaseName-pi-safe-config"
+  )
+
+  foreach ($configMap in $configMaps) {
+    $existing = & kubectl get configmap $configMap -n $Namespace --context $ClusterContext --ignore-not-found -o name
+    if ($LASTEXITCODE -ne 0) {
+      throw "Checking for immutable runtime ConfigMap '$configMap' failed with exit code $LASTEXITCODE."
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace((($existing | Out-String).Trim()))) {
+      Invoke-Checked -FilePath "kubectl" -Arguments @(
+        "delete",
+        "configmap",
+        $configMap,
+        "-n",
+        $Namespace,
+        "--context",
+        $ClusterContext
+      ) -Description "Deleting immutable runtime ConfigMap '$configMap' so Helm can recreate it"
+    }
+  }
+}
+
+function Reset-LegacyOperatorDeployment {
+  param(
+    [string]$Namespace,
+    [string]$ClusterContext,
+    [string]$ReleaseName
+  )
+
+  $deploymentName = "$ReleaseName-operator"
+  $deploymentJson = & kubectl get deployment $deploymentName -n $Namespace --context $ClusterContext --ignore-not-found -o json
+  if ($LASTEXITCODE -ne 0) {
+    throw "Checking for existing operator deployment '$deploymentName' failed with exit code $LASTEXITCODE."
+  }
+
+  if ([string]::IsNullOrWhiteSpace((($deploymentJson | Out-String).Trim()))) {
+    return
+  }
+
+  $deployment = $deploymentJson | ConvertFrom-Json
+  $envItems = @($deployment.spec.template.spec.containers[0].env)
+  $legacyNamespaceEnv = $envItems | Where-Object {
+    $_.name -eq "OPERATOR_NAMESPACE" -and
+    $_.PSObject.Properties.Match("value").Count -gt 0 -and
+    -not [string]::IsNullOrWhiteSpace($_.value)
+  }
+
+  if ($legacyNamespaceEnv) {
+    Invoke-Checked -FilePath "kubectl" -Arguments @(
+      "delete",
+      "deployment",
+      $deploymentName,
+      "-n",
+      $Namespace,
+      "--context",
+      $ClusterContext,
+      "--wait=true"
+    ) -Description "Deleting legacy operator deployment '$deploymentName' so Helm can recreate the env schema"
+  }
+}
+
 $AdminPassword = Ensure-SecretValue -CurrentValue $AdminPassword -Prefix "KsAdmin!" -RandomLength 14
 $SharedToken = Ensure-SecretValue -CurrentValue $SharedToken -Prefix "ks-shared-" -RandomLength 32
 $DatabasePassword = Ensure-SecretValue -CurrentValue $DatabasePassword -Prefix "ks-db-" -RandomLength 32
@@ -151,6 +222,8 @@ if (-not $SkipLoad) {
 }
 
 Sync-PostgresPassword -Namespace $Namespace -ClusterContext $clusterContext -ReleaseName $ReleaseName -DatabasePassword $DatabasePassword
+Reset-ImmutableRuntimeConfigMaps -Namespace $Namespace -ClusterContext $clusterContext -ReleaseName $ReleaseName
+Reset-LegacyOperatorDeployment -Namespace $Namespace -ClusterContext $clusterContext -ReleaseName $ReleaseName
 
 $helmArgs = @(
   "upgrade",

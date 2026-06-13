@@ -113,8 +113,7 @@ if not _is_sqlite:
         "pool_timeout": pool_timeout,
         "pool_recycle": pool_recycle,
         "connect_args": {
-            "timeout": 10,  # Connection timeout
-            "command_timeout": 10,
+            "connect_timeout": 10,
         },
     }
 else:
@@ -303,6 +302,9 @@ def get_db_session(timeout: int = 30) -> Iterator[Session]:
             session.close()
         except Exception as exc:
             logger.warning("Error closing database session: %s", exc)
+
+
+@contextmanager
 def db_session() -> Iterator[Session]:
     """Yield a database session with automatic commit/rollback.
 

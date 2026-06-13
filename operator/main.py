@@ -145,6 +145,8 @@ def _start_health_check_server() -> threading.Thread:
 
 def _handle_shutdown_signal(signum: int, frame: Any) -> None:  # type: ignore[no-untyped-def]
     """Handle SIGTERM/SIGINT gracefully."""
+    global _shutting_down
+    _shutting_down = True
     OPERATOR_STATE["shutdown_requested"] = True
     logger.info("Shutdown signal received (sig=%d)", signum)
 
@@ -153,18 +155,22 @@ def _handle_shutdown_signal(signum: int, frame: Any) -> None:  # type: ignore[no
 # Startup / shutdown hooks
 # ---------------------------------------------------------------------------
 
+
+def _register_shutdown_handlers() -> None:
+    """Install signal handlers only from the interpreter main thread."""
+    if threading.current_thread() is not threading.main_thread():
+        logger.debug("Skipping signal handler registration outside the main thread.")
+        return
+    signal.signal(signal.SIGTERM, _handle_shutdown_signal)
+    signal.signal(signal.SIGINT, _handle_shutdown_signal)
+
 @kopf.on.startup()
 def configure(settings: kopf.OperatorSettings, **_) -> None:
     """Ensure K8s client is authenticated when the operator starts."""
     logger.info("Operator startup: version=%s", os.getenv("OPERATOR_VERSION", "unknown"))
-    
-    # Graceful shutdown handlers
-    signal.signal(signal.SIGTERM, _handle_shutdown_signal)
-    signal.signal(signal.SIGINT, _handle_shutdown_signal)
-    
-    # Health check server
-    _start_health_check_server()
-    
+
+    _register_shutdown_handlers()
+
     # Kopf configuration
     settings.persistence.finalizer = "kubesynapse.ai/finalizer"
     settings.peering.name = OPERATOR_PEERING_NAME
@@ -234,9 +240,7 @@ async def cleanup(logger: logging.Logger, **_kwargs: object) -> None:
 
 def _sigterm_handler(signum: int, _frame: object) -> None:
     """Mark operator as shutting down on SIGTERM."""
-    global _shutting_down
-    _shutting_down = True
-    logger.info("Received signal %s — graceful shutdown initiated.", signum)
+    _handle_shutdown_signal(signum, _frame)
 
 
-signal.signal(signal.SIGTERM, _sigterm_handler)
+_register_shutdown_handlers()

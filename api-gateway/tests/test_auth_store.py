@@ -2,15 +2,39 @@ import importlib.util
 import os
 import sys
 import tempfile
+import types
 import unittest
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from sqlalchemy import inspect
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "auth_store.py"
+
+
+def _passlib_overrides() -> dict[str, object]:
+    try:
+        import passlib.context  # type: ignore[import-not-found]  # noqa: F401
+    except ModuleNotFoundError:
+        passlib_module = types.ModuleType("passlib")
+        context_module = types.ModuleType("passlib.context")
+
+        class _FakeCryptContext:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def hash(self, value: str) -> str:
+                return f"hash::{value}"
+
+            def verify(self, plain: str, hashed: str) -> bool:
+                return hashed == f"hash::{plain}"
+
+        context_module.CryptContext = _FakeCryptContext
+        passlib_module.context = context_module
+        return {"passlib": passlib_module, "passlib.context": context_module}
+    return {}
 
 
 def load_auth_store(database_path: Path) -> tuple[str, object]:
@@ -28,7 +52,26 @@ def load_auth_store(database_path: Path) -> tuple[str, object]:
             "DATABASE_SQLITE_PATH": str(database_path),
         },
         clear=False,
-    ):
+    ), patch.dict(sys.modules, _passlib_overrides()):
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            sys.modules.pop(module_name, None)
+            raise
+
+    return module_name, module
+
+
+def load_auth_store_with_env(env: dict[str, str], *, create_engine_mock: Mock | None = None) -> tuple[str, object]:
+    module_name = f"api_gateway_auth_store_env_test_{uuid.uuid4().hex}"
+    spec = importlib.util.spec_from_file_location(module_name, MODULE_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Failed to load auth_store module for tests")
+
+    module = importlib.util.module_from_spec(spec)
+    create_engine_patch = patch("sqlalchemy.create_engine", create_engine_mock) if create_engine_mock is not None else nullcontext()
+    with patch.dict(os.environ, env, clear=False), patch.dict(sys.modules, _passlib_overrides()), create_engine_patch:
         sys.modules[module_name] = module
         try:
             spec.loader.exec_module(module)
@@ -744,3 +787,32 @@ class AuthStoreTests(unittest.TestCase):
 
         self.assertTrue(self.auth_store.delete_mcp_connection("default", created["id"]))
         self.assertEqual(self.auth_store.list_mcp_connections("default"), [])
+
+
+class AuthStorePostgresConfigTests(unittest.TestCase):
+    def test_postgres_engine_uses_psycopg_compatible_connect_args(self) -> None:
+        create_engine_mock = Mock(return_value=types.SimpleNamespace(dispose=lambda: None))
+        module_name, auth_store = load_auth_store_with_env(
+            {
+                "DATABASE_URL": "",
+                "DATABASE_HOST": "postgres.test",
+                "DATABASE_PORT": "5432",
+                "DATABASE_USER": "kubesynapse",
+                "DATABASE_PASSWORD": "secret",
+                "DATABASE_NAME": "kubesynapse",
+                "DATABASE_DRIVER": "postgresql+psycopg",
+            },
+            create_engine_mock=create_engine_mock,
+        )
+        self.addCleanup(lambda: sys.modules.pop(module_name, None))
+        self.addCleanup(auth_store.ENGINE.dispose)
+
+        create_engine_mock.assert_called_once()
+        _, kwargs = create_engine_mock.call_args
+        self.assertEqual(
+            kwargs["connect_args"],
+            {
+                "connect_timeout": 10,
+                "options": "-c statement_timeout=30000ms",
+            },
+        )

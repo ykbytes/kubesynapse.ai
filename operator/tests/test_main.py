@@ -5,6 +5,7 @@ import importlib.util
 import json
 import sys
 import sysconfig
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -106,6 +107,48 @@ def _api_exception(status: int) -> Exception:
 
 
 class OperatorManifestTests(unittest.TestCase):
+    def test_configure_succeeds_outside_main_thread(self) -> None:
+        settings = types.SimpleNamespace(
+            persistence=types.SimpleNamespace(finalizer=None),
+            peering=types.SimpleNamespace(name=None, lifetime=None, standby_delay=None),
+            posting=types.SimpleNamespace(strategy=None),
+        )
+        exceptions: list[Exception] = []
+        original_ready = operator_main.OPERATOR_STATE["ready"]
+        original_shutdown = operator_main.OPERATOR_STATE["shutdown_requested"]
+        operator_main.OPERATOR_STATE["ready"] = False
+        operator_main.OPERATOR_STATE["shutdown_requested"] = False
+        self.addCleanup(operator_main.OPERATOR_STATE.__setitem__, "ready", original_ready)
+        self.addCleanup(operator_main.OPERATOR_STATE.__setitem__, "shutdown_requested", original_shutdown)
+        start_health_server = Mock()
+
+        def _invoke() -> None:
+            try:
+                with (
+                    patch.object(operator_main, "_start_health_check_server", start_health_server),
+                    patch.object(operator_main, "_load_kubernetes_config"),
+                    patch.object(operator_main, "init_state_database"),
+                    patch.object(operator_main, "init_tracing"),
+                    patch.object(operator_main, "log_operator_event"),
+                ):
+                    operator_main.configure(settings)
+            except Exception as exc:  # pragma: no cover - exercised by failing regression state
+                exceptions.append(exc)
+
+        thread = threading.Thread(target=_invoke, name="kopf-startup-test")
+        thread.start()
+        thread.join(timeout=5)
+
+        self.assertFalse(thread.is_alive(), "configure thread should exit cleanly")
+        self.assertEqual(exceptions, [])
+        self.assertTrue(operator_main.OPERATOR_STATE["ready"])
+        self.assertEqual(settings.persistence.finalizer, "kubesynapse.ai/finalizer")
+        self.assertEqual(settings.peering.name, _config.OPERATOR_PEERING_NAME)
+        self.assertEqual(settings.peering.lifetime, 30)
+        self.assertEqual(settings.peering.standby_delay, 15)
+        self.assertEqual(settings.posting.strategy, "permanent")
+        start_health_server.assert_not_called()
+
     def test_classify_reconcile_error_marks_4xx_api_failures_permanent(self) -> None:
         exc = rest_module.ApiException("invalid resource")
         exc.status = 422

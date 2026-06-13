@@ -38,6 +38,7 @@ litellm:
     limits:
       cpu: "2"
       memory: "4Gi"
+  tmpSizeLimit: "2Gi"
   config:
     model_list:
       - model_name: gpt-4

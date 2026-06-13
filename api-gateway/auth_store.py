@@ -139,8 +139,7 @@ else:
     _engine_kwargs["pool_recycle"] = pool_recycle
     _engine_kwargs["pool_timeout"] = pool_timeout
     _engine_kwargs["connect_args"] = {
-        "timeout": 10,  # Connection timeout
-        "command_timeout": 10,  # Command timeout
+        "connect_timeout": 10,
         "options": f"-c statement_timeout={max(int(os.getenv('DB_STATEMENT_TIMEOUT_MS', '30000')), 5000)}ms",
     }
 

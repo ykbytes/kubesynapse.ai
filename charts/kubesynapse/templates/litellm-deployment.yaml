@@ -259,7 +259,7 @@ spec:
           emptyDir: {}
         - name: tmp
           emptyDir:
-            sizeLimit: 512Mi
+            sizeLimit: {{ .Values.litellm.tmpSizeLimit | default "2Gi" | quote }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
