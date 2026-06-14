@@ -20,7 +20,7 @@ const checks = [
   ["trace explorer builds a joined execution chronology", observatory.includes("buildTraceRecords")],
   ["trace explorer exposes step and agent attribution", observatory.includes("Agent / step")],
   ["trace explorer exposes tool filtering", observatory.includes("Filter by tool")],
-  ["trace chronology is narrower than inspector", observatory.includes("xl:grid-cols-[13rem_minmax(22rem,0.78fr)_minmax(30rem,1.22fr)]")],
+  ["trace chronology is narrower than inspector", observatory.includes("xl:grid-cols-[12rem_minmax(20rem,1fr)_minmax(24rem,1.1fr)]")],
   ["observatory renders optimisation cockpit", observatory.includes("OptimisePanel")],
   ["optimise tab can select platform agents", observatory.includes("listAgents") && observatory.includes("optimiseAgents")],
   ["optimise tab can invoke selected agent", observatory.includes("invokeAgent") && observatory.includes("Run optimisation")],

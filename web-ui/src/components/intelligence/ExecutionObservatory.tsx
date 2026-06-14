@@ -1432,7 +1432,7 @@ function TraceExplorer({
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[13rem_minmax(22rem,0.78fr)_minmax(30rem,1.22fr)]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[12rem_minmax(20rem,1fr)_minmax(24rem,1.1fr)]">
         <div className="min-h-0 border-b border-border/40 xl:border-b-0 xl:border-r">
           <div className="flex items-center justify-between border-b border-border/30 px-3 py-2">
             <div>
@@ -1492,14 +1492,14 @@ function TraceExplorer({
           </ScrollArea>
         </div>
 
-        <div className="min-h-0 overflow-hidden border-b border-border/40 xl:border-b-0 xl:border-r">
-          <div className="flex items-center justify-between border-b border-border/30 px-3 py-2">
+        <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-b border-border/40 xl:border-b-0 xl:border-r">
+          <div className="flex shrink-0 items-center justify-between border-b border-border/30 px-3 py-2">
             <div className="text-xs font-semibold text-foreground">Chronology</div>
             <div className="text-[10px] text-muted-foreground">
               {filteredRecords.length} of {traceRecords.length} records
             </div>
           </div>
-          <ScrollArea className="h-full">
+          <ScrollArea className="min-h-0 min-w-0 flex-1">
             <div className="space-y-1.5 p-2">
               {filteredRecords.length === 0 && (
                 <div className="rounded-lg border border-dashed border-border/50 py-12 text-center text-xs text-muted-foreground">
@@ -1519,28 +1519,28 @@ function TraceExplorer({
                       onEventSelect(record.event?.id ?? null);
                     }}
                     className={cn(
-                      "w-full rounded-lg border px-3 py-2 text-left transition-colors",
+                      "block w-full min-w-0 overflow-hidden rounded-lg border px-3 py-2 text-left transition-colors",
                       isActive ? "border-primary/50 bg-primary/8" : "border-border/45 bg-card/35 hover:bg-accent/25",
                     )}
                   >
-                    <div className="flex items-start gap-2">
-                      <Badge variant="outline" className={cn("mt-0.5 h-5 px-1.5 text-[9px] uppercase", traceKindClasses(record.kind))}>
+                    <div className="flex min-w-0 items-start gap-2">
+                      <Badge variant="outline" className={cn("mt-0.5 h-5 shrink-0 px-1.5 text-[9px] uppercase", traceKindClasses(record.kind))}>
                         {record.kind}
                       </Badge>
                       <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 items-center gap-2">
                           {ToolIcon && <ToolIcon className={cn("h-3.5 w-3.5 shrink-0", getToolIconColor(record.toolName ?? ""))} />}
-                          <span className="truncate text-xs font-semibold text-foreground">{record.title}</span>
+                          <span className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">{record.title}</span>
                           <span className={cn("shrink-0 text-[10px] font-medium", statusTextClasses(record.status))}>{record.status}</span>
                         </div>
-                        <p className="mt-1 line-clamp-1 text-[11px] text-muted-foreground">{record.summary}</p>
-                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
-                          <span className="tabular-nums">{record.timestamp ? formatCompactDate(record.timestamp) : "--"}</span>
-                          <span className="truncate">Agent: {record.actorLabel}</span>
-                          <span className="truncate">Step: {record.stepLabel}</span>
-                          {record.durationMs != null && record.durationMs > 0 && <span>{formatDuration(record.durationMs)}</span>}
-                          {record.tokens != null && record.tokens > 0 && <span>{record.tokens.toLocaleString()} tokens</span>}
-                          {record.cost != null && record.cost > 0 && <span>{formatCurrency(record.cost)}</span>}
+                        <p className="mt-1 truncate text-[11px] text-muted-foreground">{record.summary}</p>
+                        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 text-[10px] text-muted-foreground">
+                          <span className="shrink-0 tabular-nums">{record.timestamp ? formatCompactDate(record.timestamp) : "--"}</span>
+                          <span className="min-w-0 truncate">Agent: {record.actorLabel}</span>
+                          <span className="min-w-0 truncate">Step: {record.stepLabel}</span>
+                          {record.durationMs != null && record.durationMs > 0 && <span className="shrink-0">{formatDuration(record.durationMs)}</span>}
+                          {record.tokens != null && record.tokens > 0 && <span className="shrink-0">{record.tokens.toLocaleString()} tokens</span>}
+                          {record.cost != null && record.cost > 0 && <span className="shrink-0">{formatCurrency(record.cost)}</span>}
                         </div>
                       </div>
                       <ChevronRight className={cn("mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform", isActive && "rotate-90 text-primary")} />
