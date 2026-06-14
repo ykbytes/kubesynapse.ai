@@ -161,6 +161,7 @@ The chart installs 13 CRDs and the Kubernetes API remains the source of truth fo
 | `ObservationTarget` | Namespaced | Observability target definition |
 | `ObservationPolicy` | Namespaced | Observability evaluation rules |
 | `ObservationReport` | Namespaced | Stored observability output and anomaly reports |
+| `AgentIncident` | Namespaced | Incident lifecycle state, Alertmanager webhook, signal-watch output |
 
 ### API Gateway
 
@@ -248,6 +249,9 @@ The run-intelligence path is implemented directly in the current repository.
 | `trace_store.py` | API gateway | Persists execution traces and runtime events in PostgreSQL |
 | `traces_router.py` | API gateway | Timeline, trace, summary, and live activity APIs |
 | `signal_watch.py` | Operator | Periodic SQL-based anomaly detection |
+| `webhook_controller.py` | Operator | Atomically claims trigger executions before dispatching worker Jobs |
+| `incident_controller.py` | Operator | Drives `AgentIncident` lifecycle and syncs status back to the gateway |
+| `incidents.py` | API gateway router | Incident CRUD, Alertmanager webhook, and timeline APIs |
 | `system-agents.yaml` | Helm chart | Predefined agents for AI-assisted explanations |
 
 ### Event Flow
@@ -381,6 +385,7 @@ flowchart TB
     OT -->|produces| OR
     AI -->|triggers| AW
     AI -->|assigned to| AG
+    OT -->|can create| AI
 ```
 
 ---
@@ -414,4 +419,4 @@ See [`docs/architecture-overview.md`](architecture-overview.md), [`docs/observab
 
 ---
 
-**Last Updated:** 2026-06-05
+**Last Updated:** 2026-06-14

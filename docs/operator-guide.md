@@ -509,5 +509,5 @@ Enable **NetworkPolicy** in production to restrict unnecessary egress.
 
 ---
 
-**Last Updated:** April 27, 2026  
+**Last Updated:** June 14, 2026  
 **Platform Version:** 1.0.0

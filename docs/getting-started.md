@@ -31,7 +31,7 @@ You also need credentials for at least one supported model provider before you c
 
 ## Step 1: Install KubeSynapse On Kind
 
-The most repeatable local install path in this repository is the checked-in PowerShell helper:
+The most repeatable local install path in this repository is the checked-in PowerShell helper (Windows) or its bash equivalent (macOS / Linux):
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
@@ -39,6 +39,11 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
   -Namespace kubesynapse `
   -ReleaseName kubesynapse `
   -AdminPassword "KubesynapseAdmin9!"
+```
+
+```bash
+# Same flow on macOS / Linux (requires bash, docker, kind, kubectl, helm, openssl, base64)
+./scripts/install.sh
 ```
 
 What it does:
@@ -50,7 +55,7 @@ What it does:
 - injects `catalog/skills-catalog.json` so the `Catalog > Skills` tab is populated
 - prints the bootstrap admin credentials and useful port-forward commands
 
-The main chart installs 13 CRDs, including agents, workflows, policies, approvals, tenants, MCP connections, webhook receivers, workflow triggers, observability resources, and incidents.
+The main chart installs 13 CRDs: `AIAgent`, `AgentPolicy`, `AgentApproval`, `AgentWorkflow`, `AgentTenant`, `McpConnection`, `WebhookReceiver`, `WorkflowTrigger`, `ConnectorPlugin`, `ObservationTarget`, `ObservationPolicy`, `ObservationReport`, and `AgentIncident`.
 
 If you prefer a manual path, see:
 

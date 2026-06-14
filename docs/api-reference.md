@@ -1143,8 +1143,12 @@ Get the full event timeline for an incident (status transitions, escalations, no
 
 #### `POST /api/v1/webhooks/alertmanager`
 
-Alertmanager webhook receiver. Accepts the standard Alertmanager webhook payload, creates or
+Alertmanager webhook receiver. Accepts the standard Alertmanager v4 webhook payload, creates or
 upserts incidents per alert, and resolves incidents when the alert status changes to `resolved`.
+
+When `ALERTMANAGER_WEBHOOK_SECRET` is set on the gateway, requests must carry an
+`X-Alertmanager-Signature` header containing a valid HMAC of the request body. The gateway also
+rate-limits the endpoint at `INCIDENT_API_RATE_LIMIT_PER_MINUTE` per actor.
 
 ---
 

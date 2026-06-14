@@ -84,11 +84,9 @@ kubectl port-forward svc/kubesynapse-web-ui -n kubesynapse 3000:80
 
 # 3. Configure an LLM API key (required before invoking agents)
 #    Open the UI → Settings → Providers, or set via kubectl:
-#    (PowerShell)
+$b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('sk-your-key'))
 kubectl patch secret kubesynapse-llm-api-keys -n kubesynapse `
-  --patch "{`"data`":{`"OPENAI_API_KEY`":`"$([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('sk-your-key')))`"}}"
-#    (bash)
-#    kubectl patch secret kubesynapse-llm-api-keys -n kubesynapse -p '{"data":{"OPENAI_API_KEY":"'$(echo -n 'sk-your-key' | base64)'"}}'
+  --patch "{`"data`":{`"OPENAI_API_KEY`":`"$b64`"}}"
 
 # 4. Deploy the sample policy and agent
 kubectl apply -f examples/sample-policy.yaml
@@ -96,6 +94,24 @@ kubectl apply -f examples/sample-agent.yaml
 
 # 5. Open the UI and log in
 Start-Process http://localhost:3000
+```
+
+```bash
+# 2. Port-forward the gateway and UI (run each in a separate terminal)
+kubectl port-forward svc/kubesynapse-api-gateway -n kubesynapse 8080:8080 &
+kubectl port-forward svc/kubesynapse-web-ui -n kubesynapse 3000:80 &
+
+# 3. Configure an LLM API key (required before invoking agents)
+#    Open the UI → Settings → Providers, or set via kubectl:
+kubectl patch secret kubesynapse-llm-api-keys -n kubesynapse \
+  -p '{"data":{"OPENAI_API_KEY":"'"$(printf 'sk-your-key' | base64)"'"}}'
+
+# 4. Deploy the sample policy and agent
+kubectl apply -f examples/sample-policy.yaml
+kubectl apply -f examples/sample-agent.yaml
+
+# 5. Open the UI and log in
+xdg-open http://localhost:3000 2>/dev/null || open http://localhost:3000
 ```
 
 ### Default Credentials

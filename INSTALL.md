@@ -321,6 +321,14 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
   -AdminPassword "KubesynapseAdmin9!"
 ```
 
+Or on macOS / Linux (bash equivalent of the helper above):
+
+```bash
+./scripts/install.sh
+# Optional overrides:
+#   CLUSTER_NAME=... NAMESPACE=... RELEASE_NAME=... ADMIN_PASSWORD=... RECREATE_CLUSTER=1 ./scripts/install.sh
+```
+
 The script creates or reuses the Kind cluster, builds and loads the required local images,
 applies both `deploy/values.local-images.example.yaml` and
 `deploy/values.kind.quickstart.yaml`, injects `catalog/skills-catalog.json`, and
@@ -695,8 +703,8 @@ chart changes unless you want to pin or relocate them.
 helm lint ./charts/kubesynapse -f values-prod.yaml
 
 # Install
-helm upgrade --install kubesynapse ./charts/kubesynapse \
-  --namespace ai-platform \
+helm upgrade --install KubeSynapse ./charts/kubesynapse \
+  --namespace kubesynapse \
   --create-namespace \
   -f values-prod.yaml \
   --set-file skillsCatalog.catalogJson=./catalog/skills-catalog.json
@@ -708,23 +716,31 @@ If `catalog/skills-catalog.json` exists, include it during Helm installs and upg
 
 ```bash
 # All platform pods running
-kubectl get pods -n ai-platform
+kubectl get pods -n kubesynapse
 
 # CRDs registered
 kubectl get crds | grep kubesynapse.ai
 
-# Expected CRDs:
+# Expected CRDs (all 13):
 #   aiagents.kubesynapse.ai
 #   agentpolicies.kubesynapse.ai
 #   agentapprovals.kubesynapse.ai
 #   agenttenants.kubesynapse.ai
 #   agentworkflows.kubesynapse.ai
+#   agentincidents.kubesynapse.ai
+#   mcpconnections.kubesynapse.ai
+#   webhookreceivers.kubesynapse.ai
+#   workflowtriggers.kubesynapse.ai
+#   connectorplugins.kubesynapse.ai
+#   observationtargets.kubesynapse.ai
+#   observationpolicies.kubesynapse.ai
+#   observationreports.kubesynapse.ai
 
 # Operator logs healthy
-kubectl logs -n ai-platform -l app=operator --tail=50
+kubectl logs -n kubesynapse -l app=operator --tail=50
 
 # API Gateway reachable
-kubectl port-forward -n ai-platform svc/kubesynapse-api-gateway 8080:8080
+kubectl port-forward -n kubesynapse svc/kubesynapse-api-gateway 8080:8080
 curl http://localhost:8080/api/v1/health
 ```
 
@@ -1404,7 +1420,7 @@ Service, or another exposure mechanism.
 kubectl create secret tls agents-tls \
   --cert=path/to/tls.crt \
   --key=path/to/tls.key \
-  -n ai-platform
+  -n kubesynapse
 ```
 
 ---
@@ -1502,7 +1518,7 @@ Each agent runs as a singleton StatefulSet (1 replica) with its own PVC for dura
 
 ```bash
 # Remove the Helm release
-helm uninstall KubeSynapse -n ai-platform
+helm uninstall kubesynapse -n kubesynapse
 
 # Remove CRDs (Helm does not delete CRDs on uninstall)
 kubectl delete crd aiagents.kubesynapse.ai
@@ -1527,13 +1543,13 @@ make undeploy
 
 ```bash
 # Check operator logs
-kubectl logs -l app=operator -n ai-platform --tail=100
+kubectl logs -l app=operator -n kubesynapse --tail=100
 
 # Verify CRDs are installed
 kubectl get crds | grep kubesynapse.ai
 
 # Verify RBAC
-kubectl auth can-i create statefulsets --as=system:serviceaccount:ai-platform:kubesynapse-operator-sa
+kubectl auth can-i create statefulsets --as=system:serviceaccount:kubesynapse:kubesynapse-operator-sa
 ```
 
 ### Agent pod not starting
@@ -1589,10 +1605,10 @@ Normal completion should include both the startup log and a final `Runtime event
 ### LiteLLM errors
 
 ```bash
-kubectl logs -l app=litellm -n ai-platform --tail=50
+kubectl logs -l app=litellm -n kubesynapse --tail=50
 
 # Verify the LLM API key secret
-kubectl get secret KubeSynapse-llm-api-keys -n ai-platform -o yaml
+kubectl get secret kubesynapse-llm-api-keys -n kubesynapse -o yaml
 ```
 
 ### Helm install fails

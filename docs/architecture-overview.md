@@ -159,6 +159,7 @@ The Kubernetes API remains the control-plane source of truth. The chart installs
 | `ObservationTarget` | Namespaced | Declares what is being observed |
 | `ObservationPolicy` | Namespaced | Declares how collected telemetry is evaluated |
 | `ObservationReport` | Namespaced | Stores the resulting health or anomaly output |
+| `AgentIncident` | Namespaced | Incident lifecycle state and Alertmanager webhook ingest |
 
 ### Operator responsibilities
 
@@ -237,8 +238,9 @@ The Run Intelligence Layer extends the Execution Observatory with semantic event
 4. **Storage**: The API gateway stores execution detail in `execution_traces` and semantic events in `runtime_run_events`
 5. **Detection**: The signal watch controller runs SQL checks every 60 seconds
 6. **Reporting**: Anomalies create `ObservationReport` CRs with severity classification
-7. **Incident management**: Alertmanager webhooks are received at `POST /api/v1/webhooks/alertmanager`; the gateway creates or upserts `AgentIncident` CRs. The operator drives the incident lifecycle (acknowledge, escalate, resolve, trigger workflows).
-8. **Analysis**: System agents can be invoked for AI-powered explanations
+7. **Incident management**: Alertmanager webhooks are received at `POST /api/v1/webhooks/alertmanager`; the gateway creates or upserts `AgentIncident` CRs. The operator's incident controller drives the lifecycle (acknowledge, escalate, resolve, trigger workflows) and syncs status back to the gateway.
+8. **Webhook dispatch**: Incoming signed webhook receivers create `WorkflowTrigger` records; the operator's `webhook_controller.py` atomically claims each trigger execution before dispatching the worker Job, preventing duplicate dispatches across replicas.
+9. **Analysis**: System agents can be invoked for AI-powered explanations
 
 ### System Agents
 
@@ -293,7 +295,7 @@ The observability module is implemented in the current repository.
 
 Current behavior includes:
 
-- the chart installs observability CRDs
+- the chart installs the four observability CRDs (`ConnectorPlugin`, `ObservationTarget`, `ObservationPolicy`, `ObservationReport`) as part of its 13-CRD set
 - the operator registers `observation_controller` when those CRDs are present
 - the controller synthesizes target, policy, connector, and report status
 - the web UI presents observability dashboards and editors for connectors, targets, and policies
@@ -332,4 +334,5 @@ If you need the shortest possible architectural summary, these are the points th
 6. The Run Intelligence Layer provides semantic event indexing, deterministic anomaly detection, and AI-powered analysis across all runtimes.
 7. Explicit A2A delegation exists today, while NATS remains an extension point for deeper async coordination later.
 8. Incident management is built in: Alertmanager webhooks create AgentIncident CRs; the operator drives escalation, remediation workflows, and lifecycle transitions.
-9. Agent runtimes are hardened by default with plugin isolation, immutable config, traffic enforcement, and model governance.
+9. Webhook-triggered workflows use claim-based dispatch: the operator atomically claims each `trigger_execution` row before dispatching the worker Job, so multiple operator replicas never double-dispatch the same event.
+10. Agent runtimes are hardened by default with plugin isolation, immutable config, traffic enforcement, and model governance.

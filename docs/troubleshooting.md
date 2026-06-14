@@ -826,7 +826,7 @@ kubectl patch agentpolicy <policy-name> -n <namespace> --type merge \
 
 ---
 
-**Last Updated:** May 3, 2026  
+**Last Updated:** June 14, 2026  
 **Platform Version:** 1.0.0
 
 ---

@@ -325,7 +325,9 @@ spec:
     AgentTenant ||--o{ AgentWorkflow : scopes
     ConnectorPlugin ||--o{ ObservationTarget : collects_for
     ObservationPolicy ||--o{ ObservationTarget : evaluates
-    ObservationPolicy ||--o{ ObservationReport : produces`}
+    ObservationPolicy ||--o{ ObservationReport : produces
+    ObservationTarget ||--o{ AgentIncident : may_create
+    AgentIncident ||--o{ AgentWorkflow : triggers_remediation`}
         />
       </div>
       <div id="arch-execution">

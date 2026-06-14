@@ -44,16 +44,49 @@ Gateway-side durable recall is policy-driven rather than controlled by dedicated
 Use `AgentPolicy.spec.memoryPolicy` or the chart-level `memoryPolicy.*` defaults to tune recall injection.
 The `OPENCODE_MEMORY_*` variables documented below apply only to the runtime-local OpenCode memory layer.
 
+#### Incident Webhook and Rate Limiting
+
+| Variable | Default | Description |
+|---|---|---|
+| `ALERTMANAGER_WEBHOOK_SECRET` | `""` | Shared HMAC secret for the `POST /api/v1/webhooks/alertmanager` receiver. When set, requests must carry a valid `X-Alertmanager-Signature` header. |
+| `INCIDENT_API_RATE_LIMIT_PER_MINUTE` | `60` | Per-actor rate limit on the incident REST surface (`GET/POST/PUT/PATCH /api/v1/incidents` and timeline calls). |
+| `API_INVOKE_RATE_LIMIT_PER_MINUTE` | `60` | Per-actor rate limit on `/api/v1/agents/{name}/invoke` and `/invoke/stream`. |
+
+#### JWT and Session Auth
+
+| Variable | Default | Description |
+|---|---|---|
+| `JWT_SECRET` | *(required)* | HMAC key for signing access and refresh tokens. Per AGENTS.md this is now decoupled from `API_GATEWAY_SHARED_TOKEN`; the chart requires `platformSecrets.native.jwtSecret`. |
+| `JWT_SECRET_PREVIOUS` | `""` | Optional previous signing key accepted during a rotation window. |
+| `JWT_SECRET_LIST` | `""` | JSON list of additional active signing keys, useful for staged rollouts. |
+| `REQUIRE_JWT_SECRET` | `false` | Hard-fail startup if `JWT_SECRET` is empty. |
+| `AUTH_ACCESS_TOKEN_TTL_SECONDS` | `3600` | Access token lifetime. |
+| `AUTH_REFRESH_TOKEN_TTL_SECONDS` | `604800` (7 days) | Refresh token lifetime. |
+| `AUTH_BOOTSTRAP_ADMIN_USERNAME` | `""` | Bootstrap admin username created on first startup. |
+| `AUTH_BOOTSTRAP_ADMIN_PASSWORD` | `""` | Bootstrap admin password (min 8 chars). |
+
+#### Authentication and Rate Limiting
+
+| Variable | Default | Description |
+|---|---|---|
+| `AUTH_LOGIN_RATE_LIMIT_ATTEMPTS` | `5` | Failed login attempts per window per account. |
+| `AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS` | `60` | Login rate limit window. |
+| `AUTH_ACCOUNT_LOCKOUT_THRESHOLD` | `10` | Account lockout threshold (combined failures across windows). |
+| `AUTH_REGISTRATION_ENABLED` | `false` | When true, the auth router exposes the public registration flow. |
+| `AUTH_COOKIE_SECURE` | `true` | Set the `Secure` flag on session cookies. |
+| `AUTH_COOKIE_SAMESITE` | `lax` | `SameSite` value for auth cookies. |
+| `AUDIT_RETENTION_DAYS` | `90` | Days of audit log rows kept before the GC cronjob purges them. |
+
 ### Operator
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OPERATOR_NAMESPACE` | `ai-platform` | Namespace where operator runs |
+| `OPERATOR_NAMESPACE` | `default` | Namespace where the operator runs (the chart sets this to the release namespace via the downward API). |
 | `OPERATOR_VERSION` | *(from image)* | Operator version tag |
 | `API_PORT` | `8080` | Operator API port |
 | `API_GATEWAY_INTERNAL_URL` | `http://api-gateway:8080` | Internal API gateway URL |
 | `LITELLM_SVC` | `http://litellm:4000` | LiteLLM service URL |
-| `OPERATOR_PEERING_NAME` | `""` | Multi-cluster peering name |
+| `OPERATOR_PEERING_NAME` | `kubesynapse-operator` | Multi-cluster peering name |
 | `AGENT_RUNTIME_TIMEOUT_SECONDS` | `360` | Agent runtime timeout |
 | `WORKER_ACTIVE_DEADLINE_SECONDS` | `14400` | Worker job active deadline |
 | `WORKER_TTL_SECONDS_AFTER_FINISHED` | `3600` | Worker job TTL after completion |
@@ -70,7 +103,7 @@ The `OPENCODE_MEMORY_*` variables documented below apply only to the runtime-loc
 | `WORKER_MEMORY_LIMIT` | `512Mi` | Worker container memory limit |
 | `WORKER_ARTIFACT_SIZE` | `2Gi` | Worker artifact PVC size |
 | `WORKER_ARTIFACT_STORAGE_CLASS` | `""` | Storage class for artifact PVC |
-| `MCP_HUB_NAMESPACE` | `ai-platform` | Namespace for MCP hub resources |
+| `MCP_HUB_NAMESPACE` | `mcp-hub` | Namespace for MCP hub resources |
 | `MCP_AUTH_SECRET_NAME` | `mcp-auth` | Secret name for MCP auth |
 | `SECRET_PROVISIONING_MODE` | `native` | Secret provisioning: `native` or `external-secrets` |
 | `CLUSTER_SECRET_STORE` | `""` | External Secrets cluster store name |
