@@ -147,7 +147,12 @@ export function AdminPanel({ token }: AdminPanelProps) {
   // ── Edit ──
   const openEdit = (u: AdminUser) => {
     setEditUser(u);
-    setEditForm({ display_name: u.display_name, role: u.role, is_active: u.is_active });
+    setEditForm({
+      display_name: u.display_name,
+      role: u.role,
+      is_active: u.is_active,
+      capabilities: { ...(u.capabilities ?? {}) },
+    });
     setEditNamespaces(u.allowed_namespaces.join(", "));
   };
 
@@ -457,6 +462,46 @@ export function AdminPanel({ token }: AdminPanelProps) {
                 placeholder="default, ai-platform"
                 className="h-8 text-sm"
               />
+            </div>
+            <div className="space-y-1.5 rounded-md border border-border/60 bg-muted/20 p-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-xs">Runtime logs access</Label>
+                  <p className="text-[10px] text-muted-foreground">
+                    Pod logs may include environment-derived data. Admins always have access;
+                    operators get it by default unless revoked. Viewers must be granted
+                    explicitly.
+                  </p>
+                </div>
+                <span className="font-mono text-[10px] text-muted-foreground">runtime:logs</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {editUser?.role === "admin" ? (
+                  <Badge variant="secondary" className="text-[10px]">Always allowed (admin)</Badge>
+                ) : (
+                  <>
+                    <Button
+                      size="sm"
+                      variant={editForm.capabilities?.["runtime:logs"] ? "secondary" : "outline"}
+                      className="h-7 text-[11px]"
+                      onClick={() =>
+                        setEditForm((f) => ({
+                          ...f,
+                          capabilities: {
+                            ...(f.capabilities ?? {}),
+                            "runtime:logs": !(f.capabilities?.["runtime:logs"] ?? false),
+                          },
+                        }))
+                      }
+                    >
+                      {editForm.capabilities?.["runtime:logs"] ? "Granted" : "Not granted"}
+                    </Button>
+                    <span className="text-[10px] text-muted-foreground">
+                      Stored value: {String(editForm.capabilities?.["runtime:logs"] ?? false)}
+                    </span>
+                  </>
+                )}
+              </div>
             </div>
           </div>
           <DialogFooter>

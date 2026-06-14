@@ -706,6 +706,7 @@ export interface AuthenticatedUser {
   email?: string | null;
   role: UserRole;
   allowed_namespaces: string[];
+  capabilities?: Record<string, boolean>;
   auth_provider: string;
   session_id?: string | null;
   is_active: boolean;
@@ -718,6 +719,7 @@ export interface AdminUser {
   display_name: string;
   role: UserRole;
   allowed_namespaces: string[];
+  capabilities?: Record<string, boolean>;
   auth_provider: string;
   is_active: boolean;
   created_at?: string | null;
@@ -769,6 +771,7 @@ export interface UpdateUserPayload {
   role?: UserRole;
   is_active?: boolean;
   allowed_namespaces?: string[];
+  capabilities?: Record<string, boolean>;
 }
 
 export interface InvokePayload {

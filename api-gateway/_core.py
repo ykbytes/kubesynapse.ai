@@ -42,6 +42,7 @@ from auth_middleware import (  # §4.1 — extracted auth middleware
     clear_oidc_transaction_cookie,
     clear_refresh_cookie,
     ensure_browser_auth_available,
+    ensure_capability,
     ensure_namespace_access,
     ensure_role,
     issue_session_response,
@@ -1173,6 +1174,7 @@ class UpdateUserRequest(BaseModel):
     role: str | None = Field(default=None, pattern=r"^(viewer|operator|admin)$")
     is_active: bool | None = None
     allowed_namespaces: list[str] | None = None
+    capabilities: dict[str, bool] | None = None
 
 
 WEBHOOK_PROVIDERS = frozenset({"generic", "github", "slack", "stripe", "pagerduty", "grafana"})

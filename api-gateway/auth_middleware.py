@@ -302,6 +302,7 @@ def normalize_principal(
     auth_provider: str,
     session_id: str | None = None,
     is_active: bool = True,
+    capabilities: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a normalized principal dict from auth claims."""
     normalized_role = role if role in ROLE_PRIORITY else "viewer"
@@ -314,6 +315,7 @@ def normalize_principal(
         "email": email,
         "role": normalized_role,
         "allowed_namespaces": normalized_namespaces,
+        "capabilities": dict(capabilities or {}),
         "auth_provider": auth_provider,
         "session_id": session_id,
         "is_active": is_active,
@@ -342,6 +344,7 @@ def principal_from_local_user(user: dict[str, Any], session_id: str) -> dict[str
         email=user.get("email"),
         role=str(user.get("role") or "viewer"),
         allowed_namespaces=user.get("allowed_namespaces") or ["default"],
+        capabilities=user.get("capabilities") or {},
         auth_provider=str(user.get("auth_provider") or "local"),
         session_id=session_id,
         is_active=bool(user.get("is_active", True)),
@@ -489,6 +492,49 @@ def ensure_namespace_access(user: dict[str, Any], namespace: str, minimum_role: 
             code=ErrorCode.NAMESPACE_DENIED,
             message=f"Access to namespace '{namespace}' is not permitted",
             detail=f"Your allowed namespaces: {', '.join(sorted(allowed_namespaces))}",
+        ),
+    )
+
+
+# Capabilities that the user record can opt into beyond the base role.
+# `runtime:logs` is least-privilege on purpose: pod logs can include
+# environment-derived secrets in error stacks, so we never grant it by
+# default. Only admins can flip the flag, and viewers must be granted
+# explicitly.
+USER_CAPABILITIES = ("runtime:logs",)
+
+
+def user_has_capability(user: dict[str, Any], capability: str) -> bool:
+    if capability not in USER_CAPABILITIES:
+        return False
+    role = str(user.get("role") or "viewer")
+    if role == "admin":
+        return True
+    capabilities = user.get("capabilities") or {}
+    if not isinstance(capabilities, dict):
+        return False
+    if role == "operator" and capability == "runtime:logs":
+        # Operators get the capability by default but an admin can revoke it
+        # by storing `False` in the user record.
+        return capabilities.get(capability) is not False
+    return bool(capabilities.get(capability))
+
+
+def ensure_capability(user: dict[str, Any], capability: str) -> dict[str, Any]:
+    """Raise 403 if the user has not been granted ``capability``."""
+    from error_codes import build_error_response, ErrorCode
+
+    if user_has_capability(user, capability):
+        return user
+    raise HTTPException(
+        status_code=403,
+        detail=build_error_response(
+            code=ErrorCode.ROLE_TOO_LOW,
+            message=f"Capability '{capability}' is required",
+            detail=(
+                "Runtime logs may contain sensitive data. An administrator must "
+                "explicitly grant this capability before the user can read live pod logs."
+            ),
         ),
     )
 

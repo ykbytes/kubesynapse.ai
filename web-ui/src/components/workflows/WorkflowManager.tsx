@@ -8,6 +8,7 @@ import {
   Pencil,
   Play,
   Save,
+  ScrollText,
   Square,
   Trash2,
   Workflow,
@@ -21,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "../shared/ConfirmDialog";
 import { ErrorBanner } from "../shared/ErrorBanner";
 import { ErrorDialog } from "../shared/ErrorDialog";
+import { ResourceLogsPanel } from "../shared/ResourceLogsPanel";
 import { WorkflowDefinitionForm } from "../workflow/WorkflowDefinitionForm";
 import { WorkflowSidebar } from "../workflow/WorkflowSidebar";
 import { WorkflowStepsList } from "../workflow/WorkflowStepsList";
@@ -97,7 +99,7 @@ export function WorkflowManager({
   onApprovalDecision,
   onOpenComposer,
 }: WorkflowManagerProps) {
-  const { canMutate, token, namespace } = useConnection();
+  const { canMutate, token, namespace, hasCapability } = useConnection();
 
   /* state */
   const [name, setName] = useState("");
@@ -108,7 +110,7 @@ export function WorkflowManager({
   const [steps, setSteps] = useState<WorkflowStep[]>(() => defaultStepsForAgent(agents[0]?.name));
   const [nextAction, setNextAction] = useState<WorkflowNextAction | null>(null);
   const [stepViewFilter, setStepViewFilter] = useState<StepViewFilter>("all");
-  const [workspaceTab, setWorkspaceTab] = useState<"overview" | "runs" | "files" | "definition">("definition");
+  const [workspaceTab, setWorkspaceTab] = useState<"overview" | "runs" | "files" | "definition" | "logs">("definition");
   const [selectedHistoryRun, setSelectedHistoryRun] = useState<WorkflowRunRecord | null>(null);
   const [triggerInput, setTriggerInput] = useState("");
   const [showTriggerConfirm, setShowTriggerConfirm] = useState(false);
@@ -438,7 +440,7 @@ export function WorkflowManager({
     <div className="animate-fade-in">
       <Tabs
         value={activeTab}
-        onValueChange={(value) => setWorkspaceTab(value as "overview" | "runs" | "files" | "definition")}
+        onValueChange={(value) => setWorkspaceTab(value as "overview" | "runs" | "files" | "definition" | "logs")}
         className="overflow-hidden rounded-lg border border-border/70 bg-background/70 shadow-sm"
       >
         <div className="border-b border-border/70 bg-card/70">
@@ -555,6 +557,10 @@ export function WorkflowManager({
                     <FolderOpen className="h-3.5 w-3.5" />
                     Files
                   </TabsTrigger>
+                  <TabsTrigger value="logs" className="gap-2 rounded px-3 py-2 text-xs">
+                    <ScrollText className="h-3.5 w-3.5" />
+                    Logs
+                  </TabsTrigger>
                 </>
               )}
               <TabsTrigger value="definition" className="gap-2 rounded px-3 py-2 text-xs">
@@ -611,6 +617,31 @@ export function WorkflowManager({
         {workflow && hasBeenTriggered && (
           <TabsContent value="files" className="m-0 p-5">
             <WorkflowFilesView agents={workflowAgents} liveUpdatesEnabled={isActive} />
+          </TabsContent>
+        )}
+
+        {workflow && hasBeenTriggered && (
+          <TabsContent value="logs" className="m-0 p-5">
+            <div className="rounded-lg border border-border/60 bg-card/55 p-4">
+              <div className="mb-3 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <div className="text-xs font-medium text-muted-foreground">Live worker logs</div>
+                  <div className="text-sm font-semibold text-foreground">
+                    Stream logs from the workflow worker pod.
+                  </div>
+                </div>
+                <span className="text-[10px] text-muted-foreground">
+                  Requires the <code className="px-1 py-0.5 rounded bg-muted">runtime:logs</code> capability, granted by an administrator.
+                </span>
+              </div>
+              <ResourceLogsPanel
+                token={token}
+                namespace={namespace}
+                source={{ kind: "workflow", workflowName: workflow.name, runId: workflow.run_id ?? null }}
+                contextLabel="container: worker"
+                capabilityMissing={!hasCapability("runtime:logs")}
+              />
+            </div>
           </TabsContent>
         )}
 

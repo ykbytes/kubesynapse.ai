@@ -224,6 +224,7 @@ class AdminUserNamespaceProvisioningTests(unittest.TestCase):
             role="operator",
             is_active=None,
             allowed_namespaces=["user-legacy-admin"],
+            capabilities=None,
         )
         custom_api.replace_cluster_custom_object.assert_called_once()
         tenant_body = custom_api.replace_cluster_custom_object.call_args.kwargs["body"]
@@ -2816,7 +2817,7 @@ class LogStreamTests(unittest.TestCase):
         self._mock_core.read_namespaced_pod_log.return_value = fake_log_text
 
         with (
-            patch.object(api_gateway_main, "verify_token", return_value={"sub": "u1", "namespaces": ["ns1"]}),
+            patch.object(api_gateway_main, "verify_token", return_value={"sub": "u1", "role": "admin", "namespaces": ["*"], "capabilities": {}}),
             patch.object(api_gateway_main, "read_agent", return_value={}),
             patch.object(api_gateway_main, "list_agent_pods", return_value=[fake_pod]),
         ):
@@ -2824,7 +2825,7 @@ class LogStreamTests(unittest.TestCase):
                 agent_name="myagent",
                 namespace="ns1",
                 tail=200,
-                user={"sub": "u1", "namespaces": ["ns1"]},
+                user={"sub": "u1", "role": "admin", "namespaces": ["*"], "capabilities": {}},
             )
             self.assertEqual(result["agent_name"], "myagent")
             self.assertEqual(result["pod_name"], "my-pod-0")
@@ -2838,7 +2839,7 @@ class LogStreamTests(unittest.TestCase):
         self._mock_core.read_namespaced_pod_log.return_value = ""
 
         with (
-            patch.object(api_gateway_main, "verify_token", return_value={"sub": "u1", "namespaces": ["ns1"]}),
+            patch.object(api_gateway_main, "verify_token", return_value={"sub": "u1", "role": "admin", "namespaces": ["*"], "capabilities": {}}),
             patch.object(api_gateway_main, "read_agent", return_value={}),
             patch.object(api_gateway_main, "list_agent_pods", return_value=[fake_pod]),
         ):
@@ -2846,7 +2847,7 @@ class LogStreamTests(unittest.TestCase):
                 agent_name="myagent",
                 namespace="ns1",
                 tail=99999,
-                user={"sub": "u1", "namespaces": ["ns1"]},
+                user={"sub": "u1", "role": "admin", "namespaces": ["*"], "capabilities": {}},
             )
             call_kwargs = self._mock_core.read_namespaced_pod_log.call_args
             self.assertEqual(call_kwargs.kwargs.get("tail_lines"), 5000)
@@ -2863,7 +2864,7 @@ class LogStreamTests(unittest.TestCase):
     def test_get_agent_logs_404_no_pods(self) -> None:
         """Should 404 when no runtime pods exist."""
         with (
-            patch.object(api_gateway_main, "verify_token", return_value={"sub": "u1", "namespaces": ["ns1"]}),
+            patch.object(api_gateway_main, "verify_token", return_value={"sub": "u1", "role": "admin", "namespaces": ["*"], "capabilities": {}}),
             patch.object(api_gateway_main, "read_agent", return_value={}),
             patch.object(api_gateway_main, "list_agent_pods", return_value=[]),
         ):
@@ -2871,7 +2872,7 @@ class LogStreamTests(unittest.TestCase):
                 api_gateway_main.get_agent_logs(
                     agent_name="myagent",
                     namespace="ns1",
-                    user={"sub": "u1", "namespaces": ["ns1"]},
+                    user={"sub": "u1", "role": "admin", "namespaces": ["*"], "capabilities": {}},
                 )
             self.assertEqual(ctx.exception.status_code, 404)
 
@@ -3155,7 +3156,7 @@ class WorkflowRetryFailedTests(unittest.TestCase):
                     workflow_name="feature-pipeline",
                     request=FakeRequest(),
                     namespace="default",
-                    user={"sub": "user-1", "namespaces": ["default"]},
+                    user={"sub": "user-1", "role": "admin", "namespaces": ["*"], "capabilities": {}},
                 )
             )
             payload = asyncio.run(self._read_stream(response))
@@ -3307,7 +3308,7 @@ class WorkflowRetryFailedTests(unittest.TestCase):
             payload = api_gateway_workflows.get_workflow_logs(
                 workflow_name="feature-pipeline",
                 namespace="default",
-                user={"sub": "user-1", "namespaces": ["default"]},
+                user={"sub": "user-1", "role": "admin", "namespaces": ["*"], "capabilities": {}},
             )
 
         self.assertEqual(payload["source"], "archived")
@@ -3888,6 +3889,175 @@ class WebhookTriggerApiTests(unittest.TestCase):
         self.assertEqual(invocation.status, "received")
         self.assertTrue(invocation.signature_verified)
         self.assertEqual(invocation.invocation_id, invoke_payload["invocation_id"])
+
+
+class RuntimeLogsCapabilityTests(unittest.TestCase):
+    """Gate: agents/workflows logs routes must enforce the runtime:logs capability
+    in addition to the existing auth + namespace checks, so admins can grant
+    least-privilege log access instead of inheriting it from the role."""
+
+    def setUp(self) -> None:
+        self.viewer_user = {
+            "sub": "1",
+            "username": "viewer.user",
+            "role": "viewer",
+            "allowed_namespaces": ["default"],
+            "capabilities": {},
+        }
+        self.operator_user = {
+            "sub": "2",
+            "username": "operator.user",
+            "role": "operator",
+            "allowed_namespaces": ["default"],
+            "capabilities": {"runtime:logs": True},
+        }
+        self.revoked_operator_user = {
+            "sub": "3",
+            "username": "no-logs.operator",
+            "role": "operator",
+            "allowed_namespaces": ["default"],
+            "capabilities": {"runtime:logs": False},
+        }
+        self.admin_user = {
+            "sub": "4",
+            "username": "admin.user",
+            "role": "admin",
+            "allowed_namespaces": ["*"],
+            "capabilities": {},
+        }
+        self.granted_viewer_user = {
+            "sub": "5",
+            "username": "granted.viewer",
+            "role": "viewer",
+            "allowed_namespaces": ["default"],
+            "capabilities": {"runtime:logs": True},
+        }
+
+    def test_admin_is_allowed_by_role_even_without_capability_record(self) -> None:
+        from auth_middleware import user_has_capability
+
+        self.assertTrue(user_has_capability(self.admin_user, "runtime:logs"))
+
+    def test_operator_defaults_to_allowed(self) -> None:
+        from auth_middleware import user_has_capability
+
+        self.assertTrue(user_has_capability(self.operator_user, "runtime:logs"))
+
+    def test_operator_can_be_revoked_via_capability_record(self) -> None:
+        from auth_middleware import user_has_capability
+
+        self.assertFalse(user_has_capability(self.revoked_operator_user, "runtime:logs"))
+
+    def test_viewer_without_capability_is_denied(self) -> None:
+        from auth_middleware import user_has_capability
+
+        self.assertFalse(user_has_capability(self.viewer_user, "runtime:logs"))
+
+    def test_viewer_with_admin_granted_capability_is_allowed(self) -> None:
+        from auth_middleware import user_has_capability
+
+        self.assertTrue(user_has_capability(self.granted_viewer_user, "runtime:logs"))
+
+    def test_unknown_capability_is_always_denied(self) -> None:
+        from auth_middleware import user_has_capability
+
+        self.assertFalse(user_has_capability(self.admin_user, "secrets:read"))
+
+    def test_ensure_capability_raises_403_for_viewer(self) -> None:
+        from fastapi import HTTPException
+
+        from auth_middleware import ensure_capability
+
+        with self.assertRaises(HTTPException) as ctx:
+            ensure_capability(self.viewer_user, "runtime:logs")
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertIn("runtime:logs", str(ctx.exception.detail))
+
+    def test_ensure_capability_passes_for_admin(self) -> None:
+        from auth_middleware import ensure_capability
+
+        # Should not raise.
+        self.assertIs(ensure_capability(self.admin_user, "runtime:logs"), self.admin_user)
+
+    def test_sanitize_capabilities_rejects_non_boolean_log_flag(self) -> None:
+        from auth_store import _sanitize_capabilities
+
+        with self.assertRaises(ValueError):
+            _sanitize_capabilities("operator", {"runtime:logs": "yes"})
+
+    def test_sanitize_capabilities_drops_unknown_keys(self) -> None:
+        from auth_store import _sanitize_capabilities
+
+        sanitized = _sanitize_capabilities("operator", {"runtime:logs": False, "secrets:read": True})
+        self.assertEqual(sanitized, {"runtime:logs": False})
+
+    def test_sanitize_capabilities_drops_admin_log_flag(self) -> None:
+        from auth_store import _sanitize_capabilities
+
+        sanitized = _sanitize_capabilities("admin", {"runtime:logs": True, "anything": False})
+        # Admin always has the capability; we don't store it, and unknown
+        # keys are dropped silently to keep the contract forward-compatible.
+        self.assertEqual(sanitized, {})
+
+
+class AdminUserCapabilitiesRouteTests(unittest.TestCase):
+    """The PATCH /admin/users/{id} route must forward `capabilities` and
+    audit it."""
+
+    def setUp(self) -> None:
+        self.admin_user = {
+            "sub": "1",
+            "username": "admin.user",
+            "role": "admin",
+            "allowed_namespaces": ["*"],
+            "capabilities": {},
+        }
+
+    def test_admin_update_user_propagates_capabilities_and_audits(self) -> None:
+        body = api_gateway_admin.UpdateUserRequest(
+            role="viewer",
+            capabilities={"runtime:logs": True},
+        )
+        existing = types.SimpleNamespace(
+            id=9,
+            username="someone",
+            role="viewer",
+            allowed_namespaces=["default"],
+            is_active=True,
+        )
+        updated = {
+            "id": 9,
+            "username": "someone",
+            "role": "viewer",
+            "allowed_namespaces": ["default"],
+            "capabilities": {"runtime:logs": True},
+            "auth_provider": "local",
+            "is_active": True,
+        }
+        custom_api = Mock()
+
+        with (
+            patch.object(api_gateway_admin, "get_user_by_id", return_value=existing),
+            patch.object(api_gateway_admin, "update_user_fields", return_value=updated) as update_user_fields,
+            patch.object(api_gateway_admin, "safe_record_audit") as record_audit,
+            patch.object(api_gateway_admin, "request_client_ip", return_value="127.0.0.1"),
+            patch.object(api_gateway_admin, "_custom_objects_api", return_value=custom_api),
+        ):
+            response = api_gateway_admin.admin_update_user(9, body, object(), user=self.admin_user)
+
+        self.assertEqual(response, updated)
+        update_user_fields.assert_called_once_with(
+            9,
+            display_name=None,
+            role="viewer",
+            is_active=None,
+            allowed_namespaces=["default", "user-someone"],
+            capabilities={"runtime:logs": True},
+        )
+        record_audit.assert_called_once()
+        audit_kwargs = record_audit.call_args.kwargs
+        self.assertEqual(audit_kwargs["action"], "admin.update-user")
+        self.assertEqual(audit_kwargs["detail"]["capabilities"], {"runtime:logs": True})
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@
     "verify:workflow": "node scripts/verify-workflow-workspace.mjs",
     "verify:intelligence": "node scripts/verify-intelligence-observatory.mjs",
     "verify:account-dialog": "node scripts/verify-account-dialog.mjs",
+    "verify:resource-logs": "node scripts/verify-resource-logs.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

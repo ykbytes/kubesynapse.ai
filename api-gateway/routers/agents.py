@@ -1336,6 +1336,7 @@ def get_agent_logs(
     user=Depends(verify_token),
 ):
     ensure_namespace_access(user, namespace)
+    ensure_capability(user, "runtime:logs")
     read_agent(agent_name, namespace)
     tail = max(1, min(tail, 5000))
     try:
@@ -1377,6 +1378,7 @@ async def stream_agent_logs(
 ):
     """Stream pod logs via SSE using Kubernetes follow=True."""
     ensure_namespace_access(user, namespace)
+    ensure_capability(user, "runtime:logs")
     read_agent(agent_name, namespace)
     tail = max(1, min(tail, 5000))
 

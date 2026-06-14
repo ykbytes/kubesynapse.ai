@@ -13,6 +13,7 @@ import {
   Shield,
   ShieldCheck,
   Sparkles,
+  Terminal,
   Trash2,
   Wand2,
   X,
@@ -39,6 +40,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ConfirmDialog } from "../shared/ConfirmDialog";
 import { ErrorDialog } from "../shared/ErrorDialog";
 import { ErrorBanner } from "../shared/ErrorBanner";
+import { ResourceLogsPanel } from "../shared/ResourceLogsPanel";
 import { ModelSelector } from "@/components/settings/ModelSelector";
 import { useManifestViewer } from "@/hooks/useManifestViewer";
 import { A2A_ALLOWED_CALLERS_PLACEHOLDER, stringifyA2APeerRefs } from "../../lib/a2a";
@@ -223,7 +225,7 @@ export function AgentManagementPanel({
   onInjectPrompt,
 }: AgentManagementPanelProps) {
   const ws = useWorkspace();
-  const { namespace, canMutate } = useConnection();
+  const { namespace, canMutate, hasCapability } = useConnection();
   
   const {
     ManifestButton,
@@ -831,6 +833,7 @@ export function AgentManagementPanel({
             <TabsTrigger value="tools">Capabilities</TabsTrigger>
             <TabsTrigger value="files">Skills & Files</TabsTrigger>
             <TabsTrigger value="advanced">Advanced</TabsTrigger>
+            <TabsTrigger value="logs" className="gap-1.5"><Terminal className="h-3.5 w-3.5" />Logs</TabsTrigger>
             <TabsTrigger value="intelligence" className="gap-1.5"><Radar className="h-3.5 w-3.5" />Intelligence</TabsTrigger>
           </TabsList>
 
@@ -1495,6 +1498,32 @@ export function AgentManagementPanel({
                   />
                   <span className="text-sm">Enable gVisor runtime class</span>
                 </label>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* ─── Logs ─── */}
+          <TabsContent value="logs" className="animate-fade-in space-y-4">
+            <Card className={PANEL_CARD_CLASS}>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Terminal className="h-4 w-4" />
+                  Live runtime logs
+                </CardTitle>
+                <CardDescription>
+                  Stream logs from this agent's runtime pod. Requires the{" "}
+                  <code className="px-1 py-0.5 rounded bg-muted text-[10px]">runtime:logs</code>{" "}
+                  capability, granted by an administrator.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResourceLogsPanel
+                  token={token}
+                  namespace={namespace}
+                  source={{ kind: "agent", agentName: agent.name }}
+                  contextLabel="container: agent-runtime"
+                  capabilityMissing={!hasCapability("runtime:logs")}
+                />
               </CardContent>
             </Card>
           </TabsContent>

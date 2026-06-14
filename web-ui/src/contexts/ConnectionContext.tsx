@@ -62,6 +62,7 @@ export interface ConnectionContextValue {
 
   // RBAC helpers
   hasRole: (minimumRole: UserRole) => boolean;
+  hasCapability: (capability: string) => boolean;
   canMutate: boolean;
   isAdmin: boolean;
 
@@ -323,6 +324,20 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     },
     [currentUser],
   );
+  const hasCapability = useCallback(
+    (capability: string) => {
+      if (!currentUser) return false;
+      if (currentUser.role === "admin") return true;
+      const flags = currentUser.capabilities ?? {};
+      // Operators default to runtime:logs; an admin can revoke by storing
+      // `false` on the user record.
+      if (currentUser.role === "operator" && capability === "runtime:logs") {
+        return flags["runtime:logs"] !== false;
+      }
+      return Boolean(flags[capability]);
+    },
+    [currentUser],
+  );
   const canMutate = hasRole("operator");
   const isAdmin = hasRole("admin");
 
@@ -343,7 +358,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     authConfig, currentUser, authBusy, connectionError, authReady,
     authUsername, authPassword, authEmail, authDisplayName, authPasswordConfirm,
     passwordProvider, registerMode,
-    hasRole, canMutate, isAdmin,
+    hasRole, hasCapability, canMutate, isAdmin,
     setToken, setNamespace: setNamespaceSafe,
     setAuthUsername, setAuthPassword, setAuthEmail, setAuthDisplayName, setAuthPasswordConfirm,
     setPasswordProvider, setRegisterMode, setConnectionError,
@@ -356,7 +371,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     authConfig, currentUser, authBusy, connectionError, authReady,
     authUsername, authPassword, authEmail, authDisplayName, authPasswordConfirm,
     passwordProvider, registerMode,
-    hasRole, canMutate, isAdmin,
+    hasRole, hasCapability, canMutate, isAdmin,
     setNamespaceSafe, handleConnect, handlePasswordAuth, handleLogout,
     handleOidcStart, handleSamlStart, doRefreshHealth, doRefreshCurrentUserProfile,
   ]);

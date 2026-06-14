@@ -196,6 +196,7 @@ def admin_update_user(
             role=body.role,
             is_active=body.is_active,
             allowed_namespaces=next_allowed_namespaces,
+            capabilities=body.capabilities,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -211,6 +212,7 @@ def admin_update_user(
             "role": updated.get("role"),
             "is_active": updated.get("is_active"),
             "allowed_namespaces": updated.get("allowed_namespaces"),
+            "capabilities": updated.get("capabilities"),
         },
         ip_address=request_client_ip(raw_request),
     )

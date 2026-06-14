@@ -485,6 +485,25 @@ function readStringArray(record: JsonRecord, key: string, label: string, fallbac
   return readStringArrayValue(value, `${label}.${key}`);
 }
 
+function readCapabilityFlags(
+  record: JsonRecord,
+  key: string,
+  _label: string,
+): Record<string, boolean> {
+  const value = record[key];
+  if (value === undefined || value === null) return {};
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const flags: Record<string, boolean> = {};
+  for (const [capability, raw] of Object.entries(value as JsonRecord)) {
+    if (typeof raw === "boolean") {
+      flags[capability] = raw;
+    }
+  }
+  return flags;
+}
+
 function readRecordArray(record: JsonRecord, key: string, label: string): JsonRecord[] {
   const value = record[key];
   if (!Array.isArray(value)) {
@@ -1090,6 +1109,7 @@ function parseAuthenticatedUserPayload(payload: unknown, label = "AuthenticatedU
     email: readOptionalString(record, "email", label),
     role,
     allowed_namespaces: readStringArray(record, "allowed_namespaces", label, []),
+    capabilities: readCapabilityFlags(record, "capabilities", label),
     auth_provider: readString(record, "auth_provider", label),
     session_id: readOptionalString(record, "session_id", label),
     is_active: readBoolean(record, "is_active", label, true),
@@ -1109,6 +1129,7 @@ function parseAdminUserPayload(payload: unknown, label = "AdminUser"): AdminUser
     display_name: readString(record, "display_name", label),
     role,
     allowed_namespaces: readStringArray(record, "allowed_namespaces", label, []),
+    capabilities: readCapabilityFlags(record, "capabilities", label),
     auth_provider: readString(record, "auth_provider", label),
     is_active: readBoolean(record, "is_active", label, true),
     created_at: readOptionalString(record, "created_at", label),

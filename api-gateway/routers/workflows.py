@@ -1096,6 +1096,7 @@ def get_workflow_logs(
     user=Depends(verify_token),
 ):
     ensure_namespace_access(user, namespace)
+    ensure_capability(user, "runtime:logs")
     tail = max(1, min(tail, 5000))
     resource = read_custom_resource("agentworkflows", workflow_name, namespace, "Workflow")
     status = (resource.get("status") or {}) if isinstance(resource, dict) else {}
@@ -1142,6 +1143,7 @@ async def stream_workflow_logs(
     user=Depends(verify_token),
 ):
     ensure_namespace_access(user, namespace)
+    ensure_capability(user, "runtime:logs")
     tail = max(1, min(tail, 5000))
     resource = read_custom_resource("agentworkflows", workflow_name, namespace, "Workflow")
     status = (resource.get("status") or {}) if isinstance(resource, dict) else {}
