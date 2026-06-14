@@ -351,7 +351,7 @@ def get_agent_manifest(
 ):
     """Return the full Kubernetes manifest for an agent."""
     ensure_namespace_access(user, namespace)
-    manifest = read_custom_resource("agents", agent_name, namespace, "Agent")
+    manifest = read_custom_resource("aiagents", agent_name, namespace, "Agent")
     return JSONResponse(content=manifest)
 
 

@@ -352,8 +352,18 @@ export function extractAgentCapabilityIds(source: AgentSignalSource): string[] {
 export function getAccessSignal(source: AgentSignalSource): AgentAccessSignal {
   const capabilityIds = new Set(extractAgentCapabilityIds(source));
   const hasMcpAttachments = extractMcpCapabilityIds(source).length > 0;
-  const hasElevatedAccess = capabilityIds.has("kubernetes") || capabilityIds.has("code-exec");
+  const hasKubernetesAccess = capabilityIds.has("kubernetes");
+  const hasElevatedAccess = hasKubernetesAccess || capabilityIds.has("code-exec");
   const hasConnectedSystems = hasElevatedAccess || hasMcpAttachments || capabilityIds.has("database") || capabilityIds.has("git") || capabilityIds.has("github") || capabilityIds.has("github-adapter");
+
+  if (hasKubernetesAccess) {
+    return {
+      label: "Cluster access",
+      description: "Kubernetes access is attached; deployment-capable agents require least-privilege RBAC and explicit approval before applying manifests",
+      icon: ShieldAlert,
+      tone: "border-amber-500/20 bg-amber-500/5 text-amber-200",
+    };
+  }
 
   if (hasElevatedAccess) {
     return {

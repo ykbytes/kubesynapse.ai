@@ -2196,6 +2196,11 @@ export async function fetchAgent(token: string, namespace: string, agentName: st
   return parseJsonResponse(response, parseAgentDetailPayload);
 }
 
+export async function fetchAgentManifest(token: string, namespace: string, agentName: string): Promise<Record<string, unknown>> {
+  const response = await fetchAuthenticated(buildUrl(`/api/agents/${agentName}/manifest`, namespace), token);
+  return parseJsonResponse(response, (payload) => expectRecord(payload, "AgentManifest"));
+}
+
 export async function discoverAgentPeers(
   token: string,
   namespace: string,
@@ -2504,6 +2509,11 @@ export async function fetchWorkflow(
 ): Promise<WorkflowInfo> {
   const response = await fetchAuthenticated(buildUrl(`/api/workflows/${workflowName}`, namespace), token);
   return parseJsonResponse(response, parseWorkflowInfoPayload);
+}
+
+export async function fetchWorkflowManifest(token: string, namespace: string, workflowName: string): Promise<Record<string, unknown>> {
+  const response = await fetchAuthenticated(buildUrl(`/api/workflows/${workflowName}/manifest`, namespace), token);
+  return parseJsonResponse(response, (payload) => expectRecord(payload, "WorkflowManifest"));
 }
 
 export async function triggerWorkflow(
@@ -2837,6 +2847,9 @@ function parseLLMCallRecordPayload(payload: unknown, label = "LLMCallRecord"): L
     provider: readOptionalString(record, "provider", label),
     prompt_tokens: readOptionalNumber(record, "prompt_tokens", label) ?? 0,
     completion_tokens: readOptionalNumber(record, "completion_tokens", label) ?? 0,
+    cache_read_tokens: readOptionalNumber(record, "cache_read_tokens", label),
+    cache_write_tokens: readOptionalNumber(record, "cache_write_tokens", label),
+    reasoning_tokens: readOptionalNumber(record, "reasoning_tokens", label),
     total_tokens: readOptionalNumber(record, "total_tokens", label) ?? 0,
     estimated_cost_usd:
       readOptionalNumber(record, "estimated_cost_usd", label) ??
@@ -2844,7 +2857,10 @@ function parseLLMCallRecordPayload(payload: unknown, label = "LLMCallRecord"): L
     latency_ms: readOptionalNumber(record, "latency_ms", label) ?? 0,
     prompt_preview: readOptionalString(record, "prompt_preview", label),
     response_preview: readOptionalString(record, "response_preview", label),
-    created_at: readOptionalString(record, "created_at", label) ?? "",
+    created_at:
+      readOptionalString(record, "created_at", label) ??
+      readOptionalString(record, "started_at", label) ??
+      "",
   };
 }
 
@@ -2906,6 +2922,9 @@ function parseStepTracePayload(payload: unknown, label = "StepTrace"): StepTrace
       readOptionalNumber(record, "duration_ms", label),
     error: readOptionalString(record, "error", label) ?? readOptionalString(record, "error_message", label),
     tokens_used: readOptionalNumber(record, "tokens_used", label),
+    cache_read_tokens: readOptionalNumber(record, "cache_read_tokens", label),
+    cache_write_tokens: readOptionalNumber(record, "cache_write_tokens", label),
+    reasoning_tokens: readOptionalNumber(record, "reasoning_tokens", label),
     cost_usd: readOptionalNumber(record, "cost_usd", label),
     llm_call_count: readOptionalNumber(record, "llm_calls_count", label) ?? 0,
     tool_call_count: readOptionalNumber(record, "tool_calls_count", label) ?? 0,
@@ -2969,6 +2988,9 @@ function parseExecutionTracePayload(payload: unknown, label = "ExecutionTrace"):
     total_tokens: readOptionalNumber(record, "total_tokens", label) ?? 0,
     prompt_tokens: readOptionalNumber(record, "prompt_tokens", label),
     completion_tokens: readOptionalNumber(record, "completion_tokens", label),
+    cache_read_tokens: readOptionalNumber(record, "cache_read_tokens", label),
+    cache_write_tokens: readOptionalNumber(record, "cache_write_tokens", label),
+    reasoning_tokens: readOptionalNumber(record, "reasoning_tokens", label),
     total_cost_usd:
       readOptionalNumber(record, "total_cost_usd", label) ??
       readOptionalNumber(record, "estimated_cost_usd", label),

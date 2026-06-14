@@ -1,24 +1,29 @@
-import { useEffect, useMemo, useRef, useState, useCallback, Fragment } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   Activity,
-  AlertTriangle,
   BookOpen,
+  Bot,
   Braces,
   BrainCircuit,
   ChevronRight,
   Code2,
   FileCode,
   FileText,
+  Gauge,
   GitCompare,
   Globe,
+  Lightbulb,
   Layers,
-  ListTree,
   LoaderCircle,
   Maximize2,
   Minimize2,
   Search,
+  Send,
+  ShieldAlert,
   Sparkles,
+  Target,
   Terminal,
+  TrendingDown,
   WrapText,
   Wrench,
 } from "lucide-react";
@@ -30,20 +35,25 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import { useConnection } from "@/contexts/ConnectionContext";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import {
   fetchWorkflowRuns,
   exportExecutionHtml,
   exportExecutionJson,
+  fetchAgentManifest,
   fetchExecutionDetail,
+  fetchWorkflowManifest,
   fetchWorkflowRunTrace,
+  invokeAgent,
+  listAgents,
   listExecutions,
   type WorkflowRunRecord,
   type WorkflowRunTraceResponse,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type { ExecutionListItem, ExecutionTrace, LLMCallRecord, StepTrace, ToolCallRecord } from "@/types";
+import type { AgentInfo, ExecutionListItem, ExecutionTrace, InvokeResponse, LLMCallRecord, StepTrace, ToolCallRecord } from "@/types";
 
 import { Highlight, type Language } from "prism-react-renderer";
 import { KubeSynapseTheme } from "@/components/docs/shared";
@@ -60,7 +70,8 @@ import { LiveActivityStream, useWorkflowActivities } from "./LiveActivityStream"
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 type LogFilterMode = "all" | "activity" | "errors" | "tooling";
-type ObservatoryTab = "overview" | "steps" | "logs" | "models" | "compare";
+type ObservatoryTab = "overview" | "trace" | "optimise" | "logs" | "compare";
+type OptimisationScope = "current" | "last6" | "last20";
 
 const LOG_ACTIVITY_KEYWORDS = [
   "tool_call", "response.tool_call", "apply_patch", "artifact", "workspace",
@@ -172,10 +183,6 @@ function tcLatency(tc: ToolCallRecord): number {
   return tc.latency_ms || tc.duration_ms || 0;
 }
 
-function tcTimestamp(tc: ToolCallRecord): string {
-  return tc.created_at || tc.started_at || "";
-}
-
 function getToolCallSummary(tc: ToolCallRecord): string {
   const name = tc.tool_name.toLowerCase();
 
@@ -226,6 +233,67 @@ function getToolDetailLabel(toolName: string): string {
   if (name.includes("apply_patch") || name.includes("edit") || name.includes("write")) return "File";
   if (name.includes("task")) return "Task";
   return "Input";
+}
+
+function CompareToolbar({
+  executions,
+  compareLeftId,
+  compareRightId,
+  setCompareLeftId,
+  setCompareRightId,
+}: {
+  executions: ExecutionListItem[];
+  compareLeftId: string | null;
+  compareRightId: string | null;
+  setCompareLeftId: (id: string | null) => void;
+  setCompareRightId: (id: string | null) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/50 bg-card/60 px-3 py-2">
+      <div className="min-w-0 flex-1">
+        <div className="text-xs font-semibold text-foreground">Compare runs</div>
+        <div className="text-[10px] text-muted-foreground">Spot duration, step, token, and tool regressions.</div>
+      </div>
+      <Select value={compareLeftId ?? undefined} onValueChange={(v) => setCompareLeftId(v || null)}>
+        <SelectTrigger className="h-8 w-60 text-xs">
+          <SelectValue placeholder="Baseline execution" />
+        </SelectTrigger>
+        <SelectContent>
+          {executions.filter((e) => e.id).map((exec) => (
+            <SelectItem key={exec.id} value={exec.id} className="text-xs">
+              {exec.status} / {formatCompactDate(exec.started_at)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <GitCompare className="h-4 w-4 text-muted-foreground" />
+      <Select value={compareRightId ?? undefined} onValueChange={(v) => setCompareRightId(v || null)}>
+        <SelectTrigger className="h-8 w-60 text-xs">
+          <SelectValue placeholder="Current execution" />
+        </SelectTrigger>
+        <SelectContent>
+          {executions.filter((e) => e.id).map((exec) => (
+            <SelectItem key={exec.id} value={exec.id} className="text-xs">
+              {exec.status} / {formatCompactDate(exec.started_at)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {executions.length >= 2 && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 text-[11px]"
+          onClick={() => {
+            setCompareLeftId(executions[1]?.id ?? null);
+            setCompareRightId(executions[0]?.id ?? null);
+          }}
+        >
+          Latest vs previous
+        </Button>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -597,6 +665,1326 @@ function buildRunTraceNotice(runTrace: WorkflowRunTraceResponse | null): string 
   return null;
 }
 
+type TraceRecordKind = "llm" | "tool" | "event";
+type TraceKindFilter = "all" | TraceRecordKind;
+type TraceStatusFilter = "all" | "completed" | "failed";
+
+interface TraceRecord {
+  id: string;
+  kind: TraceRecordKind;
+  timestamp: string;
+  timeMs: number;
+  stepId: string | null;
+  step: StepTrace | null;
+  stepLabel: string;
+  actorLabel: string;
+  title: string;
+  summary: string;
+  status: string;
+  durationMs?: number | null;
+  tokens?: number | null;
+  cost?: number | null;
+  model?: string | null;
+  toolName?: string | null;
+  eventType?: string | null;
+  searchText: string;
+  llm?: LLMCallRecord;
+  tool?: ToolCallRecord;
+  event?: ExecutionTrace["events"][number];
+}
+
+const ALL_FILTER_VALUE = "__all__";
+
+function payloadText(payload: unknown, ...keys: string[]): string | null {
+  if (payload == null) return null;
+  if (typeof payload === "string") return payload.trim() || null;
+  if (typeof payload !== "object" || Array.isArray(payload)) {
+    try {
+      return JSON.stringify(payload);
+    } catch {
+      return null;
+    }
+  }
+  const record = payload as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+    if (typeof value === "boolean") return String(value);
+  }
+  try {
+    const compact = JSON.stringify(record);
+    return compact.length > 180 ? `${compact.slice(0, 180)}...` : compact;
+  } catch {
+    return null;
+  }
+}
+
+function normalizedStatus(status?: string | null): string {
+  return (status ?? "unknown").toLowerCase();
+}
+
+function isFailedStatus(status?: string | null): boolean {
+  const s = normalizedStatus(status);
+  return s.includes("fail") || s.includes("error") || s.includes("denied") || s.includes("reject");
+}
+
+function eventTitle(eventType: string): string {
+  return eventType.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function summarizeEventPayload(payload: Record<string, unknown>): string {
+  const direct = payloadText(payload, "message", "error", "status", "tool_name", "model", "decision", "artifact", "path");
+  if (direct) return direct;
+  const entries = Object.entries(payload).filter(([, value]) => value !== null && value !== undefined);
+  if (entries.length === 0) return "No payload captured";
+  return entries.slice(0, 3).map(([key, value]) => {
+    const rendered = typeof value === "string" ? value : JSON.stringify(value);
+    return `${key}: ${rendered.length > 80 ? `${rendered.slice(0, 80)}...` : rendered}`;
+  }).join(" · ");
+}
+
+function buildStepIndex(steps: StepTrace[]): Map<string, StepTrace> {
+  const index = new Map<string, StepTrace>();
+  for (const step of steps) {
+    if (step.id) index.set(step.id, step);
+    if (step.name) index.set(step.name, step);
+  }
+  return index;
+}
+
+function actorForRecord(detail: ExecutionTrace, step: StepTrace | null, payload?: Record<string, unknown>): string {
+  return (
+    payloadText(payload ?? {}, "agent_name", "agent", "actor", "runtime_kind") ??
+    detail.agent_name ??
+    step?.step_type ??
+    "agent"
+  );
+}
+
+function stepLabelForRecord(step: StepTrace | null, stepId?: string | null): string {
+  if (step) return getStepLabel(step);
+  return stepId ? `Step ${stepId}` : "Execution";
+}
+
+function recordTimestamp(value: string | null | undefined, fallback: string | null | undefined): string {
+  return value || fallback || "";
+}
+
+function buildTraceRecords(detail: ExecutionTrace, orderedSteps: StepTrace[], orderedEvents: ExecutionTrace["events"]): TraceRecord[] {
+  const stepIndex = buildStepIndex(orderedSteps);
+  const fallbackTimestamp = detail.started_at ?? detail.created_at ?? "";
+  const records: TraceRecord[] = [];
+
+  for (const call of detail.llm_calls) {
+    const step = call.step_id ? stepIndex.get(call.step_id) ?? null : null;
+    const timestamp = recordTimestamp(call.created_at, step?.completed_at ?? step?.started_at ?? fallbackTimestamp);
+    const tokens = call.total_tokens || call.prompt_tokens + call.completion_tokens;
+    const summary = call.response_preview || call.prompt_preview || "No prompt or response preview captured";
+    const actorLabel = actorForRecord(detail, step);
+    const stepLabel = stepLabelForRecord(step, call.step_id);
+    records.push({
+      id: `llm:${call.id}`,
+      kind: "llm",
+      timestamp,
+      timeMs: Date.parse(timestamp),
+      stepId: call.step_id ?? null,
+      step,
+      stepLabel,
+      actorLabel,
+      title: call.model || "LLM call",
+      summary,
+      status: "completed",
+      durationMs: call.latency_ms,
+      tokens,
+      cost: call.estimated_cost_usd,
+      model: call.model,
+      searchText: ["llm", call.model, call.provider, stepLabel, actorLabel, summary].filter(Boolean).join(" "),
+      llm: call,
+    });
+  }
+
+  for (const tool of detail.tool_calls) {
+    const step = tool.step_id ? stepIndex.get(tool.step_id) ?? null : null;
+    const timestamp = recordTimestamp(tool.created_at ?? tool.started_at, step?.completed_at ?? step?.started_at ?? fallbackTimestamp);
+    const summary = getToolCallSummary(tool) || tool.error_message || "No tool input captured";
+    const actorLabel = actorForRecord(detail, step);
+    const stepLabel = stepLabelForRecord(step, tool.step_id);
+    records.push({
+      id: `tool:${tool.id}`,
+      kind: "tool",
+      timestamp,
+      timeMs: Date.parse(timestamp),
+      stepId: tool.step_id ?? null,
+      step,
+      stepLabel,
+      actorLabel,
+      title: tool.tool_name || "Tool call",
+      summary,
+      status: tool.status,
+      durationMs: tcLatency(tool),
+      toolName: tool.tool_name,
+      searchText: ["tool", tool.tool_name, tool.status, stepLabel, actorLabel, summary, tool.error_message].filter(Boolean).join(" "),
+      tool,
+    });
+  }
+
+  for (const event of orderedEvents) {
+    const step = event.step_id ? stepIndex.get(event.step_id) ?? null : null;
+    const actorLabel = actorForRecord(detail, step, event.payload);
+    const stepLabel = stepLabelForRecord(step, event.step_id);
+    const status = payloadText(event.payload, "status", "severity") ?? (event.event_type.includes("FAILED") || event.event_type === "ERROR" ? "failed" : "event");
+    const summary = summarizeEventPayload(event.payload);
+    records.push({
+      id: `event:${event.id}`,
+      kind: "event",
+      timestamp: event.timestamp,
+      timeMs: Date.parse(event.timestamp),
+      stepId: event.step_id ?? null,
+      step,
+      stepLabel,
+      actorLabel,
+      title: eventTitle(event.event_type),
+      summary,
+      status,
+      eventType: event.event_type,
+      searchText: ["event", event.event_type, status, stepLabel, actorLabel, summary].filter(Boolean).join(" "),
+      event,
+    });
+  }
+
+  return records.sort((a, b) => {
+    const aTime = Number.isFinite(a.timeMs) ? a.timeMs : Number.MAX_SAFE_INTEGER;
+    const bTime = Number.isFinite(b.timeMs) ? b.timeMs : Number.MAX_SAFE_INTEGER;
+    if (aTime !== bTime) return aTime - bTime;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+function traceKindClasses(kind: TraceRecordKind): string {
+  if (kind === "llm") return "border-violet-500/40 bg-violet-500/8 text-violet-700 dark:text-violet-300";
+  if (kind === "tool") return "border-sky-500/40 bg-sky-500/8 text-sky-700 dark:text-sky-300";
+  return "border-slate-500/30 bg-slate-500/8 text-slate-700 dark:text-slate-300";
+}
+
+function statusTextClasses(status: string): string {
+  if (isFailedStatus(status)) return "text-red-500";
+  if (normalizedStatus(status).includes("completed") || normalizedStatus(status).includes("success")) return "text-emerald-600 dark:text-emerald-400";
+  return "text-muted-foreground";
+}
+
+type OptimisationPacket = {
+  generated_at: string;
+  namespace: string;
+  workflow_name: string;
+  selected_scope: OptimisationScope;
+  selected_agent: string | null;
+  objective: string[];
+  guardrails: string[];
+  current_execution: Record<string, unknown>;
+  source_manifests: {
+    workflow: Record<string, unknown> | null;
+    agent_refs: string[];
+    agents: Record<string, Record<string, unknown>>;
+    primary_agent: Record<string, unknown> | null;
+  };
+  deployment_access_model: {
+    current_run_mode: string;
+    apply_allowed_in_this_run: boolean;
+    required_for_apply: string[];
+    least_privilege_notes: string[];
+  };
+  run_history: Array<Record<string, unknown>>;
+  opportunity_map: Array<Record<string, unknown>>;
+  step_metrics: Array<Record<string, unknown>>;
+  trace_details: Array<Record<string, unknown>>;
+};
+
+function optimisationScopeLimit(scope: OptimisationScope): number {
+  if (scope === "current") return 1;
+  if (scope === "last6") return 6;
+  return 20;
+}
+
+function compactNumber(value?: number | null): number {
+  return value != null && Number.isFinite(value) ? value : 0;
+}
+
+function stepMatchesId(step: StepTrace, id?: string | null): boolean {
+  return Boolean(id && (step.id === id || step.name === id));
+}
+
+function callsForStep<T extends { step_id?: string | null }>(step: StepTrace, calls: T[]): T[] {
+  return calls.filter((call) => stepMatchesId(step, call.step_id));
+}
+
+function topEntry(items: string[]): { name: string; count: number } | null {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    if (!item.trim()) continue;
+    counts.set(item, (counts.get(item) ?? 0) + 1);
+  }
+  const entries = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  return entries.length > 0 ? { name: entries[0][0], count: entries[0][1] } : null;
+}
+
+function maxEventGapMs(events: ExecutionTrace["events"]): number {
+  const times = events
+    .map((event) => new Date(event.timestamp).getTime())
+    .filter((time) => Number.isFinite(time))
+    .sort((a, b) => a - b);
+  let maxGap = 0;
+  for (let index = 1; index < times.length; index += 1) {
+    maxGap = Math.max(maxGap, times[index] - times[index - 1]);
+  }
+  return maxGap;
+}
+
+function compactPreview(value?: string | null, max = 480): string | null {
+  if (!value) return null;
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > max ? `${normalized.slice(0, max)}...` : normalized;
+}
+
+function extractWorkflowAgentRefs(manifest: Record<string, unknown> | null): string[] {
+  const spec = manifest?.spec;
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) return [];
+  const steps = (spec as Record<string, unknown>).steps;
+  if (!Array.isArray(steps)) return [];
+  const refs = new Set<string>();
+  for (const item of steps) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const ref = (item as Record<string, unknown>).agentRef;
+    if (typeof ref === "string" && ref.trim()) refs.add(ref.trim());
+  }
+  return [...refs];
+}
+
+function buildOptimisationStepMetrics(detail: ExecutionTrace, orderedSteps: StepTrace[], orderedEvents: ExecutionTrace["events"]) {
+  return orderedSteps.map((step) => {
+    const llmCalls = step.llm_calls.length > 0 ? step.llm_calls : callsForStep(step, detail.llm_calls);
+    const toolCalls = step.tool_calls.length > 0 ? step.tool_calls : callsForStep(step, detail.tool_calls);
+    const eventCount = orderedEvents.filter((event) => stepMatchesId(step, event.step_id)).length;
+    const tokens = compactNumber(step.tokens_used) || llmCalls.reduce((sum, call) => sum + compactNumber(call.total_tokens), 0);
+    const cost = compactNumber(step.cost_usd) || llmCalls.reduce((sum, call) => sum + compactNumber(call.cost_usd ?? call.estimated_cost_usd), 0);
+    const toolNames = Array.from(new Set(toolCalls.map((call) => call.tool_name).filter(Boolean)));
+    const models = Array.from(new Set(llmCalls.map((call) => call.model).filter(Boolean)));
+    const issues = [
+      compactNumber(step.latency_ms) > 60_000 ? "slow_step" : null,
+      toolCalls.length > 4 ? "tool_churn" : null,
+      tokens > 8000 ? "token_pressure" : null,
+      step.error || isFailedStatus(step.status) ? "failure_risk" : null,
+    ].filter(Boolean);
+    return {
+      id: step.id,
+      name: step.name,
+      label: getStepLabel(step),
+      type: step.step_type ?? "agent",
+      status: step.status,
+      duration_ms: compactNumber(step.latency_ms),
+      llm_calls: llmCalls.length,
+      tool_calls: toolCalls.length,
+      events: eventCount,
+      tokens,
+      cost_usd: cost > 0 ? Number(cost.toFixed(6)) : 0,
+      models,
+      tools: toolNames,
+      issues,
+      input_preview: compactPreview(step.input_preview, 360),
+      output_preview: compactPreview(step.output_preview, 360),
+    };
+  });
+}
+
+function buildOptimisationPacket({
+  detail,
+  orderedSteps,
+  orderedEvents,
+  executions,
+  scopedDetails,
+  workflowManifest,
+  agentManifests,
+  namespace,
+  workflowName,
+  selectedAgent,
+  scope,
+}: {
+  detail: ExecutionTrace;
+  orderedSteps: StepTrace[];
+  orderedEvents: ExecutionTrace["events"];
+  executions: ExecutionListItem[];
+  scopedDetails: ExecutionTrace[];
+  workflowManifest: Record<string, unknown> | null;
+  agentManifests: Record<string, Record<string, unknown>>;
+  namespace: string;
+  workflowName: string;
+  selectedAgent: string | null;
+  scope: OptimisationScope;
+}): OptimisationPacket {
+  const scopeLimit = optimisationScopeLimit(scope);
+  const details = scopedDetails.length > 0 ? scopedDetails.slice(0, scopeLimit) : [detail];
+  const stepMetrics = buildOptimisationStepMetrics(detail, orderedSteps, orderedEvents);
+  const slowestStep = [...stepMetrics].sort((a, b) => Number(b.duration_ms) - Number(a.duration_ms))[0] ?? null;
+  const topTool = topEntry(detail.tool_calls.map((call) => call.tool_name));
+  const topModel = topEntry(detail.llm_calls.map((call) => call.model));
+  const failedRuns = executions.filter((execution) => isFailedStatus(execution.status)).length;
+  const medianDurationMs = (() => {
+    const durations = executions.map((execution) => compactNumber(execution.duration_ms)).filter((value) => value > 0).sort((a, b) => a - b);
+    if (durations.length === 0) return 0;
+    return durations[Math.floor(durations.length / 2)];
+  })();
+  const eventGapMs = maxEventGapMs(orderedEvents);
+  const currentDurationMs = compactNumber(detail.duration_ms);
+  const agentRefs = Object.keys(agentManifests);
+  const primaryAgent =
+    (detail.agent_name && agentManifests[detail.agent_name]) ||
+    agentManifests[agentRefs[0]] ||
+    null;
+  const opportunityMap = [
+    {
+      label: "Latency bottleneck",
+      signal: slowestStep ? `${slowestStep.label} at ${formatDuration(Number(slowestStep.duration_ms))}` : "No step timing",
+      data: slowestStep,
+      recommendation: "Inspect whether the slowest step is waiting on tools, repeating planning, or doing work that can move earlier or run in parallel.",
+    },
+    {
+      label: "Token pressure",
+      signal: `${detail.total_tokens.toLocaleString()} tokens, ${detail.llm_call_count} LLM calls`,
+      data: {
+        prompt_tokens: detail.prompt_tokens ?? 0,
+        completion_tokens: detail.completion_tokens ?? 0,
+        cache_read_tokens: detail.cache_read_tokens ?? 0,
+        cache_write_tokens: detail.cache_write_tokens ?? 0,
+        reasoning_tokens: detail.reasoning_tokens ?? 0,
+        top_model: topModel,
+      },
+      recommendation: "Find prompt sections that can become persistent instructions, reusable files, cached context, or smaller step-specific prompts.",
+    },
+    {
+      label: "Tool churn",
+      signal: `${detail.tool_call_count} tool calls${topTool ? `, top tool ${topTool.name} x${topTool.count}` : ""}`,
+      data: { top_tool: topTool, tools: Array.from(new Set(detail.tool_calls.map((call) => call.tool_name))) },
+      recommendation: "Collapse repeated reads/writes, batch related lookups, and move deterministic checks out of LLM planning loops.",
+    },
+    {
+      label: "Run variance",
+      signal: medianDurationMs > 0 ? `${formatDuration(currentDurationMs)} current vs ${formatDuration(medianDurationMs)} median` : "Not enough history",
+      data: { failed_runs: failedRuns, loaded_runs: executions.length, max_event_gap_ms: eventGapMs },
+      recommendation: "Compare recent executions for unstable steps, long quiet gaps, or failure-prone handoffs before changing contracts.",
+    },
+  ];
+
+  return {
+    generated_at: new Date().toISOString(),
+    namespace,
+    workflow_name: workflowName,
+    selected_scope: scope,
+    selected_agent: selectedAgent,
+    objective: [
+      "Reduce wall-clock time for the selected workflow.",
+      "Reduce prompt, completion, cache, and reasoning token use.",
+      "Reduce unnecessary tool calls and repeated context loading.",
+      "Preserve the workflow contract, output schema, artifacts, and step handoffs.",
+    ],
+    guardrails: [
+      "Do not mutate files, workflow definitions, cluster resources, or credentials in this analysis run.",
+      "Return an optimized copy of the Kubernetes manifests, not an in-place patch.",
+      "Name optimized resources with an explicit suffix such as -opt or -candidate and preserve labels needed for ownership/audit.",
+      "Applying or running optimized manifests requires a separate admin-created deployment-capable agent with least-privilege RBAC.",
+      "Call out contract-breaking changes explicitly and provide migration notes.",
+      "Prefer lower-risk prompt, context, caching, batching, and routing improvements before structural rewrites.",
+    ],
+    current_execution: {
+      id: detail.id,
+      run_id: detail.run_id,
+      status: detail.status,
+      agent_name: detail.agent_name,
+      duration_ms: detail.duration_ms,
+      started_at: detail.started_at,
+      completed_at: detail.completed_at,
+      steps: detail.step_count,
+      llm_calls: detail.llm_call_count,
+      tool_calls: detail.tool_call_count,
+      total_tokens: detail.total_tokens,
+      prompt_tokens: detail.prompt_tokens ?? 0,
+      completion_tokens: detail.completion_tokens ?? 0,
+      cache_read_tokens: detail.cache_read_tokens ?? 0,
+      cache_write_tokens: detail.cache_write_tokens ?? 0,
+      reasoning_tokens: detail.reasoning_tokens ?? 0,
+      total_cost_usd: detail.total_cost_usd ?? null,
+      input_preview: compactPreview(detail.input_preview, 600),
+      output_preview: compactPreview(detail.output_preview, 600),
+      error_message: detail.error_message ?? null,
+    },
+    source_manifests: {
+      workflow: workflowManifest,
+      agent_refs: agentRefs,
+      agents: agentManifests,
+      primary_agent: primaryAgent,
+    },
+    deployment_access_model: {
+      current_run_mode: "analysis_only",
+      apply_allowed_in_this_run: false,
+      required_for_apply: [
+        "Admin-created optimisation/deployment agent",
+        "Namespace-scoped get/list/watch/create/patch/delete only for AIAgent and AgentWorkflow resources plus required ConfigMaps/Secrets by name",
+        "Explicit approval before kubectl apply, trigger, or cleanup",
+        "Audit event linking source execution, candidate manifests, selected agent, and user",
+      ],
+      least_privilege_notes: [
+        "Normal optimisation agents should read traces and manifests only.",
+        "Deployment-capable agents should be visually marked as elevated on agent cards.",
+        "Candidate resources should be deployed as copies and cleaned up after comparison runs.",
+      ],
+    },
+    run_history: executions.slice(0, scopeLimit).map((execution) => ({
+      id: execution.id,
+      run_id: execution.run_id,
+      status: execution.status,
+      agent_name: execution.agent_name,
+      started_at: execution.started_at,
+      completed_at: execution.completed_at,
+      duration_ms: execution.duration_ms,
+      step_count: execution.step_count,
+      llm_calls: execution.llm_call_count,
+      tool_calls: execution.tool_call_count,
+      total_tokens: execution.total_tokens,
+      cache_read_tokens: execution.cache_read_tokens ?? 0,
+      cache_write_tokens: execution.cache_write_tokens ?? 0,
+      reasoning_tokens: execution.reasoning_tokens ?? 0,
+      total_cost_usd: execution.total_cost_usd ?? null,
+    })),
+    opportunity_map: opportunityMap,
+    step_metrics: stepMetrics,
+    trace_details: details.map((trace) => ({
+      id: trace.id,
+      run_id: trace.run_id,
+      status: trace.status,
+      duration_ms: trace.duration_ms,
+      total_tokens: trace.total_tokens,
+      llm_call_count: trace.llm_call_count,
+      tool_call_count: trace.tool_call_count,
+      event_count: trace.events.length,
+      steps: trace.steps.map((step) => ({
+        id: step.id,
+        name: step.name,
+        type: step.step_type,
+        status: step.status,
+        duration_ms: step.latency_ms,
+        tokens: step.tokens_used ?? step.llm_calls.reduce((sum, call) => sum + compactNumber(call.total_tokens), 0),
+        llm_calls: step.llm_calls.length,
+        tool_calls: step.tool_calls.length,
+        input_preview: compactPreview(step.input_preview, 300),
+        output_preview: compactPreview(step.output_preview, 300),
+      })),
+      llm_calls: trace.llm_calls.map((call) => ({
+        id: call.id,
+        step_id: call.step_id,
+        model: call.model,
+        provider: call.provider,
+        latency_ms: call.latency_ms,
+        prompt_tokens: call.prompt_tokens,
+        completion_tokens: call.completion_tokens,
+        cache_read_tokens: call.cache_read_tokens ?? 0,
+        cache_write_tokens: call.cache_write_tokens ?? 0,
+        reasoning_tokens: call.reasoning_tokens ?? 0,
+        total_tokens: call.total_tokens,
+        cost_usd: call.cost_usd ?? call.estimated_cost_usd ?? null,
+        prompt_preview: compactPreview(call.prompt_preview, 420),
+        response_preview: compactPreview(call.response_preview, 420),
+      })),
+      tool_calls: trace.tool_calls.map((call) => ({
+        id: call.id,
+        step_id: call.step_id,
+        tool_name: call.tool_name,
+        status: call.status,
+        latency_ms: call.latency_ms,
+        duration_ms: call.duration_ms,
+        args_preview: compactPreview(call.args_preview ?? payloadText(call.tool_args ?? {}), 360),
+        result_preview: compactPreview(call.result_preview ?? payloadText(call.tool_result), 360),
+        error_message: call.error_message ?? null,
+      })),
+      events: trace.events.slice(0, 80).map((event) => ({
+        id: event.id,
+        step_id: event.step_id,
+        type: event.event_type,
+        timestamp: event.timestamp,
+        summary: summarizeEventPayload(event.payload),
+      })),
+    })),
+  };
+}
+
+function buildOptimisationPrompt(packet: OptimisationPacket): string {
+  return [
+    "You are a senior AI workflow optimisation engineer for KubeSynapse.",
+    "",
+    "Goal: analyse the provided execution traces and Kubernetes manifests, then propose an optimized copy of the workflow and agent manifests that reduces latency, token spend, tool churn, and failure risk while preserving the workflow contract.",
+    "",
+    "Rules:",
+    "- Do not modify files, workflow definitions, cluster resources, credentials, or external systems.",
+    "- Treat this as an analysis-only optimisation review.",
+    "- Generate candidate manifests as copies with new names, labels, and clear diff notes. Do not propose in-place mutation as the default.",
+    "- If a test-run loop is useful, describe the loop and required permissions, but do not run kubectl or apply anything.",
+    "- Any apply/run capability must be handled by a separate admin-created agent with least-privilege Kubernetes RBAC and explicit user approval.",
+    "- Preserve existing step outputs, artifact paths, schemas, handoff semantics, and security boundaries unless you explicitly mark a breaking change and provide migration steps.",
+    "- Prefer prompt/context/model/tool-use improvements before proposing structural rewrites.",
+    "",
+    "Return Markdown with these sections:",
+    "1. Executive recommendation with expected savings.",
+    "2. Ranked bottlenecks with evidence from step, LLM, tool, and event data.",
+    "3. Prompt edits per step or agent, written as ready-to-review snippets.",
+    "4. Optimized Kubernetes manifests for copied workflow/agent resources.",
+    "5. Proposed run loop: baseline, candidate execution, comparison criteria, rollback and cleanup.",
+    "6. RBAC and approval requirements for any deployment-capable agent.",
+    "",
+    "Trace packet:",
+    JSON.stringify(packet, null, 2),
+  ].join("\n");
+}
+
+function TraceExplorer({
+  detail,
+  orderedSteps,
+  orderedEvents,
+  selectedStepId,
+  onStepSelect,
+  selectedEventId,
+  onEventSelect,
+  onOpenLLM,
+}: {
+  detail: ExecutionTrace | null;
+  orderedSteps: StepTrace[];
+  orderedEvents: ExecutionTrace["events"];
+  selectedStepId: string | null;
+  onStepSelect: (stepId: string | null) => void;
+  selectedEventId: string | null;
+  onEventSelect: (eventId: string | null) => void;
+  onOpenLLM: (call: LLMCallRecord) => void;
+}) {
+  const [kindFilter, setKindFilter] = useState<TraceKindFilter>("all");
+  const [agentFilter, setAgentFilter] = useState(ALL_FILTER_VALUE);
+  const [toolFilter, setToolFilter] = useState(ALL_FILTER_VALUE);
+  const [modelFilter, setModelFilter] = useState(ALL_FILTER_VALUE);
+  const [statusFilter, setStatusFilter] = useState<TraceStatusFilter>("all");
+  const [traceSearch, setTraceSearch] = useState("");
+  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
+
+  const traceRecords = useMemo(
+    () => (detail ? buildTraceRecords(detail, orderedSteps, orderedEvents) : []),
+    [detail, orderedEvents, orderedSteps],
+  );
+
+  const agentOptions = useMemo(
+    () => Array.from(new Set(traceRecords.map((record) => record.actorLabel).filter(Boolean))).sort(),
+    [traceRecords],
+  );
+  const toolOptions = useMemo(
+    () => Array.from(new Set(traceRecords.map((record) => record.toolName).filter(Boolean) as string[])).sort(),
+    [traceRecords],
+  );
+  const modelOptions = useMemo(
+    () => Array.from(new Set(traceRecords.map((record) => record.model).filter(Boolean) as string[])).sort(),
+    [traceRecords],
+  );
+
+  useEffect(() => {
+    setSelectedRecordId(null);
+    setKindFilter("all");
+    setAgentFilter(ALL_FILTER_VALUE);
+    setToolFilter(ALL_FILTER_VALUE);
+    setModelFilter(ALL_FILTER_VALUE);
+    setStatusFilter("all");
+    setTraceSearch("");
+  }, [detail?.id]);
+
+  const kindCounts = useMemo(() => ({
+    all: traceRecords.length,
+    llm: traceRecords.filter((record) => record.kind === "llm").length,
+    tool: traceRecords.filter((record) => record.kind === "tool").length,
+    event: traceRecords.filter((record) => record.kind === "event").length,
+  }), [traceRecords]);
+
+  const selectedStep = useMemo(
+    () => orderedSteps.find((step) => step.id === selectedStepId) ?? null,
+    [orderedSteps, selectedStepId],
+  );
+
+  const filteredRecords = useMemo(() => {
+    const query = traceSearch.trim().toLowerCase();
+    return traceRecords.filter((record) => {
+      if (selectedStepId && record.stepId !== selectedStepId) return false;
+      if (kindFilter !== "all" && record.kind !== kindFilter) return false;
+      if (agentFilter !== ALL_FILTER_VALUE && record.actorLabel !== agentFilter) return false;
+      if (toolFilter !== ALL_FILTER_VALUE && record.toolName !== toolFilter) return false;
+      if (modelFilter !== ALL_FILTER_VALUE && record.model !== modelFilter) return false;
+      if (statusFilter === "failed" && !isFailedStatus(record.status)) return false;
+      if (statusFilter === "completed" && !(normalizedStatus(record.status).includes("completed") || normalizedStatus(record.status).includes("success"))) return false;
+      if (query && !record.searchText.toLowerCase().includes(query)) return false;
+      return true;
+    });
+  }, [agentFilter, kindFilter, modelFilter, selectedStepId, statusFilter, toolFilter, traceRecords, traceSearch]);
+
+  const activeRecord =
+    filteredRecords.find((record) => record.id === selectedRecordId) ??
+    (selectedEventId ? filteredRecords.find((record) => record.event?.id === selectedEventId) : undefined) ??
+    filteredRecords[0] ??
+    null;
+  const contextStep = activeRecord?.step ?? selectedStep;
+  const contextStepEvents = contextStep ? orderedEvents.filter((event) => event.step_id === contextStep.id || event.step_id === contextStep.name) : [];
+
+  if (!detail) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+        Execution trace data appears once indexed execution detail is available.
+      </div>
+    );
+  }
+
+  const clearFilters = () => {
+    onStepSelect(null);
+    setKindFilter("all");
+    setAgentFilter(ALL_FILTER_VALUE);
+    setToolFilter(ALL_FILTER_VALUE);
+    setModelFilter(ALL_FILTER_VALUE);
+    setStatusFilter("all");
+    setTraceSearch("");
+    setSelectedRecordId(null);
+    onEventSelect(null);
+  };
+
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="shrink-0 border-b border-border/40 bg-card/30 px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="min-w-[14rem] flex-1">
+            <h3 className="text-sm font-semibold text-foreground">Execution Trace</h3>
+            <p className="text-[11px] text-muted-foreground">
+              {detail.llm_calls.length} LLM calls · {detail.tool_calls.length} tool calls · {orderedEvents.length} events, joined by step and agent.
+            </p>
+          </div>
+          <div className="relative min-w-[14rem] flex-1">
+            <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={traceSearch}
+              onChange={(event) => setTraceSearch(event.target.value)}
+              placeholder="Search model, tool, path, prompt, event"
+              className="h-8 pl-7 text-xs"
+            />
+          </div>
+          <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={clearFilters}>
+            Clear
+          </Button>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-0.5 rounded-md border border-border/50 bg-background p-0.5">
+            {(["all", "llm", "tool", "event"] as TraceKindFilter[]).map((kind) => (
+              <button
+                key={kind}
+                type="button"
+                onClick={() => setKindFilter(kind)}
+                className={cn(
+                  "rounded px-2 py-1 text-[10px] font-medium capitalize transition-colors",
+                  kindFilter === kind ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                )}
+              >
+                {kind === "all" ? "All" : kind} {kindCounts[kind]}
+              </button>
+            ))}
+          </div>
+          <Select value={agentFilter} onValueChange={setAgentFilter}>
+            <SelectTrigger className="h-8 w-40 text-xs">
+              <SelectValue placeholder="All agents" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_FILTER_VALUE}>All agents</SelectItem>
+              {agentOptions.map((agent) => <SelectItem key={agent} value={agent}>{agent}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={toolFilter} onValueChange={setToolFilter}>
+            <SelectTrigger className="h-8 w-40 text-xs">
+              <SelectValue placeholder="Filter by tool" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_FILTER_VALUE}>Filter by tool</SelectItem>
+              {toolOptions.map((tool) => <SelectItem key={tool} value={tool}>{tool}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={modelFilter} onValueChange={setModelFilter}>
+            <SelectTrigger className="h-8 w-52 text-xs">
+              <SelectValue placeholder="All models" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_FILTER_VALUE}>All models</SelectItem>
+              {modelOptions.map((model) => <SelectItem key={model} value={model}>{model}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as TraceStatusFilter)}>
+            <SelectTrigger className="h-8 w-36 text-xs">
+              <SelectValue placeholder="All status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All status</SelectItem>
+              <SelectItem value="completed">Completed</SelectItem>
+              <SelectItem value="failed">Failed/error</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[13rem_minmax(22rem,0.78fr)_minmax(30rem,1.22fr)]">
+        <div className="min-h-0 border-b border-border/40 xl:border-b-0 xl:border-r">
+          <div className="flex items-center justify-between border-b border-border/30 px-3 py-2">
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Agent / step</div>
+              <div className="text-xs font-medium text-foreground">{detail.agent_name ?? "workflow agent"}</div>
+            </div>
+            <Badge variant="outline" className="text-[10px]">{orderedSteps.length}</Badge>
+          </div>
+          <ScrollArea className="h-full">
+            <div className="space-y-1 p-2">
+              <button
+                type="button"
+                onClick={() => onStepSelect(null)}
+                className={cn(
+                  "w-full rounded-md border px-2.5 py-2 text-left transition-colors",
+                  selectedStepId === null ? "border-primary/40 bg-primary/8" : "border-border/40 bg-card/40 hover:bg-accent/30",
+                )}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-foreground">All execution</span>
+                  <span className="text-[10px] text-muted-foreground">{traceRecords.length} records</span>
+                </div>
+                <div className="mt-1 text-[10px] text-muted-foreground">
+                  {detail.llm_calls.length} LLM · {detail.tool_calls.length} tools · {orderedEvents.length} events
+                </div>
+              </button>
+              {orderedSteps.map((step) => {
+                const isActive = step.id === selectedStepId;
+                const stepEvents = orderedEvents.filter((event) => event.step_id === step.id || event.step_id === step.name).length;
+                const failed = isFailedStatus(step.status) || step.error;
+                return (
+                  <button
+                    key={step.id}
+                    type="button"
+                    onClick={() => onStepSelect(step.id)}
+                    className={cn(
+                      "w-full rounded-md border px-2.5 py-2 text-left transition-colors",
+                      isActive ? "border-primary/50 bg-primary/8" : "border-border/40 bg-card/30 hover:bg-accent/30",
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className={cn("h-2 w-2 shrink-0 rounded-full", failed ? "bg-red-500" : "bg-sky-500")} />
+                      <span className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">{getStepLabel(step)}</span>
+                    </div>
+                    <div className="mt-1 truncate text-[10px] text-muted-foreground">
+                      {(step.step_type || detail.agent_name || "agent")} · {formatDuration(step.latency_ms)}
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-1 text-[9px] text-muted-foreground">
+                      <span>{step.llm_calls.length || step.llm_call_count || 0} LLM</span>
+                      <span>{step.tool_calls.length || step.tool_call_count || 0} tools</span>
+                      <span>{stepEvents} events</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </ScrollArea>
+        </div>
+
+        <div className="min-h-0 overflow-hidden border-b border-border/40 xl:border-b-0 xl:border-r">
+          <div className="flex items-center justify-between border-b border-border/30 px-3 py-2">
+            <div className="text-xs font-semibold text-foreground">Chronology</div>
+            <div className="text-[10px] text-muted-foreground">
+              {filteredRecords.length} of {traceRecords.length} records
+            </div>
+          </div>
+          <ScrollArea className="h-full">
+            <div className="space-y-1.5 p-2">
+              {filteredRecords.length === 0 && (
+                <div className="rounded-lg border border-dashed border-border/50 py-12 text-center text-xs text-muted-foreground">
+                  No trace records match the current filters.
+                </div>
+              )}
+              {filteredRecords.map((record) => {
+                const isActive = activeRecord?.id === record.id;
+                const ToolIcon = record.kind === "tool" && record.toolName ? getToolIcon(record.toolName) : null;
+                return (
+                  <button
+                    key={record.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedRecordId(record.id);
+                      onStepSelect(record.step?.id ?? null);
+                      onEventSelect(record.event?.id ?? null);
+                    }}
+                    className={cn(
+                      "w-full rounded-lg border px-3 py-2 text-left transition-colors",
+                      isActive ? "border-primary/50 bg-primary/8" : "border-border/45 bg-card/35 hover:bg-accent/25",
+                    )}
+                  >
+                    <div className="flex items-start gap-2">
+                      <Badge variant="outline" className={cn("mt-0.5 h-5 px-1.5 text-[9px] uppercase", traceKindClasses(record.kind))}>
+                        {record.kind}
+                      </Badge>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                          {ToolIcon && <ToolIcon className={cn("h-3.5 w-3.5 shrink-0", getToolIconColor(record.toolName ?? ""))} />}
+                          <span className="truncate text-xs font-semibold text-foreground">{record.title}</span>
+                          <span className={cn("shrink-0 text-[10px] font-medium", statusTextClasses(record.status))}>{record.status}</span>
+                        </div>
+                        <p className="mt-1 line-clamp-1 text-[11px] text-muted-foreground">{record.summary}</p>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+                          <span className="tabular-nums">{record.timestamp ? formatCompactDate(record.timestamp) : "--"}</span>
+                          <span className="truncate">Agent: {record.actorLabel}</span>
+                          <span className="truncate">Step: {record.stepLabel}</span>
+                          {record.durationMs != null && record.durationMs > 0 && <span>{formatDuration(record.durationMs)}</span>}
+                          {record.tokens != null && record.tokens > 0 && <span>{record.tokens.toLocaleString()} tokens</span>}
+                          {record.cost != null && record.cost > 0 && <span>{formatCurrency(record.cost)}</span>}
+                        </div>
+                      </div>
+                      <ChevronRight className={cn("mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform", isActive && "rotate-90 text-primary")} />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </ScrollArea>
+        </div>
+
+        <div className="min-h-0 overflow-hidden">
+          <div className="border-b border-border/30 px-3 py-2">
+            <div className="text-xs font-semibold text-foreground">Inspector</div>
+            <div className="text-[10px] text-muted-foreground">Selected call, event, and step context</div>
+          </div>
+          <ScrollArea className="h-full">
+            <div className="space-y-3 p-3">
+              {activeRecord ? (
+                <div className="rounded-lg border border-border/50 bg-card/40 p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <Badge variant="outline" className={cn("mb-2 h-5 px-1.5 text-[9px] uppercase", traceKindClasses(activeRecord.kind))}>
+                        {activeRecord.kind}
+                      </Badge>
+                      <h4 className="truncate text-sm font-semibold text-foreground">{activeRecord.title}</h4>
+                      <p className="mt-1 text-[11px] text-muted-foreground">{activeRecord.summary}</p>
+                    </div>
+                    {activeRecord.llm && (
+                      <Button type="button" size="sm" variant="outline" className="h-7 text-[10px]" onClick={() => onOpenLLM(activeRecord.llm!)}>
+                        Inspect
+                      </Button>
+                    )}
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
+                    <div className="rounded-md border border-border/40 bg-background/70 p-2">
+                      <div className="text-muted-foreground">Agent</div>
+                      <div className="mt-0.5 truncate font-medium text-foreground">{activeRecord.actorLabel}</div>
+                    </div>
+                    <div className="rounded-md border border-border/40 bg-background/70 p-2">
+                      <div className="text-muted-foreground">Step</div>
+                      <div className="mt-0.5 truncate font-medium text-foreground">{activeRecord.stepLabel}</div>
+                    </div>
+                    <div className="rounded-md border border-border/40 bg-background/70 p-2">
+                      <div className="text-muted-foreground">Time</div>
+                      <div className="mt-0.5 truncate font-medium text-foreground">{activeRecord.timestamp ? formatCompactDate(activeRecord.timestamp) : "--"}</div>
+                    </div>
+                    <div className="rounded-md border border-border/40 bg-background/70 p-2">
+                      <div className="text-muted-foreground">Duration</div>
+                      <div className="mt-0.5 font-medium text-foreground">{activeRecord.durationMs ? formatDuration(activeRecord.durationMs) : "--"}</div>
+                    </div>
+                  </div>
+
+                  {activeRecord.llm && (
+                    <div className="mt-3 space-y-2">
+                      <TokenBar label="Prompt" value={activeRecord.llm.prompt_tokens} max={Math.max(activeRecord.llm.total_tokens, 1)} color="bg-violet-500" />
+                      <TokenBar label="Completion" value={activeRecord.llm.completion_tokens} max={Math.max(activeRecord.llm.total_tokens, 1)} color="bg-sky-500" />
+                      {activeRecord.llm.prompt_preview && (
+                        <pre className="max-h-28 overflow-auto rounded-md border border-border/40 bg-slate-950 p-2 text-[10px] text-slate-100 whitespace-pre-wrap">{activeRecord.llm.prompt_preview}</pre>
+                      )}
+                      {activeRecord.llm.response_preview && (
+                        <pre className="max-h-36 overflow-auto rounded-md border border-border/40 bg-muted/30 p-2 text-[10px] text-foreground/80 whitespace-pre-wrap">{activeRecord.llm.response_preview}</pre>
+                      )}
+                    </div>
+                  )}
+
+                  {activeRecord.tool && (
+                    <div className="mt-3 space-y-2">
+                      {(activeRecord.tool.tool_args || activeRecord.tool.args_preview) && (
+                        <div>
+                          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{getToolDetailLabel(activeRecord.tool.tool_name)}</div>
+                          <ArgsCard tc={activeRecord.tool} />
+                        </div>
+                      )}
+                      {(activeRecord.tool.tool_result != null || activeRecord.tool.result_preview) && (
+                        <div>
+                          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Result</div>
+                          <ResultBlock tc={activeRecord.tool} />
+                        </div>
+                      )}
+                      {activeRecord.tool.error_message && (
+                        <pre className="rounded-md border border-red-500/25 bg-red-500/10 p-2 text-[10px] text-red-400 whitespace-pre-wrap">{activeRecord.tool.error_message}</pre>
+                      )}
+                    </div>
+                  )}
+
+                  {activeRecord.event && (
+                    <div className="mt-3">
+                      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Event payload</div>
+                      <JsonHighlight code={JSON.stringify(activeRecord.event.payload, null, 2)} />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed border-border/50 py-12 text-center text-xs text-muted-foreground">
+                  Select a trace record to inspect its data.
+                </div>
+              )}
+
+              {contextStep && (
+                <div className="rounded-lg border border-border/50 bg-card/35 p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h4 className="truncate text-xs font-semibold text-foreground">{getStepLabel(contextStep)}</h4>
+                      <p className="mt-0.5 text-[10px] text-muted-foreground">
+                        {contextStep.step_type || detail.agent_name || "agent"} · {formatDuration(contextStep.latency_ms)} · {contextStep.llm_calls.length || contextStep.llm_call_count || 0} LLM · {contextStep.tool_calls.length || contextStep.tool_call_count || 0} tools
+                      </p>
+                    </div>
+                    <Badge variant="outline" className={cn("text-[10px]", statusBadgeClasses(contextStep.status))}>{contextStep.status}</Badge>
+                  </div>
+                  {contextStep.error && (
+                    <pre className="mt-2 rounded-md border border-red-500/25 bg-red-500/10 p-2 text-[10px] text-red-400 whitespace-pre-wrap">{contextStep.error}</pre>
+                  )}
+                  {contextStep.input_preview && (
+                    <div className="mt-2">
+                      <div className="mb-1 flex items-center justify-between">
+                        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Input</span>
+                        <CopyButton value={contextStep.input_preview} className="h-5 w-5" />
+                      </div>
+                      <pre className="max-h-28 overflow-auto rounded-md border border-border/40 bg-slate-950 p-2 text-[10px] text-slate-100 whitespace-pre-wrap">{contextStep.input_preview}</pre>
+                    </div>
+                  )}
+                  {contextStep.output_preview && (
+                    <div className="mt-2">
+                      <div className="mb-1 flex items-center justify-between">
+                        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Output</span>
+                        <CopyButton value={contextStep.output_preview} className="h-5 w-5" />
+                      </div>
+                      <pre className="max-h-28 overflow-auto rounded-md border border-border/40 bg-muted/30 p-2 text-[10px] text-foreground/80 whitespace-pre-wrap">{contextStep.output_preview}</pre>
+                    </div>
+                  )}
+                  {contextStepEvents.length > 0 && (
+                    <div className="mt-3">
+                      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Step events</div>
+                      <ExecutionTimeline events={contextStepEvents} activeEventId={selectedEventId} onEventClick={(event) => onEventSelect(event.id)} compact />
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </ScrollArea>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OptimisePanel({
+  detail,
+  agents,
+  agentsLoading,
+  selectedAgentName,
+  onSelectedAgentChange,
+  scope,
+  onScopeChange,
+  packet,
+  prompt,
+  detailsLoading,
+  manifestLoading,
+  manifestError,
+  running,
+  result,
+  error,
+  onRun,
+}: {
+  detail: ExecutionTrace | null;
+  agents: AgentInfo[];
+  agentsLoading: boolean;
+  selectedAgentName: string;
+  onSelectedAgentChange: (agentName: string) => void;
+  scope: OptimisationScope;
+  onScopeChange: (scope: OptimisationScope) => void;
+  packet: OptimisationPacket | null;
+  prompt: string;
+  detailsLoading: boolean;
+  manifestLoading: boolean;
+  manifestError: string;
+  running: boolean;
+  result: InvokeResponse | null;
+  error: string;
+  onRun: () => void;
+}) {
+  const selectedAgent = agents.find((agent) => agent.name === selectedAgentName) ?? null;
+  const stepMetrics = (packet?.step_metrics ?? []) as Array<Record<string, unknown>>;
+  const opportunityMap = (packet?.opportunity_map ?? []) as Array<Record<string, unknown>>;
+  const slowestSteps = [...stepMetrics]
+    .sort((a, b) => compactNumber(b.duration_ms as number | null) - compactNumber(a.duration_ms as number | null))
+    .slice(0, 5);
+  const tokenHeavySteps = [...stepMetrics]
+    .sort((a, b) => compactNumber(b.tokens as number | null) - compactNumber(a.tokens as number | null))
+    .slice(0, 5);
+  const promptEstimate = Math.ceil(prompt.length / 4);
+
+  if (!detail) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+        Optimisation data appears once a traced execution is selected.
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="shrink-0 border-b border-border/40 bg-card/30 px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="min-w-[16rem] flex-1">
+            <h3 className="text-sm font-semibold text-foreground">Workflow optimisation</h3>
+            <p className="text-[11px] text-muted-foreground">
+              {detail.workflow_name} · {formatDuration(detail.duration_ms)} · {detail.total_tokens.toLocaleString()} tokens · {detail.tool_call_count} tools
+            </p>
+          </div>
+          <Select value={selectedAgentName || "__none__"} onValueChange={(value) => { if (value !== "__none__") onSelectedAgentChange(value); }}>
+            <SelectTrigger className="h-8 w-56 text-xs">
+              <SelectValue placeholder={agentsLoading ? "Loading agents" : "Select agent"} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__" disabled>{agentsLoading ? "Loading agents" : "Select agent"}</SelectItem>
+              {agents.map((agent) => (
+                <SelectItem key={`${agent.namespace}/${agent.name}`} value={agent.name}>
+                  {agent.name} · {agent.model || agent.runtime_kind || "agent"}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={scope} onValueChange={(value) => onScopeChange(value as OptimisationScope)}>
+            <SelectTrigger className="h-8 w-44 text-xs">
+              <SelectValue placeholder="Trace scope" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="current">Current trace</SelectItem>
+              <SelectItem value="last6">Last 6 traces</SelectItem>
+              <SelectItem value="last20">Last 20 traces</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button
+            type="button"
+            size="sm"
+            className="h-8 gap-1.5 text-xs"
+            disabled={!selectedAgentName || !packet || running || detailsLoading || manifestLoading}
+            onClick={onRun}
+          >
+            {running ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+            Run optimisation
+          </Button>
+        </div>
+      </div>
+
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="grid gap-3 p-3 xl:grid-cols-[minmax(0,0.9fr)_minmax(28rem,1.1fr)]">
+          <div className="space-y-3">
+            <section className="rounded-lg border border-border/50 bg-card/45 p-3">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                    <Target className="h-4 w-4 text-primary" />
+                    Opportunity map
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    {packet?.trace_details.length ?? 0} detailed traces · {packet?.run_history.length ?? 0} run summaries · ~{promptEstimate.toLocaleString()} prompt tokens
+                  </p>
+                </div>
+                {(detailsLoading || manifestLoading) && <Badge variant="outline" className="gap-1 text-[10px]"><LoaderCircle className="h-3 w-3 animate-spin" /> loading context</Badge>}
+              </div>
+              <div className="grid gap-2 md:grid-cols-2">
+                {opportunityMap.map((item) => (
+                  <div key={String(item.label)} className="rounded-md border border-border/45 bg-background/70 p-2.5">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
+                      {String(item.label) === "Token pressure" ? <Gauge className="h-3.5 w-3.5 text-violet-400" /> : <TrendingDown className="h-3.5 w-3.5 text-emerald-400" />}
+                      {String(item.label)}
+                    </div>
+                    <div className="mt-1 text-[11px] font-medium text-foreground">{String(item.signal ?? "--")}</div>
+                    <div className="mt-1 line-clamp-2 text-[10px] text-muted-foreground">{String(item.recommendation ?? "")}</div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-lg border border-border/50 bg-card/45 p-3">
+              <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
+                <Sparkles className="h-4 w-4 text-primary" />
+                Step candidates
+              </div>
+              <div className="grid gap-3 lg:grid-cols-2">
+                <div>
+                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Slowest path</div>
+                  <div className="space-y-1.5">
+                    {slowestSteps.map((step) => (
+                      <div key={String(step.id)} className="rounded-md border border-border/40 bg-background/60 p-2">
+                        <div className="flex items-center justify-between gap-2 text-xs">
+                          <span className="truncate font-medium text-foreground">{String(step.label)}</span>
+                          <span className="tabular-nums text-muted-foreground">{formatDuration(compactNumber(step.duration_ms as number | null))}</span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-muted-foreground">
+                          <span>{compactNumber(step.llm_calls as number | null)} LLM</span>
+                          <span>{compactNumber(step.tool_calls as number | null)} tools</span>
+                          <span>{compactNumber(step.events as number | null)} events</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Token pressure</div>
+                  <div className="space-y-1.5">
+                    {tokenHeavySteps.map((step) => (
+                      <div key={String(step.id)} className="rounded-md border border-border/40 bg-background/60 p-2">
+                        <div className="flex items-center justify-between gap-2 text-xs">
+                          <span className="truncate font-medium text-foreground">{String(step.label)}</span>
+                          <span className="tabular-nums text-muted-foreground">{compactNumber(step.tokens as number | null).toLocaleString()} tokens</span>
+                        </div>
+                        <div className="mt-1 truncate text-[10px] text-muted-foreground">
+                          {Array.isArray(step.models) && step.models.length > 0 ? step.models.join(", ") : "model unknown"}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-lg border border-border/50 bg-card/45 p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <Bot className="h-4 w-4 text-primary" />
+                  Optimisation agent
+                </div>
+                {selectedAgent && <Badge variant="outline" className="text-[10px]">{selectedAgent.status}</Badge>}
+              </div>
+              {selectedAgent ? (
+                <div className="grid gap-2 text-[11px] sm:grid-cols-3">
+                  <div className="rounded-md border border-border/40 bg-background/65 p-2">
+                    <div className="text-muted-foreground">Agent</div>
+                    <div className="truncate font-medium text-foreground">{selectedAgent.name}</div>
+                  </div>
+                  <div className="rounded-md border border-border/40 bg-background/65 p-2">
+                    <div className="text-muted-foreground">Model</div>
+                    <div className="truncate font-medium text-foreground">{selectedAgent.model || "--"}</div>
+                  </div>
+                  <div className="rounded-md border border-border/40 bg-background/65 p-2">
+                    <div className="text-muted-foreground">Runtime</div>
+                    <div className="truncate font-medium text-foreground">{selectedAgent.runtime_kind || "opencode"}</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-md border border-dashed border-border/50 p-4 text-center text-xs text-muted-foreground">
+                  Select an agent before running the optimisation review.
+                </div>
+              )}
+            </section>
+
+            <section className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-3">
+              <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+                <ShieldAlert className="h-4 w-4 text-amber-400" />
+                Deployment access model
+              </div>
+              <div className="grid gap-2 text-[11px] sm:grid-cols-2">
+                <div className="rounded-md border border-border/40 bg-background/65 p-2">
+                  <div className="text-muted-foreground">Current optimiser run</div>
+                  <div className="mt-0.5 font-medium text-foreground">Analysis only</div>
+                </div>
+                <div className="rounded-md border border-border/40 bg-background/65 p-2">
+                  <div className="text-muted-foreground">Source manifests</div>
+                  <div className="mt-0.5 font-medium text-foreground">
+                    {packet?.source_manifests.workflow ? "Workflow" : "Workflow missing"} · {Object.keys(packet?.source_manifests.agents ?? {}).length} agent manifest(s)
+                  </div>
+                </div>
+              </div>
+              <p className="mt-2 text-[11px] leading-5 text-muted-foreground">
+                Applying candidate manifests or running the comparison loop must use a separate admin-created deployment agent with least-privilege Kubernetes RBAC and explicit approval.
+              </p>
+              {manifestError && (
+                <div className="mt-2 rounded-md border border-red-500/25 bg-red-500/10 px-2 py-1.5 text-[11px] text-red-400">
+                  {manifestError}
+                </div>
+              )}
+            </section>
+          </div>
+
+          <div className="space-y-3">
+            <section className="rounded-lg border border-border/50 bg-card/45 p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                    <Lightbulb className="h-4 w-4 text-amber-400" />
+                    Agent brief
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">Analysis-only packet sent to the selected agent.</p>
+                </div>
+                <CopyButton value={prompt} className="h-7 w-7" />
+              </div>
+              <Textarea
+                readOnly
+                value={prompt}
+                className="min-h-[320px] resize-none border-border/60 bg-background/80 font-mono text-[10px] leading-relaxed"
+              />
+            </section>
+
+            {error && (
+              <div className="rounded-lg border border-red-500/25 bg-red-500/10 p-3 text-xs text-red-400">
+                {error}
+              </div>
+            )}
+
+            <section className="rounded-lg border border-border/50 bg-card/45 p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="text-sm font-semibold text-foreground">Optimisation result</div>
+                {result && <Badge variant="outline" className="text-[10px]">{result.status}</Badge>}
+              </div>
+              {running ? (
+                <div className="flex items-center justify-center gap-2 rounded-md border border-border/40 bg-background/60 py-12 text-xs text-muted-foreground">
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                  Agent analysis running
+                </div>
+              ) : result ? (
+                <div className="space-y-2">
+                  <div className="grid gap-2 text-[10px] sm:grid-cols-3">
+                    <div className="rounded-md border border-border/40 bg-background/65 p-2">
+                      <div className="text-muted-foreground">Thread</div>
+                      <div className="truncate font-medium text-foreground">{result.thread_id}</div>
+                    </div>
+                    <div className="rounded-md border border-border/40 bg-background/65 p-2">
+                      <div className="text-muted-foreground">Model</div>
+                      <div className="truncate font-medium text-foreground">{result.model}</div>
+                    </div>
+                    <div className="rounded-md border border-border/40 bg-background/65 p-2">
+                      <div className="text-muted-foreground">Agent</div>
+                      <div className="truncate font-medium text-foreground">{result.agent_name}</div>
+                    </div>
+                  </div>
+                  <pre className="max-h-[520px] overflow-auto rounded-md border border-border/40 bg-background/80 p-3 text-xs leading-relaxed whitespace-pre-wrap text-foreground/90">{result.response}</pre>
+                </div>
+              ) : (
+                <div className="rounded-md border border-dashed border-border/50 p-6 text-center text-xs text-muted-foreground">
+                  No optimisation run has been started for this execution.
+                </div>
+              )}
+            </section>
+          </div>
+        </div>
+      </ScrollArea>
+    </div>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 interface ExecutionObservatoryProps {
@@ -633,12 +2021,20 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
   const [compareLeft, setCompareLeft] = useState<ExecutionTrace | null>(null);
   const [compareRight, setCompareRight] = useState<ExecutionTrace | null>(null);
   const [compareLoading, setCompareLoading] = useState(false);
-  // Steps tab: inline detail
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
-  // Models tab: tool search/grouping
-  const [toolSearch, setToolSearch] = useState("");
-  const [toolGroupBy, setToolGroupBy] = useState<"individual" | "tool">("individual");
-  const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
+  const [optimiseAgents, setOptimiseAgents] = useState<AgentInfo[]>([]);
+  const [optimiseAgentsLoading, setOptimiseAgentsLoading] = useState(false);
+  const [optimiseAgentName, setOptimiseAgentName] = useState("");
+  const [optimiseScope, setOptimiseScope] = useState<OptimisationScope>("last6");
+  const [optimiseDetails, setOptimiseDetails] = useState<ExecutionTrace[]>([]);
+  const [optimiseDetailsLoading, setOptimiseDetailsLoading] = useState(false);
+  const [optimiseWorkflowManifest, setOptimiseWorkflowManifest] = useState<Record<string, unknown> | null>(null);
+  const [optimiseAgentManifests, setOptimiseAgentManifests] = useState<Record<string, Record<string, unknown>>>({});
+  const [optimiseManifestLoading, setOptimiseManifestLoading] = useState(false);
+  const [optimiseManifestError, setOptimiseManifestError] = useState("");
+  const [optimiseRunning, setOptimiseRunning] = useState(false);
+  const [optimiseResult, setOptimiseResult] = useState<InvokeResponse | null>(null);
+  const [optimiseError, setOptimiseError] = useState("");
   // Logs tab: JSON formatting, fullscreen, wrap, live stream
   const [logJsonFormat, setLogJsonFormat] = useState(false);
   const [logFullscreen, setLogFullscreen] = useState(false);
@@ -778,11 +2174,114 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
     return () => { cancelled = true; };
   }, [compareLeftId, compareRightId, token]);
 
+  // Load selectable optimisation agents
+  useEffect(() => {
+    let cancelled = false;
+    setOptimiseAgentsLoading(true);
+    listAgents(token, namespace)
+      .then((items) => {
+        if (cancelled) return;
+        setOptimiseAgents(items);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setOptimiseAgents([]);
+        toast.error(error instanceof Error ? error.message : "Failed to load optimisation agents");
+      })
+      .finally(() => { if (!cancelled) setOptimiseAgentsLoading(false); });
+    return () => { cancelled = true; };
+  }, [namespace, token]);
+
+  useEffect(() => {
+    if (optimiseAgentName && optimiseAgents.some((agent) => agent.name === optimiseAgentName)) return;
+    const preferred =
+      optimiseAgents.find((agent) => agent.name === detail?.agent_name) ??
+      optimiseAgents.find((agent) => agent.status.toLowerCase() === "ready" && (agent.runtime_kind ?? "opencode") === "opencode") ??
+      optimiseAgents.find((agent) => agent.status.toLowerCase() === "ready") ??
+      optimiseAgents[0] ??
+      null;
+    setOptimiseAgentName(preferred?.name ?? "");
+  }, [detail?.agent_name, optimiseAgentName, optimiseAgents]);
+
+  // Load detailed traces for the optimisation scope only when the tab is active.
+  useEffect(() => {
+    if (!detail) {
+      setOptimiseDetails([]);
+      setOptimiseDetailsLoading(false);
+      return;
+    }
+    if (activeTab !== "optimise") {
+      setOptimiseDetails([detail]);
+      setOptimiseDetailsLoading(false);
+      return;
+    }
+
+    const limit = optimisationScopeLimit(optimiseScope);
+    const ids = Array.from(new Set([detail.id, ...executions.map((execution) => execution.id).filter(Boolean)])).slice(0, limit);
+    let cancelled = false;
+    setOptimiseDetailsLoading(true);
+    Promise.all(ids.map((id) => (id === detail.id ? Promise.resolve(detail) : fetchExecutionDetail(token, id).catch(() => null))))
+      .then((items) => {
+        if (cancelled) return;
+        const traces = items.filter((item): item is ExecutionTrace => item !== null);
+        setOptimiseDetails(traces.length > 0 ? traces : [detail]);
+      })
+      .finally(() => { if (!cancelled) setOptimiseDetailsLoading(false); });
+    return () => { cancelled = true; };
+  }, [activeTab, detail, executions, optimiseScope, token]);
+
+  // Load source Kubernetes manifests for manifest-copy optimisation.
+  useEffect(() => {
+    if (!selectedWorkflowName || activeTab !== "optimise") {
+      return;
+    }
+    let cancelled = false;
+    setOptimiseManifestLoading(true);
+    setOptimiseManifestError("");
+    (async () => {
+      let workflowManifest: Record<string, unknown> | null = null;
+      const agentManifests: Record<string, Record<string, unknown>> = {};
+      const missingAgents: string[] = [];
+      try {
+        workflowManifest = await fetchWorkflowManifest(token, namespace, selectedWorkflowName);
+      } catch (error) {
+        if (!cancelled) setOptimiseManifestError(error instanceof Error ? error.message : "Failed to load workflow manifest");
+      }
+
+      const candidateAgents = Array.from(new Set([
+        ...extractWorkflowAgentRefs(workflowManifest),
+        detail?.agent_name ?? "",
+      ].filter((name) => name.trim())));
+
+      for (const agentName of candidateAgents) {
+        try {
+          agentManifests[agentName] = await fetchAgentManifest(token, namespace, agentName);
+        } catch {
+          // Some traces expose the workflow name as the actor. Keep the workflow manifest even if one ref is not an AIAgent.
+          missingAgents.push(agentName);
+        }
+      }
+
+      if (!cancelled) {
+        setOptimiseWorkflowManifest(workflowManifest);
+        setOptimiseAgentManifests(agentManifests);
+        if (workflowManifest && Object.keys(agentManifests).length === 0 && candidateAgents.length > 0) {
+          setOptimiseManifestError(`Workflow manifest loaded, but no agent manifest matched: ${candidateAgents.join(", ")}`);
+        } else if (missingAgents.length > 0) {
+          setOptimiseManifestError(`Loaded ${Object.keys(agentManifests).length} agent manifest(s); skipped ${missingAgents.join(", ")}.`);
+        }
+      }
+    })().finally(() => { if (!cancelled) setOptimiseManifestLoading(false); });
+    return () => { cancelled = true; };
+  }, [activeTab, detail?.agent_name, namespace, selectedWorkflowName, token]);
+
   // Reset filters on run change
   useEffect(() => {
     setSelectedEventId(null); setSelectedLogStep("all");
     setLogSearch(""); setLogFilterMode("activity");
-    setSelectedStepId(null); setToolSearch("");
+    setSelectedStepId(null);
+    setOptimiseResult(null); setOptimiseError("");
+    setOptimiseWorkflowManifest(null); setOptimiseAgentManifests({}); setOptimiseManifestError("");
   }, [detail?.id, runTrace?.run_id]);
 
   // ── Computed Values ────────────────────────────────────────────────────────
@@ -813,38 +2312,23 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
     tooling: normalizedLogLines.filter((l) => matchesKeyword(l, LOG_TOOLING_KEYWORDS)).length,
   }), [normalizedLogLines]);
   const runTraceNotice = useMemo(() => buildRunTraceNotice(runTrace), [runTrace]);
-  // Steps tab: selected step detail
-  const activeStepDetail = useMemo(
-    () => orderedSteps.find((s) => s.id === selectedStepId) ?? null,
-    [orderedSteps, selectedStepId],
-  );
-
-  // Models tab: grouped tool calls
-  const toolCallGroups = useMemo(() => {
-    if (!detail) return [];
-    const groups = new Map<string, { name: string; count: number; totalMs: number; failures: number; calls: typeof detail.tool_calls }>();
-    const filtered = toolSearch.trim()
-      ? detail.tool_calls.filter((tc) => tc.tool_name.toLowerCase().includes(toolSearch.trim().toLowerCase()))
-      : detail.tool_calls;
-    for (const call of filtered) {
-      const existing = groups.get(call.tool_name);
-      if (existing) {
-        existing.count++;
-        existing.totalMs += call.latency_ms;
-        if (call.status.toLowerCase() === "failed" || call.status.toLowerCase() === "error") existing.failures++;
-        existing.calls.push(call);
-      } else {
-        groups.set(call.tool_name, {
-          name: call.tool_name,
-          count: 1,
-          totalMs: call.latency_ms,
-          failures: call.status.toLowerCase() === "failed" || call.status.toLowerCase() === "error" ? 1 : 0,
-          calls: [call],
-        });
-      }
-    }
-    return Array.from(groups.values()).sort((a, b) => b.count - a.count);
-  }, [detail, toolSearch]);
+  const optimisePacket = useMemo(() => {
+    if (!detail) return null;
+    return buildOptimisationPacket({
+      detail,
+      orderedSteps,
+      orderedEvents,
+      executions,
+      scopedDetails: optimiseDetails,
+      workflowManifest: optimiseWorkflowManifest,
+      agentManifests: optimiseAgentManifests,
+      namespace,
+      workflowName: selectedWorkflowName,
+      selectedAgent: optimiseAgentName || null,
+      scope: optimiseScope,
+    });
+  }, [detail, executions, namespace, optimiseAgentManifests, optimiseAgentName, optimiseDetails, optimiseScope, optimiseWorkflowManifest, orderedEvents, orderedSteps, selectedWorkflowName]);
+  const optimisePrompt = useMemo(() => (optimisePacket ? buildOptimisationPrompt(optimisePacket) : ""), [optimisePacket]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
@@ -881,6 +2365,36 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
       URL.revokeObjectURL(url);
       toast.success("HTML report exported");
     } catch (error) { toast.error(error instanceof Error ? error.message : "Export failed"); }
+  };
+
+  const handleRunOptimisation = async () => {
+    if (!optimiseAgentName || !optimisePrompt || !detail) return;
+    setOptimiseRunning(true);
+    setOptimiseError("");
+    setOptimiseResult(null);
+    try {
+      const result = await invokeAgent(
+        token,
+        namespace,
+        optimiseAgentName,
+        {
+          prompt: optimisePrompt,
+          no_session: true,
+          autonomous: false,
+          max_turns: 6,
+          output_format: "markdown",
+        },
+        `optimise-${detail.id}-${Date.now()}`,
+      );
+      setOptimiseResult(result);
+      toast.success("Optimisation analysis completed");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Optimisation analysis failed";
+      setOptimiseError(message);
+      toast.error(message);
+    } finally {
+      setOptimiseRunning(false);
+    }
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -960,19 +2474,19 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                     <Layers className="mr-1.5 h-3.5 w-3.5" />
                     Overview
                   </TabsTrigger>
-                  <TabsTrigger value="steps" className="relative h-9 rounded-none border-b-2 border-transparent px-3 text-xs font-medium transition-colors data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none">
-                    <ListTree className="mr-1.5 h-3.5 w-3.5" />
-                    Steps
-                    {detail && <Badge variant="secondary" className="ml-1.5 h-4 px-1 text-[9px]">{detail.step_count}</Badge>}
+                  <TabsTrigger value="trace" className="relative h-9 rounded-none border-b-2 border-transparent px-3 text-xs font-medium transition-colors data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none">
+                    <BrainCircuit className="mr-1.5 h-3.5 w-3.5" />
+                    Trace
+                    {detail && <Badge variant="secondary" className="ml-1.5 h-4 px-1 text-[9px]">{detail.llm_call_count + detail.tool_call_count}</Badge>}
+                  </TabsTrigger>
+                  <TabsTrigger value="optimise" className="relative h-9 rounded-none border-b-2 border-transparent px-3 text-xs font-medium transition-colors data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none">
+                    <TrendingDown className="mr-1.5 h-3.5 w-3.5" />
+                    Optimise
                   </TabsTrigger>
                   <TabsTrigger value="logs" className="relative h-9 rounded-none border-b-2 border-transparent px-3 text-xs font-medium transition-colors data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none">
                     <FileText className="mr-1.5 h-3.5 w-3.5" />
                     Logs
                     {logStats.errors > 0 && <Badge variant="destructive" className="ml-1.5 h-4 px-1 text-[9px]">{logStats.errors}</Badge>}
-                  </TabsTrigger>
-                  <TabsTrigger value="models" className="relative h-9 rounded-none border-b-2 border-transparent px-3 text-xs font-medium transition-colors data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none">
-                    <BrainCircuit className="mr-1.5 h-3.5 w-3.5" />
-                    Models & Tools
                   </TabsTrigger>
                   <TabsTrigger value="compare" className="relative h-9 rounded-none border-b-2 border-transparent px-3 text-xs font-medium transition-colors data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none">
                     <GitCompare className="mr-1.5 h-3.5 w-3.5" />
@@ -987,227 +2501,46 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                   detail={detail}
                   run={selectedRun}
                   previousRuns={runs}
-                  onStepClick={(step) => { setSelectedStepId(step.id); setActiveTab("steps"); }}
+                  onStepClick={(step) => { setSelectedStepId(step.id); setActiveTab("trace"); }}
                   onJumpToErrors={() => { setLogFilterMode("errors"); setActiveTab("logs"); }}
                   onViewLogs={() => setActiveTab("logs")}
                 />
               </TabsContent>
 
-              {/* ═══════ STEPS TAB ═══════ */}
-              <TabsContent value="steps" className="mt-0 min-h-0 flex-1 overflow-hidden">
-                {!detail ? (
-                  <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                    Step-level observability appears once indexed execution detail is available.
-                  </div>
-                ) : (
-                  <div className="flex h-full min-h-0">
-                    {/* Step list (left) */}
-                    <div className="w-64 shrink-0 border-r border-border/40 overflow-hidden flex flex-col">
-                      <div className="shrink-0 px-3 py-2 border-b border-border/30">
-                        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                          {orderedSteps.length} Steps
-                        </span>
-                      </div>
-                      <ScrollArea className="flex-1 min-h-0">
-                        <div className="space-y-0.5 p-1.5">
-                          {orderedSteps.map((step) => {
-                            const isActive = step.id === selectedStepId;
-                            const isFailed = step.status.toLowerCase() === "failed" || step.status.toLowerCase() === "error";
-                            return (
-                              <button
-                                key={step.id}
-                                type="button"
-                                onClick={() => setSelectedStepId(step.id)}
-                                className={cn(
-                                  "w-full rounded-md border-l-[3px] px-2.5 py-2 text-left transition-all",
-                                  isActive
-                                    ? "border-l-primary bg-primary/8"
-                                    : isFailed
-                                      ? "border-l-red-500 hover:bg-red-500/5"
-                                      : "border-l-transparent hover:bg-accent/30",
-                                )}
-                              >
-                                <div className="flex items-center gap-1.5">
-                                  <span className={cn(
-                                    "h-1.5 w-1.5 shrink-0 rounded-full",
-                                    step.status.toLowerCase() === "completed" || step.status.toLowerCase() === "succeeded"
-                                      ? "bg-emerald-500"
-                                      : isFailed ? "bg-red-500" : "bg-amber-500",
-                                  )} />
-                                  <span className="truncate text-xs font-medium text-foreground">{getStepLabel(step)}</span>
-                                </div>
-                                <div className="mt-1 flex items-center gap-2 pl-3 text-[10px] text-muted-foreground">
-                                  <span>{formatDuration(step.latency_ms)}</span>
-                                  <span>{step.llm_call_count ?? step.llm_calls.length} LLM</span>
-                                  <span>{step.tool_call_count ?? step.tool_calls.length} tools</span>
-                                </div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </ScrollArea>
-                    </div>
+              {/* ═══════ TRACE TAB ═══════ */}
+              <TabsContent value="trace" className="mt-0 min-h-0 flex-1 overflow-hidden">
+                <TraceExplorer
+                  detail={detail}
+                  orderedSteps={orderedSteps}
+                  orderedEvents={orderedEvents}
+                  selectedStepId={selectedStepId}
+                  onStepSelect={setSelectedStepId}
+                  selectedEventId={selectedEventId}
+                  onEventSelect={setSelectedEventId}
+                  onOpenLLM={(call) => { setSelectedLLM(call); setLlmViewerOpen(true); }}
+                />
+              </TabsContent>
 
-                    {/* Step detail (right) */}
-                    <div className="flex-1 min-w-0 overflow-y-auto">
-                      {!activeStepDetail ? (
-                        <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-                          Select a step from the list to see its detail.
-                        </div>
-                      ) : (
-                        <div className="space-y-4 p-4">
-                          {/* Step header */}
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <h4 className="text-sm font-semibold text-foreground">{getStepLabel(activeStepDetail)}</h4>
-                              <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
-                                <Badge variant="outline" className={cn("text-[10px]", statusBadgeClasses(activeStepDetail.status))}>
-                                  {activeStepDetail.status}
-                                </Badge>
-                                <span>{formatDuration(activeStepDetail.latency_ms)}</span>
-                                {activeStepDetail.step_type && <span>{activeStepDetail.step_type}</span>}
-                                {activeStepDetail.tokens_used != null && <span>{activeStepDetail.tokens_used} tokens</span>}
-                                {activeStepDetail.cost_usd != null && <span>{formatCurrency(activeStepDetail.cost_usd)}</span>}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Error */}
-                          {activeStepDetail.error && (
-                            <div className="rounded-md border border-red-500/20 bg-red-500/5 p-3">
-                              <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase text-red-500">
-                                <AlertTriangle className="h-3 w-3" /> Error
-                              </div>
-                              <pre className="whitespace-pre-wrap break-words text-xs text-red-400">{activeStepDetail.error}</pre>
-                            </div>
-                          )}
-
-                          {/* Input/Output */}
-                          {activeStepDetail.input_preview && (
-                            <div>
-                              <div className="mb-1.5 flex items-center justify-between">
-                                <h5 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Input</h5>
-                                <CopyButton value={activeStepDetail.input_preview} className="h-5 w-5" />
-                              </div>
-                              <pre className="max-h-32 overflow-auto rounded-md border border-border/40 bg-slate-950 p-2.5 text-[11px] leading-relaxed text-slate-100">
-                                {activeStepDetail.input_preview}
-                              </pre>
-                            </div>
-                          )}
-                          {activeStepDetail.output_preview && (
-                            <div>
-                              <div className="mb-1.5 flex items-center justify-between">
-                                <h5 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Output</h5>
-                                <CopyButton value={activeStepDetail.output_preview} className="h-5 w-5" />
-                              </div>
-                              <pre className="max-h-32 overflow-auto rounded-md border border-border/40 bg-slate-950 p-2.5 text-[11px] leading-relaxed text-slate-100">
-                                {activeStepDetail.output_preview}
-                              </pre>
-                            </div>
-                          )}
-
-                          {/* LLM Calls */}
-                          {activeStepDetail.llm_calls.length > 0 && (
-                            <div>
-                              <h5 className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                                LLM Calls ({activeStepDetail.llm_calls.length})
-                              </h5>
-                              <div className="space-y-1.5">
-                                {activeStepDetail.llm_calls.map((call) => (
-                                  <button
-                                    key={call.id}
-                                    type="button"
-                                    onClick={() => { setSelectedLLM(call); setLlmViewerOpen(true); }}
-                                    className="w-full rounded-md border border-border/40 bg-card p-2.5 text-left transition-colors hover:bg-accent/30"
-                                  >
-                                    <div className="flex items-center justify-between">
-                                      <span className="text-xs font-medium text-foreground">{call.model}</span>
-                                      <span className="text-[10px] text-muted-foreground">
-                                        {call.latency_ms > 0 ? formatDuration(call.latency_ms) : <span className="text-muted-foreground/40">--</span>}
-                                      </span>
-                                    </div>
-                                    <div className="mt-1 flex items-center gap-3 text-[10px] text-muted-foreground">
-                                      {call.total_tokens > 0 ? (
-                                        <span>{call.total_tokens.toLocaleString()} tokens</span>
-                                      ) : call.prompt_tokens > 0 || call.completion_tokens > 0 ? (
-                                        <span>{(call.prompt_tokens + call.completion_tokens).toLocaleString()} tokens</span>
-                                      ) : (
-                                        <span className="text-muted-foreground/40">tokens unavailable</span>
-                                      )}
-                                      {call.estimated_cost_usd != null && call.estimated_cost_usd > 0 && <span>{formatCurrency(call.estimated_cost_usd)}</span>}
-                                    </div>
-                                    {call.response_preview && (
-                                      <p className="mt-1 line-clamp-2 text-[10px] text-muted-foreground/70">{call.response_preview}</p>
-                                    )}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Tool Calls (table) */}
-                          {activeStepDetail.tool_calls.length > 0 && (
-                            <div>
-                              <h5 className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                                Tool Calls ({activeStepDetail.tool_calls.length})
-                              </h5>
-                              <div className="rounded-md border border-border/40 overflow-hidden">
-                                <table className="w-full text-xs">
-                                  <thead>
-                                    <tr className="border-b border-border/30 bg-muted/20">
-                                      <th className="px-2.5 py-1.5 text-left text-[10px] font-medium text-muted-foreground">Tool</th>
-                                      <th className="px-2.5 py-1.5 text-right text-[10px] font-medium text-muted-foreground">Duration</th>
-                                      <th className="px-2.5 py-1.5 text-right text-[10px] font-medium text-muted-foreground">Status</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {activeStepDetail.tool_calls.map((tc) => {
-                                      const ToolIcon = getToolIcon(tc.tool_name);
-                                      return (
-                                        <tr key={tc.id} className="border-b border-border/20 last:border-0 hover:bg-accent/20 transition-colors">
-                                          <td className="px-2.5 py-1.5">
-                                            <div className="flex items-center gap-2">
-                                              <ToolIcon className={cn("h-3.5 w-3.5 shrink-0", getToolIconColor(tc.tool_name))} />
-                                              <span className="font-medium text-foreground">{tc.tool_name}</span>
-                                            </div>
-                                          </td>
-                                          <td className="px-2.5 py-1.5 text-right tabular-nums text-muted-foreground">
-                                            {tcLatency(tc) > 0 ? formatDuration(tcLatency(tc)) : <span className="text-muted-foreground/40">--</span>}
-                                          </td>
-                                          <td className="px-2.5 py-1.5 text-right">
-                                            <span className={cn(
-                                              "text-[10px] font-medium",
-                                              tc.status.toLowerCase() === "completed" || tc.status.toLowerCase() === "succeeded"
-                                                ? "text-emerald-500" : "text-red-500",
-                                            )}>{tc.status}</span>
-                                          </td>
-                                        </tr>
-                                      );
-                                    })}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Event Chronology for this step */}
-                          {orderedEvents.filter((e) => e.step_id === activeStepDetail.id).length > 0 && (
-                            <div>
-                              <h5 className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                                Events ({orderedEvents.filter((e) => e.step_id === activeStepDetail.id).length})
-                              </h5>
-                              <ExecutionTimeline
-                                events={orderedEvents.filter((e) => e.step_id === activeStepDetail.id)}
-                                activeEventId={selectedEventId}
-                                onEventClick={(e) => setSelectedEventId(e.id)}
-                              />
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
+              {/* ═══════ OPTIMISE TAB ═══════ */}
+              <TabsContent value="optimise" className="mt-0 min-h-0 flex-1 overflow-hidden">
+                <OptimisePanel
+                  detail={detail}
+                  agents={optimiseAgents}
+                  agentsLoading={optimiseAgentsLoading}
+                  selectedAgentName={optimiseAgentName}
+                  onSelectedAgentChange={(agentName) => { setOptimiseAgentName(agentName); setOptimiseResult(null); setOptimiseError(""); }}
+                  scope={optimiseScope}
+                  onScopeChange={(scopeValue) => { setOptimiseScope(scopeValue); setOptimiseResult(null); setOptimiseError(""); }}
+                  packet={optimisePacket}
+                  prompt={optimisePrompt}
+                  detailsLoading={optimiseDetailsLoading}
+                  manifestLoading={optimiseManifestLoading}
+                  manifestError={optimiseManifestError}
+                  running={optimiseRunning}
+                  result={optimiseResult}
+                  error={optimiseError}
+                  onRun={() => { void handleRunOptimisation(); }}
+                />
               </TabsContent>
 
               {/* ═══════ LOGS TAB ═══════ */}
@@ -1418,294 +2751,16 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                 )}
               </TabsContent>
 
-              {/* ═══════ MODELS & TOOLS TAB ═══════ */}
-              <TabsContent value="models" className="mt-0 min-h-0 flex-1 overflow-y-auto">
-                {!detail ? (
-                  <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                    Model and tool insights appear once indexed execution detail is available.
-                  </div>
-                ) : (
-                  <div className="space-y-4 p-4">
-                    {/* Token usage bar */}
-                    {detail.total_tokens > 0 && (
-                      <div className="rounded-lg border border-border/50 bg-card/30 p-3">
-                        <h4 className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Token Usage</h4>
-                        <div className="space-y-2">
-                          <TokenBar label="Prompt" value={detail.prompt_tokens ?? 0} max={detail.total_tokens} color="bg-violet-500" />
-                          <TokenBar label="Completion" value={detail.completion_tokens ?? 0} max={detail.total_tokens} color="bg-sky-500" />
-                          <TokenBar label="Total" value={detail.total_tokens} max={detail.total_tokens} color="bg-primary" />
-                        </div>
-                      </div>
-                    )}
-
-                    {/* LLM Calls table */}
-                    <div className="rounded-lg border border-border/50 bg-card/30 p-3">
-                      <div className="mb-2 flex items-center justify-between">
-                        <h4 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                          LLM Calls ({detail.llm_calls.length})
-                        </h4>
-                      </div>
-                      {detail.llm_calls.length === 0 ? (
-                        <p className="text-xs text-muted-foreground">No LLM calls recorded.</p>
-                      ) : (
-                        <div className="rounded-md border border-border/40 overflow-hidden">
-                          <table className="w-full text-xs">
-                            <thead>
-                              <tr className="border-b border-border/30 bg-muted/20">
-                                <th className="px-2.5 py-1.5 text-left text-[10px] font-medium text-muted-foreground">#</th>
-                                <th className="px-2.5 py-1.5 text-left text-[10px] font-medium text-muted-foreground">Model</th>
-                                <th className="px-2.5 py-1.5 text-right text-[10px] font-medium text-muted-foreground">Tokens</th>
-                                <th className="px-2.5 py-1.5 text-right text-[10px] font-medium text-muted-foreground">Cost</th>
-                                <th className="px-2.5 py-1.5 text-right text-[10px] font-medium text-muted-foreground">Latency</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {detail.llm_calls.map((call, idx) => (
-                                <tr
-                                  key={call.id}
-                                  className="border-b border-border/20 last:border-0 cursor-pointer hover:bg-accent/20 transition-colors"
-                                  onClick={() => { setSelectedLLM(call); setLlmViewerOpen(true); }}
-                                >
-                                  <td className="px-2.5 py-1.5 text-muted-foreground">{idx + 1}</td>
-                                  <td className="px-2.5 py-1.5 font-medium text-foreground">{call.model}</td>
-                                  <td className="px-2.5 py-1.5 text-right tabular-nums text-muted-foreground">
-                                    {call.total_tokens > 0
-                                      ? call.total_tokens.toLocaleString()
-                                      : (call.prompt_tokens + call.completion_tokens) > 0
-                                        ? (call.prompt_tokens + call.completion_tokens).toLocaleString()
-                                        : <span className="text-muted-foreground/40">--</span>}
-                                  </td>
-                                  <td className="px-2.5 py-1.5 text-right tabular-nums text-muted-foreground">
-                                    {call.estimated_cost_usd != null && call.estimated_cost_usd > 0
-                                      ? formatCurrency(call.estimated_cost_usd)
-                                      : <span className="text-muted-foreground/40">--</span>}
-                                  </td>
-                                  <td className="px-2.5 py-1.5 text-right tabular-nums text-muted-foreground">
-                                    {call.latency_ms > 0 ? formatDuration(call.latency_ms) : <span className="text-muted-foreground/40">--</span>}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Tool Calls grouped */}
-                    <div className="rounded-lg border border-border/50 bg-card/30 p-3">
-                      <div className="mb-2 flex items-center justify-between gap-2">
-                        <h4 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                          Tool Calls ({detail.tool_calls.length})
-                        </h4>
-                        <div className="flex items-center gap-2">
-                          <div className="relative">
-                            <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-                            <Input value={toolSearch} onChange={(e) => setToolSearch(e.target.value)} placeholder="Filter tools" className="h-6 w-32 pl-6 text-[10px]" />
-                          </div>
-                          <Select value={toolGroupBy} onValueChange={(v) => setToolGroupBy(v as typeof toolGroupBy)}>
-                            <SelectTrigger className="h-6 w-28 text-[10px]">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="tool">Group by tool</SelectItem>
-                              <SelectItem value="individual">Individual</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-
-                      {toolGroupBy === "tool" ? (
-                        <div className="rounded-md border border-border/40 overflow-hidden">
-                          <table className="w-full text-xs">
-                            <thead>
-                              <tr className="border-b border-border/30 bg-muted/20">
-                                <th className="px-2.5 py-1.5 text-left text-[10px] font-medium text-muted-foreground">Tool</th>
-                                <th className="px-2.5 py-1.5 text-right text-[10px] font-medium text-muted-foreground">Count</th>
-                                <th className="px-2.5 py-1.5 text-right text-[10px] font-medium text-muted-foreground">Avg ms</th>
-                                <th className="px-2.5 py-1.5 text-right text-[10px] font-medium text-muted-foreground">Failures</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {toolCallGroups.map((group) => {
-                                const GroupIcon = getToolIcon(group.name);
-                                return (
-                                  <tr key={group.name} className="border-b border-border/20 last:border-0 hover:bg-accent/20 transition-colors">
-                                    <td className="px-2.5 py-1.5">
-                                      <div className="flex items-center gap-2">
-                                        <GroupIcon className={cn("h-3.5 w-3.5 shrink-0", getToolIconColor(group.name))} />
-                                        <span className="font-medium text-foreground">{group.name}</span>
-                                      </div>
-                                    </td>
-                                    <td className="px-2.5 py-1.5 text-right tabular-nums text-muted-foreground">{group.count}</td>
-                                    <td className="px-2.5 py-1.5 text-right tabular-nums text-muted-foreground">
-                                      {group.totalMs > 0 ? Math.round(group.totalMs / group.count) : <span className="text-muted-foreground/40">--</span>}
-                                    </td>
-                                    <td className="px-2.5 py-1.5 text-right">
-                                      <span className={group.failures > 0 ? "text-red-500 font-medium" : "text-muted-foreground"}>{group.failures}</span>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                              {toolCallGroups.length === 0 && (
-                                <tr><td colSpan={4} className="px-2.5 py-4 text-center text-muted-foreground">No tool calls match filter.</td></tr>
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      ) : (
-                        <div className="rounded-md border border-border/40 overflow-hidden max-h-[500px] overflow-y-auto">
-                          <table className="w-full text-xs">
-                            <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm z-10">
-                              <tr className="border-b border-border/30">
-                                <th className="w-6 px-1 py-1.5" />
-                                <th className="px-2.5 py-1.5 text-left text-[10px] font-medium text-muted-foreground">Tool</th>
-                                <th className="px-2.5 py-1.5 text-left text-[10px] font-medium text-muted-foreground">Detail</th>
-                                <th className="px-2.5 py-1.5 text-right text-[10px] font-medium text-muted-foreground">Duration</th>
-                                <th className="px-2.5 py-1.5 text-right text-[10px] font-medium text-muted-foreground">Status</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {(toolSearch.trim()
-                                ? detail.tool_calls.filter((tc) => tc.tool_name.toLowerCase().includes(toolSearch.trim().toLowerCase()))
-                                : detail.tool_calls
-                              ).map((tc) => {
-                                const IndIcon = getToolIcon(tc.tool_name);
-                                const isExpanded = expandedToolCalls.has(tc.id);
-                                const summary = getToolCallSummary(tc);
-                                const detailLabel = getToolDetailLabel(tc.tool_name);
-
-                                return (
-                                  <Fragment key={tc.id}>
-                                    <tr
-                                      className="border-b border-border/20 last:border-0 hover:bg-accent/20 transition-colors cursor-pointer"
-                                      onClick={() => {
-                                        setExpandedToolCalls((prev) => {
-                                          const next = new Set(prev);
-                                          if (next.has(tc.id)) next.delete(tc.id);
-                                          else next.add(tc.id);
-                                          return next;
-                                        });
-                                      }}
-                                    >
-                                      <td className="px-1 py-1.5 w-6">
-                                        <ChevronRight className={cn(
-                                          "h-3 w-3 text-muted-foreground transition-transform",
-                                          isExpanded && "rotate-90",
-                                        )} />
-                                      </td>
-                                      <td className="px-2.5 py-1.5">
-                                        <div className="flex items-center gap-2">
-                                          <IndIcon className={cn("h-3.5 w-3.5 shrink-0", getToolIconColor(tc.tool_name))} />
-                                          <span className="font-medium text-foreground">{tc.tool_name}</span>
-                                        </div>
-                                      </td>
-                                      <td className="px-2.5 py-1.5 max-w-[240px]">
-                                        <span className="text-muted-foreground/80 font-mono text-[10px] block truncate" title={summary}>
-                                          {summary || <span className="text-muted-foreground/40 italic">no detail</span>}
-                                        </span>
-                                      </td>
-                                      <td className="px-2.5 py-1.5 text-right tabular-nums text-muted-foreground">
-                                        {tcLatency(tc) > 0 ? formatDuration(tcLatency(tc)) : <span className="text-muted-foreground/40">--</span>}
-                                      </td>
-                                      <td className="px-2.5 py-1.5 text-right">
-                                        <span className={cn(
-                                          "text-[10px] font-medium",
-                                          tc.status.toLowerCase() === "completed" || tc.status.toLowerCase() === "succeeded"
-                                            ? "text-emerald-500" : "text-red-500",
-                                        )}>{tc.status}</span>
-                                      </td>
-                                    </tr>
-                                    {isExpanded && (
-                                      <tr key={`${tc.id}-detail`} className="bg-muted/15">
-                                        <td colSpan={5} className="px-4 py-2.5">
-                                          <div className="space-y-2.5 text-[11px]">
-                                            {/* args as visual key-value card */}
-                                            {(tc.tool_args || tc.args_preview) && (
-                                              <div>
-                                                <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide block mb-1">{detailLabel}</span>
-                                                <ArgsCard tc={tc} />
-                                              </div>
-                                            )}
-                                            {/* result with truncation */}
-                                            {(tc.tool_result != null || tc.result_preview) && (
-                                              <div>
-                                                <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide block mb-1">Result</span>
-                                                <ResultBlock tc={tc} />
-                                              </div>
-                                            )}
-                                            {/* error_message */}
-                                            {tc.error_message && (
-                                              <div className="rounded-md bg-red-500/10 border border-red-500/20 px-2.5 py-1.5">
-                                                <span className="text-[10px] font-semibold text-red-500 uppercase tracking-wide">Error</span>
-                                                <pre className="mt-1 text-[10px] font-mono text-red-400 whitespace-pre-wrap break-all">{tc.error_message}</pre>
-                                              </div>
-                                            )}
-                                            {/* Timestamps */}
-                                            <div className="flex items-center gap-3 text-[10px] text-muted-foreground/60 pt-1">
-                                              <span>Created: {formatCompactDate(tcTimestamp(tc))}</span>
-                                              {tcLatency(tc) > 0 && <span>Latency: {formatDuration(tcLatency(tc))}</span>}
-                                              <span className="font-mono text-[9px] text-muted-foreground/40 ml-auto">ID: {tc.id}</span>
-                                            </div>
-                                          </div>
-                                        </td>
-                                      </tr>
-                                    )}
-                                  </Fragment>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </TabsContent>
-
               {/* ═══════ COMPARE TAB ═══════ */}
-              <TabsContent value="compare" className="mt-0 min-h-0 flex-1 overflow-y-auto p-4">
-                <div className="space-y-4">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Select value={compareLeftId ?? undefined} onValueChange={(v) => setCompareLeftId(v || null)}>
-                      <SelectTrigger className="h-8 w-64 text-xs">
-                        <SelectValue placeholder="Left execution" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {executions.filter((e) => e.id).map((exec) => (
-                          <SelectItem key={exec.id} value={exec.id} className="text-xs">
-                            {exec.workflow_name} &middot; {exec.status} &middot; {formatCompactDate(exec.started_at)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <GitCompare className="h-4 w-4 text-muted-foreground" />
-                    <Select value={compareRightId ?? undefined} onValueChange={(v) => setCompareRightId(v || null)}>
-                      <SelectTrigger className="h-8 w-64 text-xs">
-                        <SelectValue placeholder="Right execution" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {executions.filter((e) => e.id).map((exec) => (
-                          <SelectItem key={exec.id} value={exec.id} className="text-xs">
-                            {exec.workflow_name} &middot; {exec.status} &middot; {formatCompactDate(exec.started_at)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {/* Quick: compare with previous */}
-                    {executions.length >= 2 && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-8 text-[11px]"
-                        onClick={() => {
-                          setCompareLeftId(executions[0]?.id ?? null);
-                          setCompareRightId(executions[1]?.id ?? null);
-                        }}
-                      >
-                        Compare latest vs. previous
-                      </Button>
-                    )}
-                  </div>
+              <TabsContent value="compare" className="mt-0 min-h-0 flex-1 overflow-y-auto p-3">
+                <div className="space-y-3">
+                  <CompareToolbar
+                    executions={executions}
+                    compareLeftId={compareLeftId}
+                    compareRightId={compareRightId}
+                    setCompareLeftId={setCompareLeftId}
+                    setCompareRightId={setCompareRightId}
+                  />
 
                   {compareLoading ? (
                     <div className="flex items-center justify-center py-16">

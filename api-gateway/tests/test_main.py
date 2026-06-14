@@ -1985,6 +1985,30 @@ class AgentReadCacheTests(unittest.TestCase):
         self.assertEqual(second["spec"]["model"], "gpt-4.1")
 
 
+class AgentManifestRouteTests(unittest.TestCase):
+    def test_get_agent_manifest_reads_aiagent_crd_plural(self) -> None:
+        manifest = {
+            "apiVersion": "synapse.kubesynapse.io/v1alpha1",
+            "kind": "AIAgent",
+            "metadata": {"name": "standup-git", "namespace": "default"},
+            "spec": {"runtime": {"kind": "opencode"}},
+        }
+
+        with (
+            patch.object(api_gateway_agents, "ensure_namespace_access") as ensure_access,
+            patch.object(api_gateway_agents, "read_custom_resource", return_value=manifest) as read_resource,
+        ):
+            response = api_gateway_agents.get_agent_manifest(
+                "standup-git",
+                namespace="default",
+                user={"sub": "admin"},
+            )
+
+        ensure_access.assert_called_once_with({"sub": "admin"}, "default")
+        read_resource.assert_called_once_with("aiagents", "standup-git", "default", "Agent")
+        self.assertEqual(json.loads(response.body), manifest)
+
+
 class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         _bind_gateway_module(self, api_gateway_agents)

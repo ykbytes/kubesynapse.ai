@@ -6,8 +6,6 @@ import {
   Clock,
   DollarSign,
   ListTree,
-  TrendingDown,
-  TrendingUp,
   Wrench,
   XCircle,
   Zap,
@@ -67,14 +65,184 @@ function median(values: number[]): number {
     : sorted[middle];
 }
 
-interface ScorecardItem {
+function statusDotClass(status: string): string {
+  const normalized = status.toLowerCase();
+  if (normalized === "completed" || normalized === "succeeded") return "bg-emerald-500";
+  if (normalized === "failed" || normalized === "error") return "bg-red-500";
+  if (normalized === "running" || normalized === "in_progress") return "bg-amber-500";
+  if (normalized.includes("cancel")) return "bg-amber-500";
+  return "bg-muted-foreground/40";
+}
+
+function MetricChip({
+  icon: Icon,
+  label,
+  value,
+  detail,
+  tone = "neutral",
+}: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
-  value: string;
-  subtitle?: string;
-  trend?: "up" | "down" | null;
-  trendLabel?: string;
+  value: React.ReactNode;
+  detail?: React.ReactNode;
   tone?: "success" | "danger" | "warning" | "neutral";
+}) {
+  return (
+    <div
+      className={cn(
+        "flex min-w-0 items-center gap-2 rounded-md border px-2.5 py-1.5",
+        tone === "success" && "border-emerald-500/20 bg-emerald-500/5",
+        tone === "danger" && "border-red-500/20 bg-red-500/5",
+        tone === "warning" && "border-amber-500/20 bg-amber-500/5",
+        tone === "neutral" && "border-border/50 bg-background/70",
+      )}
+    >
+      <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      <div className="min-w-0">
+        <div className="flex items-baseline gap-1.5">
+          <span className="text-sm font-semibold tabular-nums text-foreground">{value}</span>
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</span>
+        </div>
+        {detail && <div className="truncate text-[10px] text-muted-foreground">{detail}</div>}
+      </div>
+    </div>
+  );
+}
+
+function SectionPanel({
+  title,
+  meta,
+  className,
+  children,
+}: {
+  title: string;
+  meta?: React.ReactNode;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={cn("rounded-lg border border-border/50 bg-card/80 p-3", className)}>
+      <div className="mb-2 flex min-h-5 items-center justify-between gap-2">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</h4>
+        {meta && <div className="text-[10px] text-muted-foreground">{meta}</div>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function RunDigestBar({
+  status,
+  durationMs,
+  durationTrend,
+  completedSteps,
+  failedSteps,
+  stepCount,
+  llmCount,
+  toolCount,
+  totalTokens,
+  cost,
+  cacheHitRatio,
+  hottestStep,
+  signals,
+  qualityFlags,
+  onJumpToErrors,
+  onViewLogs,
+}: {
+  status: string;
+  durationMs: number | null;
+  durationTrend: { direction: "up" | "down" | null; label: string };
+  completedSteps: number;
+  failedSteps: number;
+  stepCount: number;
+  llmCount: number;
+  toolCount: number;
+  totalTokens: number;
+  cost?: number | null;
+  cacheHitRatio: number | null;
+  hottestStep: StepTrace | null;
+  signals: Array<{ message: string; tone: "success" | "warning" | "danger" | "info" }>;
+  qualityFlags: Array<{ label: string; tone: "warning" | "danger" }>;
+  onJumpToErrors?: () => void;
+  onViewLogs?: () => void;
+}) {
+  const stepTone = failedSteps > 0 ? "danger" : stepCount > 0 && completedSteps === stepCount ? "success" : "warning";
+  const signal = qualityFlags[0]?.label ?? signals.find((item) => item.tone !== "success")?.message;
+
+  return (
+    <div className="rounded-lg border border-border/60 bg-card/80 px-3 py-2.5">
+      <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", statusDotClass(status))} />
+            <span className="text-sm font-semibold capitalize text-foreground">{status}</span>
+            {signal && (
+              <span className={cn(
+                "truncate rounded-md border px-2 py-0.5 text-[11px]",
+                qualityFlags[0]?.tone === "danger"
+                  ? "border-red-500/20 bg-red-500/5 text-red-500"
+                  : "border-amber-500/20 bg-amber-500/5 text-amber-600 dark:text-amber-400",
+              )}>
+                {signal}
+              </span>
+            )}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+            {hottestStep && (
+              <span>
+                Critical step <span className="font-medium text-foreground">{hottestStep.name}</span> {formatDuration(hottestStep.latency_ms)}
+              </span>
+            )}
+            {cacheHitRatio != null && (
+              <span>Cache hit {formatPercent(cacheHitRatio * 100)}</span>
+            )}
+            {totalTokens > 0 && <span>{formatTokens(totalTokens)} tokens</span>}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <MetricChip
+            icon={Clock}
+            label="duration"
+            value={formatDuration(durationMs)}
+            detail={durationTrend.direction ? (
+              <span className={durationTrend.direction === "up" ? "text-red-500" : "text-emerald-500"}>
+                {durationTrend.direction === "up" ? "slower" : "faster"} {durationTrend.label}
+              </span>
+            ) : undefined}
+          />
+          <MetricChip
+            icon={ListTree}
+            label="steps"
+            value={`${completedSteps}/${stepCount}`}
+            detail={failedSteps > 0 ? `${failedSteps} failed` : undefined}
+            tone={stepTone}
+          />
+          <MetricChip icon={BrainCircuit} label="llm" value={llmCount} />
+          <MetricChip icon={Wrench} label="tools" value={toolCount} />
+          {cost != null && cost > 0 && <MetricChip icon={DollarSign} label="cost" value={formatCost(cost)} />}
+          {failedSteps > 0 && onJumpToErrors && (
+            <button
+              type="button"
+              onClick={onJumpToErrors}
+              className="h-8 rounded-md border border-red-500/20 bg-red-500/5 px-2.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-500/10 dark:text-red-400"
+            >
+              Errors
+            </button>
+          )}
+          {onViewLogs && (
+            <button
+              type="button"
+              onClick={onViewLogs}
+              className="h-8 rounded-md border border-border/50 bg-background/70 px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              Logs
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function ObservatoryOverview({
@@ -129,44 +297,6 @@ export function ObservatoryOverview({
       label: `${diff > 0 ? "+" : "-"}${pct}%`,
     };
   }, [durationMs, prevDuration]);
-
-  const scorecard: ScorecardItem[] = useMemo(() => [
-    {
-      icon: Clock,
-      label: "Duration",
-      value: formatDuration(durationMs),
-      trend: durationTrend.direction,
-      trendLabel: durationTrend.label,
-      tone: "neutral" as const,
-    },
-    {
-      icon: ListTree,
-      label: "Steps",
-      value: `${completedSteps}/${stepCount}`,
-      subtitle: failedSteps > 0 ? `${failedSteps} failed` : stepCount > 0 && completedSteps === stepCount ? "all passed" : undefined,
-      tone: failedSteps > 0 ? "danger" as const : completedSteps === stepCount ? "success" as const : "warning" as const,
-    },
-    {
-      icon: BrainCircuit,
-      label: "LLM Calls",
-      value: String(llmCount),
-      subtitle: totalTokens > 0 ? `${formatTokens(totalTokens)} tokens` : undefined,
-      tone: "neutral" as const,
-    },
-    {
-      icon: Wrench,
-      label: "Tool Calls",
-      value: String(toolCount),
-      tone: "neutral" as const,
-    },
-    {
-      icon: DollarSign,
-      label: "Cost",
-      value: formatCost(cost),
-      subtitle: detail?.prompt_tokens != null ? `${detail.prompt_tokens}p / ${detail.completion_tokens ?? 0}c` : undefined,
-      tone: "neutral" as const,
-    },
-  ], [completedSteps, cost, detail?.completion_tokens, detail?.prompt_tokens, durationMs, durationTrend, failedSteps, llmCount, stepCount, toolCount, totalTokens]);
 
   // Signals/verdict
   const signals = useMemo(() => {
@@ -279,6 +409,11 @@ export function ObservatoryOverview({
       .slice(0, 5);
   }, [durationMs, orderedSteps]);
 
+  const hottestStep = useMemo(() => {
+    if (orderedSteps.length === 0) return null;
+    return [...orderedSteps].sort((left, right) => (right.latency_ms ?? 0) - (left.latency_ms ?? 0))[0] ?? null;
+  }, [orderedSteps]);
+
   const toolMix = useMemo(() => {
     if (!detail || detail.tool_calls.length === 0) return [];
     const groups = new Map<string, { count: number; totalDuration: number; failures: number }>();
@@ -388,246 +523,133 @@ export function ObservatoryOverview({
   }
 
   return (
-    <div className="space-y-4 p-4">
-      {/* Scorecard */}
-      <div className="grid grid-cols-2 gap-2.5 md:grid-cols-3 lg:grid-cols-5">
-        {scorecard.map((item) => {
-          const Icon = item.icon;
-          return (
-            <div
-              key={item.label}
-              className={cn(
-                "rounded-lg border p-3 transition-colors",
-                item.tone === "success" && "border-emerald-500/20 bg-emerald-500/5",
-                item.tone === "danger" && "border-red-500/20 bg-red-500/5",
-                item.tone === "warning" && "border-amber-500/20 bg-amber-500/5",
-                item.tone === "neutral" && "border-border/50 bg-card",
-              )}
+    <div className="space-y-3 p-3">
+      <RunDigestBar
+        status={status}
+        durationMs={durationMs}
+        durationTrend={durationTrend}
+        completedSteps={completedSteps}
+        failedSteps={failedSteps}
+        stepCount={stepCount}
+        llmCount={llmCount}
+        toolCount={toolCount}
+        totalTokens={totalTokens}
+        cost={cost}
+        cacheHitRatio={cacheHitRatio}
+        hottestStep={hottestStep}
+        signals={signals}
+        qualityFlags={qualityFlags}
+        onJumpToErrors={onJumpToErrors}
+        onViewLogs={onViewLogs}
+      />
+
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.35fr)_minmax(22rem,0.65fr)]">
+        <div className="space-y-3">
+          {orderedSteps.length > 0 && (
+            <SectionPanel
+              title="Step Waterfall"
+              meta={`${orderedSteps.length} steps / ${formatDuration(durationMs)} total`}
             >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                  <Icon className="h-3 w-3" />
-                  {item.label}
-                </div>
-                {item.trend && (
-                  <span className={cn(
-                    "flex items-center gap-0.5 text-[10px] font-medium",
-                    item.trend === "up" ? "text-red-400" : "text-emerald-400",
-                  )}>
-                    {item.trend === "up" ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-                    {item.trendLabel}
-                  </span>
+              <StepWaterfall
+                steps={orderedSteps}
+                executionStartedAt={detail?.started_at}
+                onStepClick={onStepClick}
+              />
+            </SectionPanel>
+          )}
+
+          {tokenBreakdown.length > 0 && tokenTotals && (
+            <SectionPanel
+              title="Token Breakdown"
+              meta={
+                <span className="flex flex-wrap items-center gap-2">
+                  <span>{formatTokens(tokenTotals.total)} total</span>
+                  {cacheHitRatio != null && tokenTotals.input + tokenTotals.cacheRead > 0 && (
+                    <span className={cn(
+                      "rounded-md border px-1.5 py-0.5 font-medium",
+                      cacheHitRatio >= 0.5
+                        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                        : cacheHitRatio >= 0.2
+                          ? "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                          : "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400",
+                    )}>
+                      {formatPercent(cacheHitRatio * 100)} cache
+                    </span>
+                  )}
+                </span>
+              }
+            >
+              <ShareBars data={tokenBreakdown.map((segment) => ({
+                label: segment.label,
+                value: tokenTotals.total > 0 ? (segment.value / tokenTotals.total) * 100 : 0,
+                hint: `${formatTokens(segment.value)} tokens`,
+                tone: segment.tone,
+              }))} valueFormatter={(value) => formatPercent(value)} />
+            </SectionPanel>
+          )}
+
+          {stepRangeData.length > 0 && (
+            <SectionPanel title="Step Variability" meta="current vs median">
+              <RangeBarChart data={stepRangeData} valueFormatter={formatCompactMs} />
+            </SectionPanel>
+          )}
+        </div>
+
+        <div className="space-y-3">
+          {(recentRunTrend.length > 1 || stepContribution.length > 0 || toolMix.length > 0 || qualityFlags.length > 0) && (
+            <SectionPanel title="Runtime Profile">
+              <div className="space-y-4">
+                {recentRunTrend.length > 1 && (
+                  <div>
+                    <div className="mb-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
+                      <span className="font-medium uppercase tracking-wide">Trend</span>
+                      <span>Last {recentRunTrend.length}</span>
+                    </div>
+                    <TrendSparkline data={recentRunTrend} valueFormatter={(value) => value == null ? "--" : formatDuration(value)} />
+                  </div>
+                )}
+
+                {stepContribution.length > 0 && (
+                  <div>
+                    <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Contribution</div>
+                    <ShareBars data={stepContribution} valueFormatter={(value) => formatPercent(value)} />
+                  </div>
+                )}
+
+                {toolMix.length > 0 && (
+                  <div>
+                    <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Tool Mix</div>
+                    <ShareBars data={toolMix} valueFormatter={formatCompactMs} />
+                  </div>
+                )}
+
+                {qualityFlags.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {qualityFlags.map((flag) => (
+                      <span
+                        key={flag.label}
+                        className={cn(
+                          "rounded-md border px-2 py-1 text-[11px]",
+                          flag.tone === "danger"
+                            ? "border-red-500/20 bg-red-500/5 text-red-500"
+                            : "border-amber-500/20 bg-amber-500/5 text-amber-600 dark:text-amber-400",
+                        )}
+                      >
+                        {flag.label}
+                      </span>
+                    ))}
+                  </div>
                 )}
               </div>
-              <p className="mt-1.5 text-lg font-semibold tabular-nums text-foreground">{item.value}</p>
-              {item.subtitle && (
-                <p className="mt-0.5 text-[11px] text-muted-foreground">{item.subtitle}</p>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Step Waterfall */}
-      {orderedSteps.length > 0 && (
-        <div className="rounded-lg border border-border/50 bg-card p-3">
-          <div className="mb-2 flex items-center justify-between">
-            <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Step Waterfall</h4>
-            <span className="text-[10px] text-muted-foreground">{orderedSteps.length} steps &middot; {formatDuration(durationMs)} total</span>
-          </div>
-          <StepWaterfall
-            steps={orderedSteps}
-            executionStartedAt={detail?.started_at}
-            onStepClick={onStepClick}
-          />
-        </div>
-      )}
-
-      {/* Token Breakdown */}
-      {tokenBreakdown.length > 0 && tokenTotals && (
-        <div className="rounded-lg border border-border/50 bg-card p-3">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Token Breakdown</h4>
-            <div className="flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground">
-              <span>Total {formatTokens(tokenTotals.total)} tokens</span>
-              {cacheHitRatio != null && tokenTotals.input + tokenTotals.cacheRead > 0 && (
-                <span className={cn(
-                  "rounded-md border px-1.5 py-0.5 font-medium",
-                  cacheHitRatio >= 0.5
-                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                    : cacheHitRatio >= 0.2
-                      ? "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                      : "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400",
-                )}>
-                  Cache hit {formatPercent(cacheHitRatio * 100)}
-                </span>
-              )}
-            </div>
-          </div>
-          <ShareBars data={tokenBreakdown.map((segment) => ({
-            label: segment.label,
-            value: tokenTotals.total > 0 ? (segment.value / tokenTotals.total) * 100 : 0,
-            hint: `${formatTokens(segment.value)} tokens`,
-            tone: segment.tone,
-          }))} valueFormatter={(value) => formatPercent(value)} />
-          <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-5">
-            <div className="rounded-md border border-sky-500/20 bg-sky-500/5 px-2 py-1.5">
-              <div className="text-[10px] uppercase tracking-wide text-sky-600 dark:text-sky-400">Input</div>
-              <div className="mt-0.5 font-semibold tabular-nums text-foreground">{formatTokens(tokenTotals.input)}</div>
-            </div>
-            <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 px-2 py-1.5">
-              <div className="text-[10px] uppercase tracking-wide text-emerald-600 dark:text-emerald-400">Cache read</div>
-              <div className="mt-0.5 font-semibold tabular-nums text-foreground">{formatTokens(tokenTotals.cacheRead)}</div>
-            </div>
-            <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-2 py-1.5">
-              <div className="text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-400">Cache write</div>
-              <div className="mt-0.5 font-semibold tabular-nums text-foreground">{formatTokens(tokenTotals.cacheWrite)}</div>
-            </div>
-            <div className="rounded-md border border-violet-500/20 bg-violet-500/5 px-2 py-1.5">
-              <div className="text-[10px] uppercase tracking-wide text-violet-600 dark:text-violet-400">Reasoning</div>
-              <div className="mt-0.5 font-semibold tabular-nums text-foreground">{formatTokens(tokenTotals.reasoning)}</div>
-            </div>
-            <div className="rounded-md border border-rose-500/20 bg-rose-500/5 px-2 py-1.5">
-              <div className="text-[10px] uppercase tracking-wide text-rose-600 dark:text-rose-400">Output</div>
-              <div className="mt-0.5 font-semibold tabular-nums text-foreground">{formatTokens(tokenTotals.output)}</div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {(recentRunTrend.length > 1 || stepContribution.length > 0) && (
-        <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-          {recentRunTrend.length > 1 && (
-            <div className="rounded-lg border border-border/50 bg-card p-3">
-              <div className="mb-2 flex items-center justify-between">
-                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recent Run Trend</h4>
-                <span className="text-[10px] text-muted-foreground">Last {recentRunTrend.length} runs</span>
-              </div>
-              <TrendSparkline data={recentRunTrend} valueFormatter={(value) => value == null ? "--" : formatDuration(value)} />
-            </div>
+            </SectionPanel>
           )}
 
-          {stepContribution.length > 0 && (
-            <div className="rounded-lg border border-border/50 bg-card p-3">
-              <div className="mb-2 flex items-center justify-between">
-                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Step Contribution</h4>
-                <span className="text-[10px] text-muted-foreground">Share of total duration</span>
-              </div>
-              <ShareBars data={stepContribution} valueFormatter={(value) => formatPercent(value)} />
-            </div>
-          )}
-        </div>
-      )}
-
-      {(stepRangeData.length > 0 || toolMix.length > 0) && (
-        <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-          {stepRangeData.length > 0 && (
-            <div className="rounded-lg border border-border/50 bg-card p-3">
-              <div className="mb-2 flex items-center justify-between">
-                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Step Variability</h4>
-                <span className="text-[10px] text-muted-foreground">Current vs median range</span>
-              </div>
-              <RangeBarChart data={stepRangeData} valueFormatter={formatCompactMs} />
-            </div>
-          )}
-
-          {toolMix.length > 0 && (
-            <div className="rounded-lg border border-border/50 bg-card p-3">
-              <div className="mb-2 flex items-center justify-between">
-                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Tool Mix</h4>
-                <span className="text-[10px] text-muted-foreground">Usage weighted by time</span>
-              </div>
-              <ShareBars data={toolMix} valueFormatter={formatCompactMs} />
-            </div>
-          )}
-        </div>
-      )}
-
-      {(modelScatter.length > 0 || qualityFlags.length > 0) && (
-        <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
           {modelScatter.length > 0 && (
-            <div className="rounded-lg border border-border/50 bg-card p-3">
-              <div className="mb-2 flex items-center justify-between">
-                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Model Efficiency</h4>
-                <span className="text-[10px] text-muted-foreground">Tokens vs latency, bubble by cost</span>
-              </div>
+            <SectionPanel title="Model Efficiency" meta="tokens vs latency">
               <ScatterField data={modelScatter} xLabel="Tokens" yLabel="Latency" />
-            </div>
-          )}
-
-          {qualityFlags.length > 0 && (
-            <div className="rounded-lg border border-border/50 bg-card p-3">
-              <div className="mb-2 flex items-center justify-between">
-                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Quality Flags</h4>
-                <span className="text-[10px] text-muted-foreground">Completed does not always mean healthy</span>
-              </div>
-              <div className="space-y-2">
-                {qualityFlags.map((flag) => (
-                  <div
-                    key={flag.label}
-                    className={cn(
-                      "rounded-md border px-2.5 py-2 text-xs",
-                      flag.tone === "danger"
-                        ? "border-red-500/20 bg-red-500/5 text-red-400"
-                        : "border-amber-500/20 bg-amber-500/5 text-amber-400",
-                    )}
-                  >
-                    {flag.label}
-                  </div>
-                ))}
-              </div>
-            </div>
+            </SectionPanel>
           )}
         </div>
-      )}
-
-      {/* Signals & Verdict */}
-      {signals.length > 0 && (
-        <div className="rounded-lg border border-border/50 bg-card p-3">
-          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Signals</h4>
-          <div className="space-y-1.5">
-            {signals.map((signal, idx) => {
-              const SIcon = signal.icon;
-              return (
-                <div
-                  key={idx}
-                  className={cn(
-                    "flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs",
-                    signal.tone === "success" && "text-emerald-600 dark:text-emerald-400",
-                    signal.tone === "danger" && "text-red-600 dark:text-red-400",
-                    signal.tone === "warning" && "text-amber-600 dark:text-amber-400",
-                    signal.tone === "info" && "text-sky-600 dark:text-sky-400",
-                  )}
-                >
-                  <SIcon className="h-3.5 w-3.5 shrink-0" />
-                  <span>{signal.message}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Quick Actions */}
-      <div className="flex flex-wrap items-center gap-2">
-        {failedSteps > 0 && onJumpToErrors && (
-          <button
-            type="button"
-            onClick={onJumpToErrors}
-            className="rounded-md border border-red-500/20 bg-red-500/5 px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-500/10 dark:text-red-400"
-          >
-            Jump to errors
-          </button>
-        )}
-        {onViewLogs && (
-          <button
-            type="button"
-            onClick={onViewLogs}
-            className="rounded-md border border-border/50 bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            View raw logs
-          </button>
-        )}
       </div>
 
       {/* No detail notice */}

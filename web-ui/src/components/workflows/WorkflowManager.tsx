@@ -2,19 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
   Blocks,
-  CheckCircle2,
   Clock,
   FolderOpen,
   LoaderCircle,
   Pencil,
   Play,
   Save,
-  ShieldCheck,
   Square,
   Trash2,
-  Users,
   Workflow,
-  XCircle,
 } from "lucide-react";
 import { useConnection } from "@/contexts/ConnectionContext";
 import { fetchWorkflowNextAction, type WorkflowRunRecord } from "@/lib/api";
@@ -34,7 +30,6 @@ import { WorkflowFilesView } from "../workflow/WorkflowFilesView";
 import { useManifestViewer } from "@/hooks/useManifestViewer";
 import {
   defaultStepsForAgent,
-  formatElapsed,
   isStepActive,
   isStepComplete,
   hasStepActivity,
@@ -284,7 +279,6 @@ export function WorkflowManager({
     Boolean(name.trim()) && steps.length > 0 && hasUniqueStepNames &&
     steps.every((step) => step.name.trim() && step.agent_ref.trim());
   const uniqueAgentCount = new Set(steps.map((s) => s.agent_ref).filter(Boolean)).size;
-  const approvalStepCount = steps.filter((s) => s.require_approval).length;
   const loopStepCount = steps.filter((s) => s.step_type === "loop").length;
   const reviewStepCount = steps.filter((s) => s.step_type === "review").length;
 
@@ -308,8 +302,6 @@ export function WorkflowManager({
   const failedStepCount =
     wfSummary?.failedSteps ??
     Object.values(workflow?.step_states ?? {}).filter((s) => s?.status === "failed").length;
-  const waitingApprovalCount =
-    wfSummary?.waitingApprovalSteps ?? (workflow?.pending_approval ? 1 : 0);
   const currentFocus =
     workflow?.current_step ||
     wfSummary?.currentFrontier?.[0] ||
@@ -434,11 +426,6 @@ export function WorkflowManager({
   }, [workflow]);
 
   const isFactoryWorkflow = isFactoryWorkflowName(workflow?.name);
-  const totalSteps = wfSummary?.totalSteps ?? steps.length;
-  const doneSteps = wfSummary
-    ? (wfSummary.completedSteps ?? 0) + (wfSummary.failedSteps ?? 0) + (wfSummary.skippedSteps ?? 0)
-    : completedStepCount;
-  const elapsed = isActive && wfSummary?.startedAt ? formatElapsed(wfSummary.startedAt) : undefined;
   const activeTab = workflow && hasBeenTriggered ? workspaceTab : "definition";
   const { ManifestButton, ManifestModalComponent } = useManifestViewer({
     resourceType: "workflow",
@@ -486,6 +473,13 @@ export function WorkflowManager({
                 <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
                   {workflow?.description || workflowBrief.body}
                 </p>
+                {workflow && (
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span>{steps.length} step{steps.length === 1 ? "" : "s"}</span>
+                    <span>{uniqueAgentCount} agent{uniqueAgentCount === 1 ? "" : "s"}</span>
+                    {workflow.run_id && <span className="font-mono">{workflow.run_id}</span>}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -545,49 +539,6 @@ export function WorkflowManager({
             </div>
           </div>
 
-          <div className="grid border-t border-border/60 md:grid-cols-4">
-            <div className="flex items-center gap-3 border-b border-border/60 px-5 py-3 md:border-b-0 md:border-r">
-              {isActive ? (
-                <LoaderCircle className="h-4 w-4 animate-spin text-primary" />
-              ) : workflow?.phase === "failed" || workflow?.phase === "cancelled" ? (
-                <XCircle className="h-4 w-4 text-destructive" />
-              ) : workflow?.phase === "completed" || workflow?.phase === "succeeded" ? (
-                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-              ) : (
-                <Clock className="h-4 w-4 text-muted-foreground" />
-              )}
-              <div>
-                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Status</div>
-                <div className="text-sm font-medium capitalize text-foreground">{workflow?.phase ?? "draft"}</div>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 border-b border-border/60 px-5 py-3 md:border-b-0 md:border-r">
-              <BarChart3 className="h-4 w-4 text-muted-foreground" />
-              <div>
-                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Steps</div>
-                <div className="text-sm font-medium text-foreground">{hasBeenTriggered ? `${doneSteps}/${totalSteps}` : steps.length}</div>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 border-b border-border/60 px-5 py-3 md:border-b-0 md:border-r">
-              <Users className="h-4 w-4 text-muted-foreground" />
-              <div>
-                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Agents</div>
-                <div className="text-sm font-medium text-foreground">{uniqueAgentCount}</div>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 px-5 py-3">
-              <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-              <div>
-                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                  {elapsed ? "Elapsed" : "Approvals"}
-                </div>
-                <div className="text-sm font-medium text-foreground">
-                  {elapsed ?? (isActive ? waitingApprovalCount : approvalStepCount)}
-                </div>
-              </div>
-            </div>
-          </div>
-
           <div className="flex flex-col gap-3 border-t border-border/60 px-5 py-3 lg:flex-row lg:items-center lg:justify-between">
             <TabsList className="h-auto w-full justify-start gap-1 rounded-md bg-muted/45 p-1 lg:w-auto">
               {workflow && hasBeenTriggered && (
@@ -611,12 +562,6 @@ export function WorkflowManager({
                 Definition
               </TabsTrigger>
             </TabsList>
-            {nextAction && workflow && hasBeenTriggered && activeTab === "overview" && (
-              <div className="min-w-0 truncate text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">{nextAction.action}</span>
-                <span className="ml-2">{nextAction.reason}</span>
-              </div>
-            )}
           </div>
         </div>
 
@@ -635,7 +580,6 @@ export function WorkflowManager({
               approvalBusy={approvalBusy}
               onApprovalReasonChange={onApprovalReasonChange}
               onApprovalDecision={onApprovalDecision}
-              nextAction={nextAction}
               showTriggerConfirm={showTriggerConfirm}
               setShowTriggerConfirm={setShowTriggerConfirm}
               triggerInput={triggerInput}

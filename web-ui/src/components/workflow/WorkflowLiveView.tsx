@@ -10,14 +10,13 @@ import {
   Repeat,
   ShieldCheck,
   SkipForward,
-  Sparkles,
   Square,
   Timer,
   XCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ExpandableMarkdownEditor } from "../shared/ExpandableMarkdownEditor";
@@ -34,7 +33,6 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import type {
   FactoryMode,
   WorkflowInfo,
-  WorkflowNextAction,
   WorkflowStep,
   WorkflowSummary,
 } from "../../types";
@@ -141,35 +139,6 @@ function ProgressSummaryBar({ summary, phase }: { summary: WorkflowSummary; phas
   );
 }
 
-function SignalMetric({
-  label,
-  value,
-  detail,
-  tone,
-}: {
-  label: string;
-  value: number | string;
-  detail: string;
-  tone: "amber" | "sky" | "violet" | "neutral";
-}) {
-  const toneClass =
-    tone === "amber"
-      ? "border-amber-500/25 bg-amber-500/5"
-      : tone === "sky"
-        ? "border-sky-500/25 bg-sky-500/5"
-        : tone === "violet"
-          ? "border-violet-500/25 bg-violet-500/5"
-          : "border-border/60 bg-card/70";
-
-  return (
-    <div className={`rounded-lg border p-3 ${toneClass}`}>
-      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="mt-1 text-2xl font-semibold leading-none text-foreground">{value}</div>
-      <div className="mt-2 text-xs leading-5 text-muted-foreground">{detail}</div>
-    </div>
-  );
-}
-
 /* ────────── live view ────────── */
 
 interface WorkflowLiveViewProps {
@@ -196,7 +165,6 @@ interface WorkflowLiveViewProps {
   approvalBusy: boolean;
   onApprovalReasonChange: (v: string) => void;
   onApprovalDecision: (d: "approved" | "denied") => void;
-  nextAction: WorkflowNextAction | null;
   showTriggerConfirm: boolean;
   setShowTriggerConfirm: (v: boolean) => void;
   triggerInput: string;
@@ -225,7 +193,6 @@ export function WorkflowLiveView({
   approvalBusy,
   onApprovalReasonChange,
   onApprovalDecision,
-  nextAction,
   showTriggerConfirm,
   setShowTriggerConfirm,
   triggerInput,
@@ -260,27 +227,7 @@ export function WorkflowLiveView({
   return (
     <div className="animate-fade-in space-y-5">
       <Card className="overflow-hidden border-border/70 bg-card shadow-sm">
-        <CardHeader className="border-b border-border/60 bg-muted/20 px-5 py-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <CardTitle className="text-base">Run command center</CardTitle>
-              <CardDescription className="mt-1 text-xs">
-                Execution state, operational signals, and next action in one compact workspace.
-              </CardDescription>
-            </div>
-            {nextAction && (
-              <div className="flex max-w-2xl items-start gap-3 rounded-lg border border-primary/20 bg-background/75 px-3 py-2">
-                <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                <div className="min-w-0">
-                  <div className="text-[11px] font-medium uppercase tracking-wide text-primary">Suggested next</div>
-                  <div className="truncate text-sm font-semibold text-foreground">{nextAction.action}</div>
-                  <div className="line-clamp-2 text-xs leading-5 text-muted-foreground">{nextAction.reason}</div>
-                </div>
-              </div>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-5 p-5">
+        <CardContent className="space-y-4 p-4">
           {wfSummary && (wfSummary.totalSteps ?? 0) > 0 ? (
             <div className="rounded-lg border border-border/60 bg-background/65 p-4">
               <ProgressSummaryBar summary={wfSummary} phase={workflow.phase} />
@@ -290,33 +237,6 @@ export function WorkflowLiveView({
               No run summary has been captured yet. Start a run to populate live progress and trace data.
             </div>
           )}
-
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <SignalMetric
-              label="Attention"
-              value={workflowSignals.attentionSteps.length}
-              detail={`${workflowSignals.verificationFailures} verify, ${workflowSignals.reviewRejections} review, ${workflowSignals.jsonContractFailures} JSON`}
-              tone="amber"
-            />
-            <SignalMetric
-              label="Active now"
-              value={workflowSignals.activeSteps}
-              detail={`${workflow.pending_approval ? 1 : 0} approval wait`}
-              tone="neutral"
-            />
-            <SignalMetric
-              label="Tool activity"
-              value={workflowSignals.totalToolCalls}
-              detail={`${workflowSignals.activitySteps.length} step${workflowSignals.activitySteps.length === 1 ? "" : "s"} with actions`}
-              tone="sky"
-            />
-            <SignalMetric
-              label="Files observed"
-              value={workflowSignals.totalArtifacts}
-              detail={`${workflowSignals.totalWarnings} warning${workflowSignals.totalWarnings === 1 ? "" : "s"}`}
-              tone="violet"
-            />
-          </div>
 
           {steps.length > 1 && (
             <div className="space-y-3">
@@ -389,56 +309,28 @@ export function WorkflowLiveView({
             </div>
           )}
 
-          <div className="grid gap-3 lg:grid-cols-2">
-            <div className="rounded-lg border border-border/60 bg-background/65 p-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Needs attention</div>
-              {workflowSignals.attentionSteps.length > 0 ? (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {workflowSignals.attentionSteps.slice(0, 8).map((signal) => (
-                    <div key={signal.name} className="rounded-full border border-amber-500/25 bg-amber-500/5 px-3 py-1.5 text-xs">
-                      <span className="font-medium text-foreground">{signal.name}</span>
-                      {signal.reasons.length > 0 && (
-                        <span className="ml-2 text-muted-foreground">{signal.reasons.join(" · ")}</span>
-                      )}
-                    </div>
-                  ))}
-                  {workflowSignals.attentionSteps.length > 8 && (
-                    <Badge variant="outline" className="border-amber-500/25 bg-amber-500/5 text-xs">
-                      +{workflowSignals.attentionSteps.length - 8} more
-                    </Badge>
-                  )}
-                </div>
-              ) : (
-                <div className="mt-2 text-sm text-muted-foreground">
-                  No failed steps, approval blockers, or warning signals are active.
-                </div>
-              )}
+          {workflowSignals.attentionSteps.length > 0 && (
+            <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
+                Attention
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {workflowSignals.attentionSteps.slice(0, 8).map((signal) => (
+                  <div key={signal.name} className="rounded-full border border-amber-500/25 bg-background/80 px-3 py-1.5 text-xs">
+                    <span className="font-medium text-foreground">{signal.name}</span>
+                    {signal.reasons.length > 0 && (
+                      <span className="ml-2 text-muted-foreground">{signal.reasons.join(" · ")}</span>
+                    )}
+                  </div>
+                ))}
+                {workflowSignals.attentionSteps.length > 8 && (
+                  <Badge variant="outline" className="border-amber-500/25 bg-background/80 text-xs">
+                    +{workflowSignals.attentionSteps.length - 8} more
+                  </Badge>
+                )}
+              </div>
             </div>
-
-            <div className="rounded-lg border border-border/60 bg-background/65 p-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Observed activity</div>
-              {workflowSignals.activitySteps.length > 0 ? (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {workflowSignals.activitySteps.slice(0, 8).map((signal) => (
-                    <div key={`${signal.name}-activity`} className="rounded-full border border-sky-500/25 bg-sky-500/5 px-3 py-1.5 text-xs text-muted-foreground">
-                      <span className="font-medium text-foreground">{signal.name}</span>
-                      <span className="ml-2">
-                        {signal.toolCallCount} tools · {signal.artifactCount} files
-                        {signal.warningCount > 0 ? ` · ${signal.warningCount} warnings` : ""}
-                      </span>
-                    </div>
-                  ))}
-                  {workflowSignals.activitySteps.length > 8 && (
-                    <Badge variant="outline" className="border-sky-500/25 bg-sky-500/5 text-xs">
-                      +{workflowSignals.activitySteps.length - 8} more
-                    </Badge>
-                  )}
-                </div>
-              ) : (
-                <div className="mt-2 text-sm text-muted-foreground">No tool calls or artifacts have been recorded.</div>
-              )}
-            </div>
-          </div>
+          )}
         </CardContent>
       </Card>
 

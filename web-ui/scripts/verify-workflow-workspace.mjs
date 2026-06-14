@@ -14,7 +14,9 @@ const checks = [
   ["manager has definition tab", /value="definition"/.test(manager)],
   ["old duplicate workspace banner removed", !manager.includes("Workflow workspace")],
   ["runs view no longer embeds workspace files", !history.includes("Workspace Files")],
-  ["overview uses command center layout", live.includes("Run command center")],
+  ["workflow header no longer renders the redundant status metrics band", !manager.includes('uppercase tracking-wide text-muted-foreground">Status')],
+  ["workflow overview no longer renders the bulky command center title", !live.includes("Run command center")],
+  ["workflow overview no longer renders suggested-next summary block", !live.includes("Suggested next")],
   ["workflow overview avoids green-on-green checklist rows", !detail.includes('item.done ? "bg-emerald-500/10 text-emerald-300"')],
   ["workflow overview uses neutral completed checklist rows", detail.includes("border-border/45 bg-card/70")],
 ];

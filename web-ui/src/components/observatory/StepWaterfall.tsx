@@ -151,22 +151,22 @@ export function StepWaterfall({
                   type="button"
                   onClick={() => onStepClick?.(step)}
                   className={cn(
-                    "group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-all",
+                    "group flex w-full items-center gap-2 rounded-md px-2 py-1 text-left transition-all",
                     isSelected
                       ? "bg-primary/8 ring-1 ring-primary/25"
                       : "hover:bg-accent/30",
                   )}
                 >
                   {/* Step label */}
-                  <span className="w-28 shrink-0 truncate text-[11px] font-medium text-foreground">
+                  <span className="w-32 shrink-0 truncate text-[10px] font-medium text-foreground">
                     {stepLabel}
                   </span>
 
                   {/* Waterfall bar */}
-                  <div className="relative flex-1 h-5 rounded bg-muted/20">
+                  <div className="relative flex-1 h-4 rounded bg-muted/20">
                     <div
                       className={cn(
-                        "absolute top-0.5 bottom-0.5 rounded-sm transition-all",
+                        "absolute top-0.5 bottom-0.5 rounded-[3px] transition-all",
                         statusBarColor(step.status),
                         isSelected && "ring-1 ring-primary/40",
                       )}
@@ -178,7 +178,7 @@ export function StepWaterfall({
                   </div>
 
                   {/* Duration label */}
-                  <span className="w-14 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
+                  <span className="w-12 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
                     {formatDuration(step.latency_ms)}
                   </span>
                 </button>
@@ -201,7 +201,7 @@ export function StepWaterfall({
 
         {/* Time axis */}
         {totalMs > 0 && (
-          <div className="flex items-center gap-2 pl-[7.5rem] pr-[3.75rem] pt-1">
+          <div className="flex items-center gap-2 pl-[8.5rem] pr-[3rem] pt-1">
             <div className="relative flex-1 h-3">
               <div className="absolute inset-x-0 top-1/2 h-px bg-border/40" />
               <span className="absolute left-0 -top-0.5 text-[9px] text-muted-foreground/60">0s</span>
