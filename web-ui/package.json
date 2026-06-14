@@ -10,6 +10,7 @@
     "verify:intelligence": "node scripts/verify-intelligence-observatory.mjs",
     "verify:account-dialog": "node scripts/verify-account-dialog.mjs",
     "verify:resource-logs": "node scripts/verify-resource-logs.mjs",
+    "verify:install": "node ../scripts/verify-install.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

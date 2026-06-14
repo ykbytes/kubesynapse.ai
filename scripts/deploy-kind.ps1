@@ -1,3 +1,32 @@
+<#
+.SYNOPSIS
+  Build, load, and install KubeSynapse on a local kind cluster.
+
+.DESCRIPTION
+  Single entry point for a first-time local install. This script:
+
+    1. Verifies required tools (docker, kind, helm, kubectl).
+    2. Creates or reuses a kind cluster (default: kubesynapse-dev).
+    3. Builds the five platform images + the pinned LiteLLM image.
+    4. Loads them into the kind node.
+    5. Reconciles the persisted PostgreSQL password on upgrade.
+    6. Removes the immutable opencode/pi runtime ConfigMaps so Helm
+       can replace them with the freshly generated values.
+    7. Installs (or upgrades) the kubesynapse Helm release with the
+       same overlays the docs recommend (local images + Kind quickstart
+       overlay) and a fresh set of required secrets.
+    8. Restarts the three core deployments so the new image content
+       is picked up, then waits for them to roll out.
+    9. Prints a final access summary: cluster, port-forward commands,
+       admin URL, and the generated password (or, if you supplied one,
+       the password you used).
+
+  Every step exits non-zero with a clear message on failure, so a CI
+  job (or a copy/paste in a terminal) can tell exactly where things
+  broke. Use -WhatIf to print the actions it would take without
+  actually running them.
+#>
+[CmdletBinding()]
 param(
   [string]$ClusterName = "kubesynapse-dev",
   [string]$Namespace = "kubesynapse",
@@ -9,9 +38,13 @@ param(
   [string]$JwtSecret = "",
   [string]$LiteLlmMasterKey = "",
   [string]$ContainerCli = "docker",
+  [int]$HelmTimeoutMinutes = 20,
+  [int]$RolloutTimeoutMinutes = 10,
   [switch]$RecreateCluster,
   [switch]$SkipBuild,
-  [switch]$SkipLoad
+  [switch]$SkipLoad,
+  [switch]$SkipRestart,
+  [switch]$WhatIf
 )
 
 Set-StrictMode -Version Latest
@@ -23,6 +56,8 @@ $chartPath = (Join-Path $repoRoot "charts/kubesynapse") -replace "\\", "/"
 $localImagesValuesPath = (Join-Path $repoRoot "deploy/values.local-images.example.yaml") -replace "\\", "/"
 $kindQuickstartValuesPath = (Join-Path $repoRoot "deploy/values.kind.quickstart.yaml") -replace "\\", "/"
 $skillsCatalogPath = (Join-Path $repoRoot "catalog/skills-catalog.json") -replace "\\", "/"
+$installLogPath = Join-Path $env:TEMP "kubesynapse-install.log"
+$useWhatIf = [bool]$WhatIf
 
 function New-RandomSuffix {
   param([int]$Length = 32)
@@ -49,6 +84,22 @@ function Ensure-SecretValue {
   return "$Prefix$(New-RandomSuffix -Length $RandomLength)"
 }
 
+function Write-Banner {
+  param([string]$Title, [string]$Color = "Cyan")
+
+  Write-Host ""
+  Write-Host ("=" * 78) -ForegroundColor $Color
+  Write-Host ("  " + $Title) -ForegroundColor $Color
+  Write-Host ("=" * 78) -ForegroundColor $Color
+  Write-Host ""
+}
+
+function Write-Step {
+  param([string]$Text)
+  Write-Host "==> " -NoNewline -ForegroundColor Cyan
+  Write-Host $Text
+}
+
 function Invoke-Checked {
   param(
     [string]$FilePath,
@@ -56,10 +107,41 @@ function Invoke-Checked {
     [string]$Description
   )
 
-  Write-Host $Description
-  & $FilePath @Arguments
+  Write-Step "$Description"
+  if ($useWhatIf) {
+    Write-Host "    [whatif] $FilePath $($Arguments -join ' ')" -ForegroundColor DarkGray
+    return
+  }
+  & $FilePath @Arguments 2>&1 | Tee-Object -FilePath $installLogPath -Append
   if ($LASTEXITCODE -ne 0) {
-    throw "$Description failed with exit code $LASTEXITCODE."
+    throw "$Description failed with exit code $LASTEXITCODE. See $installLogPath for the full output."
+  }
+}
+
+function Assert-Tool {
+  param(
+    [string]$Tool,
+    [string]$MinVersion = "",
+    [string]$VersionFlag = "--version"
+  )
+
+  $command = Get-Command -Name $Tool -ErrorAction SilentlyContinue
+  if (-not $command) {
+    throw "Required tool '$Tool' is not on PATH. Install it and retry."
+  }
+
+  # A few CLIs (kubectl, helm) reject --version and print to stderr; we just
+  # need to know the tool runs. Capture output + exit code, but don't bail
+  # purely on a non-zero exit: the tool may still be on PATH and functional.
+  $output = & $command.Path $VersionFlag 2>&1
+  $firstLine = ($output | Out-String).Trim().Split([Environment]::NewLine) | Where-Object { $_ } | Select-Object -First 1
+  if (-not $firstLine) {
+    throw "Required tool '$Tool' is not on PATH. Install it and retry."
+  }
+  if ($MinVersion -and $firstLine -notmatch $MinVersion) {
+    Write-Host "    [warn] ${Tool} resolved to: $firstLine (looking for pattern '$MinVersion')" -ForegroundColor Yellow
+  } else {
+    Write-Host "    [ok]   ${Tool}: $firstLine" -ForegroundColor DarkGray
   }
 }
 
@@ -131,7 +213,7 @@ function Reset-ImmutableRuntimeConfigMaps {
         "-n",
         $Namespace,
         "--context",
-        $ClusterContext
+        $clusterContext
       ) -Description "Deleting immutable runtime ConfigMap '$configMap' so Helm can recreate it"
     }
   }
@@ -176,12 +258,47 @@ function Reset-LegacyOperatorDeployment {
   }
 }
 
+# ---------------------------------------------------------------------------
+# Step 0 — preflight
+# ---------------------------------------------------------------------------
+Remove-Item $installLogPath -ErrorAction SilentlyContinue
+Write-Banner "KubeSynapse local install  (cluster: $ClusterName)"
+
+Write-Step "Preflight: required tools"
+Assert-Tool -Tool "docker" -VersionFlag "--version" | Out-Null
+Assert-Tool -Tool "kind" -MinVersion "kind v" | Out-Null
+Assert-Tool -Tool "kubectl" | Out-Null
+Assert-Tool -Tool "helm" -MinVersion "v" | Out-Null
+
+if (-not (Test-Path $localImagesValuesPath)) {
+  throw "Local images overlay not found at $localImagesValuesPath"
+}
+if (-not (Test-Path $kindQuickstartValuesPath)) {
+  throw "Kind quickstart overlay not found at $kindQuickstartValuesPath"
+}
+if (-not (Test-Path $skillsCatalogPath)) {
+  Write-Host "    [warn] Skills catalog not found at $skillsCatalogPath — the in-app Catalog tab will be empty." -ForegroundColor Yellow
+}
+
+# ---------------------------------------------------------------------------
+# Step 1 — secrets
+# ---------------------------------------------------------------------------
+Write-Step "Step 1/7 — Generate secrets"
 $AdminPassword = Ensure-SecretValue -CurrentValue $AdminPassword -Prefix "KsAdmin!" -RandomLength 14
 $SharedToken = Ensure-SecretValue -CurrentValue $SharedToken -Prefix "ks-shared-" -RandomLength 32
 $DatabasePassword = Ensure-SecretValue -CurrentValue $DatabasePassword -Prefix "ks-db-" -RandomLength 32
 $JwtSecret = Ensure-SecretValue -CurrentValue $JwtSecret -Prefix "ks-jwt-" -RandomLength 32
 $LiteLlmMasterKey = Ensure-SecretValue -CurrentValue $LiteLlmMasterKey -Prefix "ks-litellm-" -RandomLength 32
+Write-Host "    Admin password: $AdminPassword" -ForegroundColor DarkGray
+Write-Host "    API shared token: $($SharedToken.Substring(0, 12))..." -ForegroundColor DarkGray
+Write-Host "    Database password: $($DatabasePassword.Substring(0, 12))..." -ForegroundColor DarkGray
+Write-Host "    JWT secret: $($JwtSecret.Substring(0, 12))..." -ForegroundColor DarkGray
+Write-Host "    LiteLLM master key: $($LiteLlmMasterKey.Substring(0, 12))..." -ForegroundColor DarkGray
 
+# ---------------------------------------------------------------------------
+# Step 2 — kind cluster
+# ---------------------------------------------------------------------------
+Write-Step "Step 2/7 — Prepare kind cluster"
 $kindClusters = @(& kind get clusters)
 $clusterExists = $kindClusters -contains $ClusterName
 
@@ -196,6 +313,9 @@ if (-not $clusterExists) {
 
 Invoke-Checked -FilePath "kubectl" -Arguments @("config", "use-context", $clusterContext) -Description "Switching kubectl to '$clusterContext'"
 
+# ---------------------------------------------------------------------------
+# Step 3 — build images
+# ---------------------------------------------------------------------------
 $images = @(
   @{ Tag = "localhost/kubesynapse/kubesynapse-operator:dev"; Context = "operator" },
   @{ Tag = "localhost/kubesynapse/kubesynapse-api-gateway:dev"; Context = "api-gateway" },
@@ -205,6 +325,7 @@ $images = @(
 )
 
 if (-not $SkipBuild) {
+  Write-Step "Step 3/7 — Build images (this can take a few minutes on a cold cache)"
   foreach ($image in $images) {
     $buildArgs = @("build")
     if ($image.ContainsKey("Dockerfile")) {
@@ -213,18 +334,34 @@ if (-not $SkipBuild) {
     $buildArgs += @("-t", $image.Tag, (Join-Path $repoRoot $image.Context))
     Invoke-Checked -FilePath $ContainerCli -Arguments $buildArgs -Description "Building image '$($image.Tag)'"
   }
+} else {
+  Write-Step "Step 3/7 — Skipping image builds (SkipBuild)"
 }
 
+# ---------------------------------------------------------------------------
+# Step 4 — load images
+# ---------------------------------------------------------------------------
 if (-not $SkipLoad) {
+  Write-Step "Step 4/7 — Load images into kind"
   foreach ($image in $images) {
     Invoke-Checked -FilePath "kind" -Arguments @("load", "docker-image", $image.Tag, "--name", $ClusterName) -Description "Loading image '$($image.Tag)' into kind"
   }
+} else {
+  Write-Step "Step 4/7 — Skipping kind image load (SkipLoad)"
 }
 
+# ---------------------------------------------------------------------------
+# Step 5 — state migrations
+# ---------------------------------------------------------------------------
+Write-Step "Step 5/7 — Reconcile state from previous installs"
 Sync-PostgresPassword -Namespace $Namespace -ClusterContext $clusterContext -ReleaseName $ReleaseName -DatabasePassword $DatabasePassword
 Reset-ImmutableRuntimeConfigMaps -Namespace $Namespace -ClusterContext $clusterContext -ReleaseName $ReleaseName
 Reset-LegacyOperatorDeployment -Namespace $Namespace -ClusterContext $clusterContext -ReleaseName $ReleaseName
 
+# ---------------------------------------------------------------------------
+# Step 6 — helm install
+# ---------------------------------------------------------------------------
+Write-Step "Step 6/7 — Install (or upgrade) Helm release '$ReleaseName'"
 $helmArgs = @(
   "upgrade",
   "--install",
@@ -237,14 +374,12 @@ $helmArgs = @(
   $clusterContext,
   "--wait",
   "--timeout",
-  "20m",
+  ("$HelmTimeoutMinutes" + "m"),
   "--force-conflicts",
   "-f",
   $localImagesValuesPath,
   "-f",
   $kindQuickstartValuesPath,
-  "--set-file",
-  "skillsCatalog.catalogJson=$skillsCatalogPath",
   "--set-string",
   "platformSecrets.native.litellmMasterKey=$LiteLlmMasterKey",
   "--set-string",
@@ -258,48 +393,73 @@ $helmArgs = @(
   "--set-string",
   "apiGateway.auth.bootstrapAdminUsername=$AdminUsername"
 )
+if (Test-Path $skillsCatalogPath) {
+  $helmArgs += @("--set-file", "skillsCatalog.catalogJson=$skillsCatalogPath")
+}
 
 Invoke-Checked -FilePath "helm" -Arguments $helmArgs -Description "Installing or upgrading Helm release '$ReleaseName'"
 
-$coreDeployments = @(
-  "$ReleaseName-operator",
-  "$ReleaseName-api-gateway",
-  "$ReleaseName-web-ui"
-)
+# ---------------------------------------------------------------------------
+# Step 7 — restart + rollout
+# ---------------------------------------------------------------------------
+if (-not $SkipRestart) {
+  Write-Step "Step 7/7 — Restart core deployments to pick up new local images, then wait"
+  $coreDeployments = @(
+    "$ReleaseName-operator",
+    "$ReleaseName-api-gateway",
+    "$ReleaseName-web-ui"
+  )
 
-foreach ($deployment in $coreDeployments) {
-  Invoke-Checked -FilePath "kubectl" -Arguments @(
-    "rollout",
-    "restart",
-    "deployment/$deployment",
-    "-n",
-    $Namespace,
-    "--context",
-    $clusterContext
-  ) -Description "Restarting deployment '$deployment' to pick up local dev images"
+  foreach ($deployment in $coreDeployments) {
+    Invoke-Checked -FilePath "kubectl" -Arguments @(
+      "rollout",
+      "restart",
+      "deployment/$deployment",
+      "-n",
+      $Namespace,
+      "--context",
+      $clusterContext
+    ) -Description "Restarting deployment '$deployment' to pick up local dev images"
 
-  Invoke-Checked -FilePath "kubectl" -Arguments @(
-    "rollout",
-    "status",
-    "deployment/$deployment",
-    "-n",
-    $Namespace,
-    "--context",
-    $clusterContext,
-    "--timeout=10m"
-  ) -Description "Waiting for deployment '$deployment' rollout"
+    Invoke-Checked -FilePath "kubectl" -Arguments @(
+      "rollout",
+      "status",
+      "deployment/$deployment",
+      "-n",
+      $Namespace,
+      "--context",
+      $clusterContext,
+      ("--timeout=$RolloutTimeoutMinutes" + "m")
+    ) -Description "Waiting for deployment '$deployment' rollout"
+  }
+} else {
+  Write-Step "Step 7/7 — Skipping rollout restart (SkipRestart)"
 }
 
-Invoke-Checked -FilePath "kubectl" -Arguments @("get", "pods", "-n", $Namespace) -Description "Listing pods in namespace '$Namespace'"
-Invoke-Checked -FilePath "kubectl" -Arguments @("get", "svc", "-n", $Namespace) -Description "Listing services in namespace '$Namespace'"
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+Write-Banner "KubeSynapse local install is ready." "Green"
 
+Write-Host "  Cluster context : $clusterContext" -ForegroundColor White
+Write-Host "  Release name    : $ReleaseName" -ForegroundColor White
+Write-Host "  Namespace       : $Namespace" -ForegroundColor White
+Write-Host "  Image registry  : localhost/kubesynapse/*:dev (kind-loaded)" -ForegroundColor White
+Write-Host "  Admin username  : $AdminUsername" -ForegroundColor White
+Write-Host "  Admin password  : $AdminPassword" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "KubeSynapse local Kind install is ready."
-Write-Host "Admin username: $AdminUsername"
-Write-Host "Admin password: $AdminPassword"
-Write-Host "API port-forward: kubectl port-forward svc/$ReleaseName-api-gateway -n $Namespace 8080:8080"
-Write-Host "Web UI port-forward: kubectl port-forward svc/$ReleaseName-web-ui -n $Namespace 3000:80"
+Write-Host "  Next: port-forward the platform." -ForegroundColor Cyan
+Write-Host "    kubectl port-forward svc/$ReleaseName-api-gateway -n $Namespace 8080:8080" -ForegroundColor White
+Write-Host "    kubectl port-forward svc/$ReleaseName-web-ui -n $Namespace 3000:80" -ForegroundColor White
 Write-Host ""
-Write-Host "Next: configure an LLM API key or agents cannot invoke models."
-Write-Host "  Option A: Open the Web UI, go to Settings > Providers, add your key."
-Write-Host "  Option B: kubectl patch secret kubesynapse-llm-api-keys -n $Namespace --patch '{\"data\":{\"OPENAI_API_KEY\":\"'+(echo -n 'sk-your-key' | base64)'\"}}'"
+Write-Host "  UI:    http://localhost:3000" -ForegroundColor White
+Write-Host "  API:   http://localhost:8080/api/v1/health" -ForegroundColor White
+Write-Host ""
+Write-Host "  Important: configure an LLM API key before invoking agents." -ForegroundColor Cyan
+Write-Host "    Option A: open the Web UI -> Settings -> Providers, add your key." -ForegroundColor White
+Write-Host "    Option B: see scripts/install.sh (Option B/C) for kubectl patch commands." -ForegroundColor White
+Write-Host ""
+Write-Host "  Re-running the script with the same -ClusterName will upgrade in place" -ForegroundColor DarkGray
+Write-Host "  and reuse the existing cluster and chart release. Use -RecreateCluster to" -ForegroundColor DarkGray
+Write-Host "  start from a clean slate." -ForegroundColor DarkGray
+Write-Host ""

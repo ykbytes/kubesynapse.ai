@@ -60,12 +60,24 @@ KubeSynapse is an open-source, self-hosted AI agent platform that runs entirely 
 
 ### Kind (local, under 5 minutes)
 
+The repo ships with two first-time installers that do exactly the same work
+so you can pick the shell that matches your machine. Both build the platform
+images, load them into kind, install the Helm chart with the same overlays,
+and print the admin URL and credentials at the end.
+
 ```powershell
 # 1. Deploy the platform (sets admin password)
 pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
   -ClusterName kubesynapse-dev -Namespace kubesynapse -ReleaseName kubesynapse `
   -AdminPassword "KubesynapseAdmin9!"
+```
 
+```bash
+# Same flow on macOS / Linux (requires bash, docker, kind, kubectl, helm, openssl, base64)
+./scripts/install.sh
+```
+
+```powershell
 # 2. Port-forward the gateway and UI (run each in a separate terminal)
 kubectl port-forward svc/kubesynapse-api-gateway -n kubesynapse 8080:8080
 kubectl port-forward svc/kubesynapse-web-ui -n kubesynapse 3000:80
