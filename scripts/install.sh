@@ -338,11 +338,22 @@ HELM_LOCAL_IMAGES_VALUES="${LOCAL_IMAGES_VALUES_PATH}"
 HELM_KIND_QUICKSTART_VALUES="${KIND_QUICKSTART_VALUES_PATH}"
 HELM_SKILLS_CATALOG="${SKILLS_CATALOG_PATH}"
 if [[ -n "$WINDOWS_KUBECONFIG" ]]; then
-  # Windows helm.exe can't read /mnt/c paths; convert to Windows style
-  HELM_CHART_PATH="$(wslpath -w "${CHART_PATH}" 2>/dev/null || echo "${CHART_PATH}")"
-  HELM_LOCAL_IMAGES_VALUES="$(wslpath -w "${LOCAL_IMAGES_VALUES_PATH}" 2>/dev/null || echo "${LOCAL_IMAGES_VALUES_PATH}")"
-  HELM_KIND_QUICKSTART_VALUES="$(wslpath -w "${KIND_QUICKSTART_VALUES_PATH}" 2>/dev/null || echo "${KIND_QUICKSTART_VALUES_PATH}")"
-  HELM_SKILLS_CATALOG="$(wslpath -w "${SKILLS_CATALOG_PATH}" 2>/dev/null || echo "${SKILLS_CATALOG_PATH}")"
+  # Windows helm.exe can't read /mnt/c paths; convert /mnt/c/X to C:/X
+  # Using forward slashes so bash doesn't consume backslashes.
+  _to_winpath() {
+    local p="$1"
+    if [[ "$p" == /mnt/?/* ]]; then
+      local drive="${p:5:1}"
+      local rest="${p:7}"
+      printf "%s:/%s" "${drive^^}" "${rest#/}"
+    else
+      printf "%s" "$p"
+    fi
+  }
+  HELM_CHART_PATH="$(_to_winpath "${CHART_PATH}")"
+  HELM_LOCAL_IMAGES_VALUES="$(_to_winpath "${LOCAL_IMAGES_VALUES_PATH}")"
+  HELM_KIND_QUICKSTART_VALUES="$(_to_winpath "${KIND_QUICKSTART_VALUES_PATH}")"
+  HELM_SKILLS_CATALOG="$(_to_winpath "${SKILLS_CATALOG_PATH}")"
 fi
 run helm dependency build "${HELM_CHART_PATH}"
 HELM_ARGS=(
