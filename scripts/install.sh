@@ -332,6 +332,8 @@ fi
 # Step 6 — helm install
 # ---------------------------------------------------------------------------
 step "Step 6/7 — Install (or upgrade) Helm release '${RELEASE_NAME}'"
+step "Building chart dependencies"
+run helm dependency build "${CHART_PATH}"
 HELM_ARGS=(
   upgrade --install "${RELEASE_NAME}" "${CHART_PATH}"
   --namespace "${NAMESPACE}"
