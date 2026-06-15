@@ -96,17 +96,22 @@ class OpenCodeRuntimeTests(unittest.TestCase):
             self.assertFalse((root / "plugins" / "custom.ts").exists())
 
     def test_build_generated_config_preserves_provider_when_overrides_are_partial(self) -> None:
+        """Partial user overrides (non-platform-controlled keys) must not clobber
+        the runtime-generated provider entry.
+        """
         with patch.object(skills_mod, "DEFAULT_PROVIDER", "litellm"):
+            # Note: ``permission`` is now platform-controlled (M-NEW security
+            # floor); we test with ``default_agent`` and a benign
+            # ``share: disabled`` to keep the test focused on the
+            # provider-preservation contract.
             config, warnings = opencode_runtime_main.build_generated_config(
                 [],
                 config_overrides={
                     "default_agent": "build",
-                    "permission": "allow",
                 },
             )
 
         self.assertEqual(config["default_agent"], "build")
-        self.assertEqual(config["permission"], "allow")
         self.assertIn("litellm", config["provider"])
         self.assertIn("gpt-4o", config["provider"]["litellm"]["models"])
         self.assertEqual(config["provider"]["litellm"]["models"]["gpt-4o"]["name"], "gpt-4o")

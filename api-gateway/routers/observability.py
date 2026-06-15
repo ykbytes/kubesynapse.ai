@@ -618,8 +618,22 @@ async def complete_saved_mcp_connection_oauth(
             redirect_uri=_mcp_oauth_redirect_uri(raw_request, connection_id),
             code_verifier=str(flow.get("code_verifier") or "").strip() or None,
         )
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, verify=certifi.where()) as client:
+        # §security-R6: follow_redirects=False to prevent the OAuth
+        # token endpoint from redirecting the api-gateway to an
+        # internal address (SSRF). If the upstream returns 3xx, the
+        # caller should re-submit with the new Location.
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=False, verify=certifi.where()) as client:
             response = await client.post(token_url, data=data, headers=headers)
+            if response.status_code in (301, 302, 303, 307, 308):
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"MCP OAuth token endpoint at {token_url} returned a "
+                        f"redirect to {response.headers.get('Location')!r}; "
+                        f"this is not allowed for security reasons. Update the "
+                        f"registry entry with a non-redirecting token endpoint."
+                    ),
+                )
             response.raise_for_status()
             token_payload = response.json()
         token_bundle = _extract_mcp_oauth_token_bundle(token_payload, secret_values)

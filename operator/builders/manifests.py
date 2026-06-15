@@ -1100,6 +1100,23 @@ def _build_credential_proxy_container(
             },
         }
     )
+    # §security-R5: per-namespace HMAC secret used to bind the shared
+    # api-gateway token to this runtime's agent + namespace. The
+    # api-gateway reads the same secret (or the operator's
+    # RUNTIME_IDENTITY_HMAC_SECRET) to validate the X-Runtime-Identity
+    # header. Optional so missing secrets don't fail the pod.
+    env.append(
+        {
+            "name": "RUNTIME_IDENTITY_HMAC_SECRET",
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": SECRET_NAME,
+                    "key": "RUNTIME_IDENTITY_HMAC_SECRET",
+                    "optional": True,
+                }
+            },
+        }
+    )
 
     if selected_provider_id not in ("litellm",):
         env.append({
@@ -1891,6 +1908,14 @@ def _create_pi_statefulset_spec(
                         "fsGroup": 2000,
                         "fsGroupChangePolicy": "OnRootMismatch",
                         "seccompProfile": {"type": "RuntimeDefault"},
+                        # §security-R5: explicitly disable host namespace
+                        # access. Defaults are already False in K8s 1.25+,
+                        # but defense-in-depth: a compromised runtime cannot
+                        # sniff the host's network namespace, observe
+                        # host processes, or share IPC with host processes.
+                        "hostNetwork": False,
+                        "hostPID": False,
+                        "hostIPC": False,
                     },
                     "initContainers": init_containers,
                     "containers": containers,
@@ -2030,6 +2055,10 @@ def _create_mistral_vibe_statefulset_spec(
                         "fsGroup": 1000,
                         "fsGroupChangePolicy": "OnRootMismatch",
                         "seccompProfile": {"type": "RuntimeDefault"},
+                        # §security-R5: explicit host namespace isolation
+                        "hostNetwork": False,
+                        "hostPID": False,
+                        "hostIPC": False,
                     },
                     "initContainers": init_containers,
                     "containers": [
@@ -2154,6 +2183,14 @@ def create_agent_statefulset_manifest(
             {"name": "GIT_REPO_URL", "value": git_config.get("repoUrl", "")},
             {"name": "GIT_AUTH_METHOD", "value": git_config.get("authMethod", "")},
         ]
+        # D10: derive ``GIT_ALLOWED_HOSTS`` from the parsed host so the
+        # runtime rejects credential sends to hosts that aren't in the
+        # configured repo URL. The runtime now defaults to deny-all
+        # when this env var is missing, so we must set it here.
+        if _parsed_repo.hostname:
+            git_sidecar_env.append(
+                {"name": "GIT_ALLOWED_HOSTS", "value": _parsed_repo.hostname.strip().lower()}
+            )
         git_branch = str(git_config.get("branch", "")).strip()
         if git_branch:
             git_sidecar_env.append({"name": "GIT_BRANCH", "value": git_branch})
@@ -2200,6 +2237,13 @@ def create_agent_statefulset_manifest(
             {"name": "GIT_REPO_URL", "value": git_config.get("repoUrl", "")},
             {"name": "GIT_AUTH_METHOD", "value": git_config.get("authMethod", "")},
         ]
+        # D10: mirror GIT_ALLOWED_HOSTS into the main agent container
+        # so the runtime's deny-all default doesn't break
+        # credential-helper-driven git operations.
+        if _parsed_repo.hostname:
+            git_agent_env.append(
+                {"name": "GIT_ALLOWED_HOSTS", "value": _parsed_repo.hostname.strip().lower()}
+            )
         if git_branch:
             git_agent_env.append({"name": "GIT_BRANCH", "value": git_branch})
         if cred_secret and auth_method == "token":
@@ -3026,6 +3070,10 @@ def create_worker_job_manifest(
         "runAsGroup": 37,
         "fsGroup": 37,
         "seccompProfile": {"type": "RuntimeDefault"},
+        # §security-R5: explicit host namespace isolation for workers
+        "hostNetwork": False,
+        "hostPID": False,
+        "hostIPC": False,
     }
     container_security_context = {
         "runAsNonRoot": True,

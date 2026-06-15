@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
-import json
 import logging
 import os
 import time
@@ -63,6 +62,7 @@ from config import (
     SESSION_ABORT_TIMEOUT_SECONDS,
     SESSION_INIT_ON_CREATE,
     WORKSPACE_SNAPSHOT_ENABLED,
+    build_runtime_identity_header,
 )
 from fastapi import HTTPException
 from memory import (
@@ -73,6 +73,7 @@ from memory import (
 from models import InvokeRequest, InvokeResponse
 from opencode_client import (
     abort_session,
+    auto_approve_pending_questions,
     create_remote_session,
     ensure_server_running,
     get_session_message,
@@ -80,7 +81,6 @@ from opencode_client import (
     get_session_status,
     get_session_todos,
     init_session,
-    auto_approve_pending_questions,
     send_prompt_async,
     summarize_session,
     wait_for_session_idle,
@@ -100,7 +100,6 @@ from prompts import (
     get_task_type_prompt,
 )
 from sanitize_secrets import redact_secrets
-from content_safety import sanitize_a2a_data_part, sanitize_a2a_text_part
 from session import SESSION_REGISTRY
 from skills import SKILL_RUNTIME_CONFIG
 from workspace import get_or_refresh_snapshot
@@ -269,21 +268,34 @@ def build_gateway_a2a_jsonrpc_payload(payload: dict[str, Any], request_id: str) 
 
 
 def extract_text_from_a2a_parts(parts: Any) -> str:
+    """Concatenate A2A message parts into a single text prompt.
+
+    Security (C-NEW-5): all text and data parts are passed through the
+    prompt-injection sanitizer before concatenation. A malicious peer
+    agent (or compromised upstream) cannot inject
+    ``</description><system-reminder>`` style envelope tags to
+    hijack the agent's behavior.
+    """
+    from content_safety import sanitize_a2a_data_part, sanitize_a2a_text_part  # local to avoid cycles
+
     if not isinstance(parts, list):
         return ""
 
     chunks: list[str] = []
-    for raw_part in parts:
+    for index, raw_part in enumerate(parts):
         if not isinstance(raw_part, dict):
             continue
         text = raw_part.get("text")
         if isinstance(text, str) and text.strip():
-            chunks.append(sanitize_a2a_text_part(text, source="a2a.text"))
+            chunks.append(sanitize_a2a_text_part(text, source=f"a2a-part[{index}].text"))
             continue
         if "data" in raw_part:
-            rendered = sanitize_a2a_data_part(raw_part.get("data"), source="a2a.data")
-            if rendered.strip():
-                chunks.append(rendered)
+            chunks.append(
+                sanitize_a2a_data_part(
+                    raw_part.get("data"),
+                    source=f"a2a-part[{index}].data",
+                )
+            )
     return "\n\n".join(chunk for chunk in chunks if chunk.strip()).strip()
 
 
@@ -416,6 +428,9 @@ def invoke_gateway_a2a_target(
         }
         if not _CREDENTIAL_PROXY_ENABLED:
             headers["Authorization"] = f"Bearer {API_GATEWAY_SHARED_TOKEN}"
+            identity = build_runtime_identity_header()
+            if identity:
+                headers["X-Runtime-Identity"] = identity
         response = client.post(
             f"{gateway_url}/a2a/{target_agent}",
             params={"namespace": target_namespace},
@@ -645,9 +660,7 @@ def _is_stuck_idle_payload(payload: dict[str, Any]) -> bool:
     finish = str(info.get("finish", "")).strip().lower()
     if finish not in ("unknown", ""):
         return False
-    if assistant_payload_has_signal(payload):
-        return False
-    return True
+    return not assistant_payload_has_signal(payload)
 
 
 def _send_prompt_async_with_session_recovery(
@@ -776,7 +789,7 @@ def _send_prompt_async_with_session_recovery(
             # LLM error, or race condition).  Re-send the prompt.
             if time.monotonic() > idle_grace_until:
                 session_status = get_session_status(session_id)
-                if str(session_status.get("type", "idle")) == "idle":  # noqa: SIM102 — nested if for readability
+                if str(session_status.get("type", "idle")) == "idle":
                     if idle_retry_count < max_idle_retries:
                         idle_retry_count += 1
                         logger.warning(
@@ -1437,7 +1450,7 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
         response_text = build_tool_only_response(collected_tool_calls)
     if not response_text:
         response_text = "(no output)"
-    
+
     # Defense-in-depth: redact any leaked secrets from the response text and warnings
     response_text = redact_secrets(response_text)
     all_warnings = [redact_secrets(w) for w in all_warnings]

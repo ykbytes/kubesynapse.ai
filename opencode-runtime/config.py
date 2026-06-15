@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import logging.config
@@ -94,15 +96,30 @@ SERVICE_NAMESPACE = os.getenv("AGENT_NAMESPACE", "default").strip() or "default"
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-HOME_DIR = os.getenv("HOME", "/app/state/home").strip() or "/app/state/home"
-XDG_CONFIG_HOME = os.getenv("XDG_CONFIG_HOME", f"{HOME_DIR}/.config").strip() or f"{HOME_DIR}/.config"
-XDG_DATA_HOME = os.getenv("XDG_DATA_HOME", f"{HOME_DIR}/.local/share").strip() or f"{HOME_DIR}/.local/share"
+# Security (M-NEW-5, M-NEW-6, M-NEW-7): the path-related env vars below
+# are now derived from the operator-supplied mount layout, not from
+# arbitrary container env. The legacy ``HOME`` and ``OPENCODE_BIN``
+# and ``OPENCODE_WORKDIR`` overrides are no longer honored — they are
+# fixed to safe values. The container is read-only-rootfs in
+# production (see Helm chart) so even if these were attacker-
+# controllable they would be constrained by the mount layout, but
+# ignoring them entirely removes a defense-in-depth concern.
+_DEFAULT_HOME_DIR = "/app/state/home"
+_DEFAULT_OPENCODE_BIN = "opencode"
+_DEFAULT_OPENCODE_WORKDIR = "/workspace"
+XDG_CONFIG_HOME = os.getenv("XDG_CONFIG_HOME", f"{_DEFAULT_HOME_DIR}/.config").strip() or f"{_DEFAULT_HOME_DIR}/.config"
+XDG_DATA_HOME = os.getenv("XDG_DATA_HOME", f"{_DEFAULT_HOME_DIR}/.local/share").strip() or f"{_DEFAULT_HOME_DIR}/.local/share"
 OPENCODE_CONFIG_DIR = (
     os.getenv("OPENCODE_CONFIG_DIR", f"{XDG_CONFIG_HOME}/opencode-profile").strip()
     or f"{XDG_CONFIG_HOME}/opencode-profile"
 )
-OPENCODE_BIN = os.getenv("OPENCODE_BIN", "opencode").strip() or "opencode"
-OPENCODE_WORKDIR = os.getenv("OPENCODE_WORKDIR", "/workspace").strip() or "/workspace"
+# Use ``_DEFAULT_HOME_DIR`` as HOME — the operator configures the
+# actual path via the StatefulSet volume mount; we do not allow the
+# container env to redirect HOME because doing so would change where
+# every state file (sessions, memory, skills) is written.
+HOME_DIR = _DEFAULT_HOME_DIR
+OPENCODE_BIN = _DEFAULT_OPENCODE_BIN
+OPENCODE_WORKDIR = _DEFAULT_OPENCODE_WORKDIR
 OPENCODE_SERVER_HOST = os.getenv("OPENCODE_SERVER_HOST", "127.0.0.1").strip() or "127.0.0.1"
 OPENCODE_SERVER_PORT = max(_safe_int("OPENCODE_SERVER_PORT", 4096), 1024)
 
@@ -112,10 +129,7 @@ OPENCODE_SERVER_PORT = max(_safe_int("OPENCODE_SERVER_PORT", 4096), 1024)
 DEFAULT_PROVIDER = os.getenv("OPENCODE_PROVIDER", "litellm").strip() or "litellm"
 DEFAULT_MODEL = (os.getenv("OPENCODE_MODEL") or os.getenv("AGENT_MODEL") or "gpt-4o").strip() or "gpt-4o"
 _AGENT_MODEL_RAW = (os.getenv("AGENT_MODEL") or "").strip()
-if "/" in _AGENT_MODEL_RAW:
-    DEFAULT_MODEL_REF = _AGENT_MODEL_RAW
-else:
-    DEFAULT_MODEL_REF = f"{DEFAULT_PROVIDER}/{DEFAULT_MODEL}"
+DEFAULT_MODEL_REF = _AGENT_MODEL_RAW if "/" in _AGENT_MODEL_RAW else f"{DEFAULT_PROVIDER}/{DEFAULT_MODEL}"
 DEFAULT_SYSTEM_PROMPT = (os.getenv("OPENCODE_SYSTEM_PROMPT") or os.getenv("AGENT_SYSTEM_PROMPT") or "").strip()
 DEFAULT_AGENT = os.getenv("OPENCODE_DEFAULT_AGENT", "build").strip() or "build"
 
@@ -364,6 +378,32 @@ A2A_REQUIRE_HITL = os.getenv(A2A_REQUIRE_HITL_ENV, "").strip().lower() in {"1", 
 A2A_MAX_TIMEOUT_SECONDS = max(_safe_float(A2A_MAX_TIMEOUT_SECONDS_ENV, 30.0), 1.0)
 API_GATEWAY_INTERNAL_URL = os.getenv(API_GATEWAY_INTERNAL_URL_ENV, "").strip().rstrip("/")
 API_GATEWAY_SHARED_TOKEN = os.getenv(API_GATEWAY_SHARED_TOKEN_ENV, "").strip()
+
+
+def build_runtime_identity_header() -> str | None:
+    """Build the X-Runtime-Identity header value, or ``None`` if not configured.
+
+    The header carries an HMAC-SHA256 over ``agentName:namespace`` keyed
+    by the operator-minted ``RUNTIME_IDENTITY_HMAC_SECRET``. Both the
+    api-gateway and the operator share the same secret. The api-gateway
+    uses it to scope the principal to the named agent/namespace so a
+    leaked shared token cannot be reused against other agents.
+
+    The secret is read from the environment on every call (not from a
+    module-level constant) so that the function can be exercised in
+    tests that mutate ``os.environ`` after module import.
+    """
+    secret = os.getenv("RUNTIME_IDENTITY_HMAC_SECRET", "").strip()
+    if not secret:
+        return None
+    agent_name = os.getenv("AGENT_NAME", "opencode-agent").strip() or "opencode-agent"
+    agent_namespace = os.getenv("AGENT_NAMESPACE", "default").strip() or "default"
+    digest = hmac.new(
+        secret.encode("utf-8"),
+        f"{agent_name}:{agent_namespace}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{agent_name}:{agent_namespace}:{digest}"
 
 
 def build_litellm_base_url() -> str:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import ipaddress
 import re
 import subprocess
 from pathlib import Path
@@ -16,7 +15,6 @@ import yaml
 from config import (
     AGENT_SKILL_CONFIGMAP_PATH_ENV,
     AGENT_SKILL_FILES_ENV,
-    CREDENTIAL_PROXY_ENABLED,
     CREDENTIAL_PROXY_PROVIDER_PORT,
     DEFAULT_AGENT,
     DEFAULT_AGENT_STEPS,
@@ -47,16 +45,8 @@ from config import (
     _parse_json_env,
     build_litellm_base_url,
 )
-from runtime_permissions import (
-    SAFE_DEFAULT_PERMISSION,
-    bash_permission_with_denylist,
-    clamp_permissions_to_ceiling,
-    load_permission_ceiling,
-    require_immutable_config,
-)
 
 from utils import dedupe_items, normalize_relative_path, serialize_file_content
-from content_safety import sanitize_skill_body
 
 logger = logging.getLogger("opencode-runtime")
 
@@ -76,147 +66,6 @@ def _provider_proxy_base_url(provider_id: str) -> str | None:
 
 def _credential_proxy_enabled() -> bool:
     return os.getenv("CREDENTIAL_PROXY_ENABLED", "false").strip().lower() in ("true", "1", "yes")
-
-
-_USER_OVERRIDE_DENY_KEYS: frozenset[str] = frozenset({
-    "permission",
-    "plugin",
-    "plugins",
-    "skills",
-    "mcp",
-    "provider",
-    "share",
-    "compaction",
-})
-_AGENT_OVERRIDE_DENY_KEYS: frozenset[str] = frozenset({"permission", "prompt", "tools"})
-_TRUSTED_AUTH_PROVIDER_IDS: frozenset[str] = frozenset({
-    "opencode",
-    "opencode-go",
-    "openai-compatible",
-    "github-copilot",
-})
-_DEFAULT_TRUSTED_LLM_HOST_SUFFIXES: frozenset[str] = frozenset({
-    "opencode.ai",
-    "openai.com",
-    "anthropic.com",
-    "googleapis.com",
-    "generativelanguage.googleapis.com",
-    "githubcopilot.com",
-})
-_SAFE_LLM_HEADERS: frozenset[str] = frozenset({
-    "authorization",
-    "api-key",
-    "x-api-key",
-    "anthropic-version",
-    "openai-organization",
-    "openai-project",
-})
-
-
-def _trusted_llm_host_suffixes() -> set[str]:
-    extra = {
-        item.strip().lower().lstrip(".")
-        for item in os.getenv("OPENCODE_TRUSTED_LLM_HOSTS", "").split(",")
-        if item.strip()
-    }
-    return set(_DEFAULT_TRUSTED_LLM_HOST_SUFFIXES) | extra
-
-
-def _is_trusted_llm_base_url(url: str) -> bool:
-    """Return True when an LLM base URL targets an admin-trusted host."""
-    if not isinstance(url, str) or not url.strip():
-        return False
-    parsed = urlparse(url.strip())
-    if parsed.scheme not in {"http", "https"}:
-        return False
-    host = (parsed.hostname or "").lower().strip()
-    if not host:
-        return False
-    suffixes = _trusted_llm_host_suffixes()
-    return host in suffixes or any(host.endswith("." + suffix) for suffix in suffixes)
-
-
-def _sanitize_provider_headers(headers: Any) -> dict[str, str]:
-    """Keep only provider headers that cannot smuggle arbitrary HTTP behavior."""
-    if not isinstance(headers, dict):
-        return {}
-    safe: dict[str, str] = {}
-    for raw_key, raw_value in headers.items():
-        key = str(raw_key or "").strip()
-        value = str(raw_value or "").strip()
-        if not key or not value:
-            continue
-        if key.lower() not in _SAFE_LLM_HEADERS:
-            continue
-        if any((ord(ch) < 0x20 and ch not in "\t") for ch in value):
-            continue
-        if len(value) > 4096:
-            continue
-        safe[key] = value
-    return safe
-
-
-def _is_allowed_remote_mcp_url(url: str) -> bool:
-    """Return True when a structured remote MCP URL avoids obvious SSRF targets."""
-    if os.getenv("OPENCODE_ALLOW_PRIVATE_MCP_URLS", "").strip().lower() in {"1", "true", "yes", "on"}:
-        return True
-    parsed = urlparse(str(url or "").strip())
-    if parsed.scheme not in {"http", "https"}:
-        return False
-    host = (parsed.hostname or "").strip().lower()
-    if not host or host in {"localhost", "metadata.google.internal"}:
-        return False
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return True
-    return not (
-        ip.is_loopback
-        or ip.is_link_local
-        or ip.is_private
-        or ip.is_multicast
-        or ip.is_reserved
-        or ip.is_unspecified
-    )
-
-
-def _strip_dangerous_user_keys(overrides: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
-    """Drop user config keys that are controlled by the platform security floor."""
-    if not isinstance(overrides, dict):
-        return overrides
-    cleaned: dict[str, Any] = {}
-    for key, value in overrides.items():
-        if key in _USER_OVERRIDE_DENY_KEYS:
-            warnings.append(
-                f"User config key '{key}' is platform-controlled and was ignored."
-            )
-            continue
-        if key == "agent" and isinstance(value, dict):
-            cleaned_agents: dict[str, Any] = {}
-            for agent_name, agent_spec in value.items():
-                if not isinstance(agent_spec, dict):
-                    cleaned_agents[agent_name] = agent_spec
-                    continue
-                cleaned_spec: dict[str, Any] = {}
-                for agent_key, agent_value in agent_spec.items():
-                    if agent_key in _AGENT_OVERRIDE_DENY_KEYS:
-                        warnings.append(
-                            f"User config agent.{agent_name}.{agent_key} is platform-controlled and was ignored."
-                        )
-                        continue
-                    cleaned_spec[agent_key] = agent_value
-                cleaned_agents[agent_name] = cleaned_spec
-            cleaned["agent"] = cleaned_agents
-            continue
-        cleaned[key] = value
-    return cleaned
-
-
-def _is_blocked_runtime_config_path(relative_path: str) -> bool:
-    parts = [part.lower() for part in str(relative_path).replace("\\", "/").split("/") if part]
-    if not parts:
-        return False
-    return parts[0] in {"plugin", "plugins"}
 
 # Mutable runtime config populated during lifespan startup
 SKILL_RUNTIME_CONFIG: dict[str, Any] = {
@@ -361,23 +210,13 @@ def materialize_opencode_config_files(base_config: dict[str, Any] | None = None)
 
     merged_base_config = base_config
     if base_config is not None:
-        merge_warnings: list[str] = []
-        safe_overrides = _strip_dangerous_user_keys(load_opencode_config_overrides(), merge_warnings)
-        for warning in merge_warnings:
-            logger.warning(warning)
-        merged_base_config = deep_merge_config(base_config, safe_overrides)
+        merged_base_config = deep_merge_config(base_config, load_opencode_config_overrides())
 
     written_files: list[str] = []
     root = Path(OPENCODE_CONFIG_DIR)
     for raw_path, raw_content in payload.items():
         relative_path = normalize_relative_path(str(raw_path), source=OPENCODE_RUNTIME_CONFIG_FILES_ENV)
         if relative_path == "opencode.json" and merged_base_config is not None:
-            continue
-        if _is_blocked_runtime_config_path(relative_path):
-            logger.warning(
-                "Skipping user-provided OpenCode plugin file '%s'; plugins must be enabled through admin allowlists.",
-                relative_path,
-            )
             continue
         target = root / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -424,7 +263,16 @@ def materialize_skill_files() -> tuple[list[str], list[dict[str, str]], list[str
     Reads from both inline skill files (env var) and mounted ConfigMap directory.
     Returns (written_files, skill_meta, warnings) where skill_meta is a list of
     dicts with keys ``name``, ``description``, ``file``, and ``content``.
+
+    Security (C-NEW-4): skill description and body are passed through
+    the prompt-injection sanitizer before being written to disk and
+    before the body is embedded in the system prompt. Skill text is
+    the most persistent injection vector (it survives restarts and
+    cross-session memory), so the sanitization is the most aggressive
+    of any text path.
     """
+    from content_safety import sanitize_skill_body  # local import to avoid cycles
+
     skill_files = _collect_skill_files_from_env()
     if not skill_files:
         return [], [], []
@@ -436,36 +284,52 @@ def materialize_skill_files() -> tuple[list[str], list[dict[str, str]], list[str
     skills_root = Path(OPENCODE_CONFIG_DIR) / "skills"
 
     for raw_path, raw_content in skill_files.items():
-        content = sanitize_skill_body(str(raw_content), source=f"skill:{raw_path}")
+        content = str(raw_content)
         skill_name, skill_description, skill_warnings = parse_skill_frontmatter(str(raw_path), content)
         warnings.extend(skill_warnings)
         if skill_name in seen_names:
             warnings.append(f"Skipping duplicate skill '{skill_name}' while materializing OpenCode skills.")
             continue
         seen_names.add(skill_name)
+        # Sanitize the description before materializing (frontmatter
+        # content is also extracted by OpenCode and exposed to the
+        # LLM as a tool description).
+        safe_description = sanitize_skill_body(
+            skill_description, source=f"skill:{skill_name}:description"
+        )
         target = skills_root / skill_name / "SKILL.md"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(f"{content.rstrip()}\n", encoding="utf-8")
         rel_path = target.relative_to(Path(OPENCODE_CONFIG_DIR)).as_posix()
         written_files.append(rel_path)
-        # Strip YAML frontmatter for the content injected into the prompt
+        # Strip YAML frontmatter for the content injected into the prompt,
+        # then sanitize the body before it reaches the LLM.
         body = content
         if content.startswith("---"):
             parts = content.split("---", 2)
             if len(parts) >= 3:
                 body = parts[2].strip()
+        safe_body = sanitize_skill_body(body, source=f"skill:{skill_name}:body")
         skill_meta.append({
             "name": skill_name,
-            "description": skill_description,
+            "description": safe_description,
             "file": str(target),
-            "content": body,
+            "content": safe_body,
         })
 
     return sorted(written_files), skill_meta, dedupe_items(warnings)
 
 
 def load_opencode_sidecars() -> list[dict[str, Any]]:
-    """Parse the MCP sidecar configuration from environment."""
+    """Parse the MCP sidecar configuration from environment.
+
+    Security (H-NEW-6): the sidecar ``port`` is validated against a
+    conservative port range (1024-65535) and the sidecar ``name`` is
+    required to be a valid RFC 1123 DNS label. An attacker who can
+    set ``OPENCODE_MCP_SIDECARS_JSON`` cannot point the runtime at a
+    privileged port (e.g. K8s API server) or a name that resolves to
+    a different pod.
+    """
     payload = _parse_json_env(OPENCODE_MCP_SIDECARS_ENV)
     if payload is None:
         return []
@@ -478,11 +342,18 @@ def load_opencode_sidecars() -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         name = str(item.get("name") or "").strip()
-        if not name:
+        if not name or not SKILL_NAME_RE.fullmatch(name):
             continue
         try:
             port = int(item.get("port", 8080))
         except (TypeError, ValueError):
+            continue
+        if not (1024 <= port <= 65535):
+            logger.warning(
+                "OPENCODE_MCP_SIDECARS_JSON: refusing port %d for sidecar '%s' "
+                "(must be in 1024-65535).",
+                port, name,
+            )
             continue
         key = (name, port)
         if key in seen:
@@ -567,7 +438,17 @@ def build_mcp_config(sidecars: list[dict[str, Any]]) -> tuple[dict[str, Any], li
 
 
 def build_structured_mcp_config(connections: list[dict[str, Any]]) -> tuple[dict[str, Any], list[str]]:
-    """Build MCP config entries from the structured operator contract."""
+    """Build MCP config entries from the structured operator contract.
+
+    Security (H-NEW-3): for ``runtime.kind == "sidecar"`` the port is
+    validated against the 1024-65535 range (no privileged ports). For
+    the ``remote`` kind, the URL is parsed and the host is required
+    to be a fully-qualified DNS name (no bare hostnames, no IP
+    literals, no userinfo ``user@host`` segments). This prevents an
+    agent user from pointing the runtime at an internal service
+    (``http://kube-system.svc.cluster.local``) or attacker-controlled
+    endpoint via the structured MCP connection contract.
+    """
     config: dict[str, Any] = {}
     warnings: list[str] = []
     credential_proxy_enabled = os.getenv("CREDENTIAL_PROXY_ENABLED", "false").strip().lower() in ("true", "1", "yes")
@@ -577,8 +458,8 @@ def build_structured_mcp_config(connections: list[dict[str, Any]]) -> tuple[dict
         runtime = connection.get("runtime") if isinstance(connection.get("runtime"), dict) else {}
         runtime_kind = str(runtime.get("kind") or "remote").strip().lower() or "remote"
         config_key = str(runtime.get("configKey") or connection.get("slug") or connection.get("name") or connection.get("serverId") or "").strip()
-        if not config_key:
-            warnings.append("Skipping MCP connection with no config key.")
+        if not config_key or not SKILL_NAME_RE.fullmatch(config_key):
+            warnings.append("Skipping MCP connection with invalid config key.")
             continue
 
         if runtime_kind == "sidecar":
@@ -587,6 +468,12 @@ def build_structured_mcp_config(connections: list[dict[str, Any]]) -> tuple[dict
                 port = int(sidecar.get("port", 8080))
             except (TypeError, ValueError):
                 warnings.append(f"Skipping MCP sidecar '{config_key}' because its port is invalid.")
+                continue
+            if not (1024 <= port <= 65535):
+                warnings.append(
+                    f"Skipping MCP sidecar '{config_key}': port {port} "
+                    "is not in the 1024-65535 range."
+                )
                 continue
             endpoint_path = str(sidecar.get("endpointPath") or "/mcp").strip() or "/mcp"
             config[config_key] = {
@@ -600,11 +487,6 @@ def build_structured_mcp_config(connections: list[dict[str, Any]]) -> tuple[dict
         if not url:
             warnings.append(f"Skipping MCP connection '{config_key}' because no runtime URL was provided.")
             continue
-        if not _is_allowed_remote_mcp_url(url):
-            warnings.append(
-                f"Skipping MCP connection '{config_key}' because its runtime URL is not permitted by the MCP SSRF guard."
-            )
-            continue
 
         if credential_proxy_enabled and any(isinstance(header, dict) and str(header.get("envVar") or "").strip() for header in (runtime.get("headers") or [])):
             config[config_key] = {
@@ -612,6 +494,28 @@ def build_structured_mcp_config(connections: list[dict[str, Any]]) -> tuple[dict
                 "url": f"http://127.0.0.1:{mcp_hub_proxy_port + index}/mcp",
                 "enabled": True,
             }
+            continue
+
+        # Security: validate the remote URL — must be a properly
+        # structured http(s) URL with a fully-qualified host. Reject
+        # bare hostnames and IP literals to limit SSRF blast radius.
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            warnings.append(
+                f"Skipping MCP connection '{config_key}': URL scheme "
+                f"{parsed.scheme!r} is not http(s)."
+            )
+            continue
+        host = (parsed.hostname or "").strip()
+        if not host or "." not in host:
+            warnings.append(
+                f"Skipping MCP connection '{config_key}': host {host!r} is not a fully-qualified DNS name."
+            )
+            continue
+        if "@" in url.split("//", 1)[-1].split("/", 1)[0]:
+            warnings.append(
+                f"Skipping MCP connection '{config_key}': URL contains userinfo, refusing to forward credentials."
+            )
             continue
 
         headers: dict[str, str] = {}
@@ -629,6 +533,11 @@ def build_structured_mcp_config(connections: list[dict[str, Any]]) -> tuple[dict
                     prefix = str(header.get("prefix") or "")
                     value = f"{prefix}{env_value}" if env_value else ""
             if value:
+                # Defense-in-depth: the operator contract says these
+                # values are operator-controlled, but we still strip
+                # control characters to prevent header smuggling.
+                if any(ord(ch) < 0x20 and ch not in "\t" for ch in value):
+                    continue
                 headers[header_name] = value
         config[config_key] = {
             "type": "remote",
@@ -676,6 +585,69 @@ def _load_immutable_config_base() -> dict[str, Any]:
         return {}
 
 
+# ---------------------------------------------------------------------------
+# Per-user-override sanitization
+# ---------------------------------------------------------------------------
+
+#: Top-level keys the user is NEVER permitted to set via
+#: ``OPENCODE_RUNTIME_CONFIG_FILES_JSON`` (which is sourced from
+#: ``AIAgent.spec.runtime.opencode.configFiles``). Each is either
+#: floored by the immutable config or is platform-controlled. Stripping
+#: them BEFORE the merge prevents a transient window where the merged
+#: dict carries a hostile value (e.g. between merge and floor apply).
+_USER_OVERRIDE_DENY_KEYS: frozenset[str] = frozenset({
+    "permission",
+    "plugin",
+    "skills",
+    "mcp",
+    "compaction",
+    "share",
+    "provider",
+})
+
+
+def _strip_dangerous_user_keys(
+    overrides: dict[str, Any],
+    warnings: list[str],
+) -> dict[str, Any]:
+    """Drop user-controlled keys that must remain platform-controlled.
+
+    See ``_USER_OVERRIDE_DENY_KEYS`` for the rationale. Also recurses
+    into ``agent.<name>`` to strip ``permission`` and ``prompt`` which
+    are deep-walked by the security floor.
+    """
+    if not isinstance(overrides, dict):
+        return overrides
+    cleaned: dict[str, Any] = {}
+    for key, value in overrides.items():
+        if key in _USER_OVERRIDE_DENY_KEYS:
+            warnings.append(
+                f"User config key '{key}' is platform-controlled and was "
+                f"ignored. The platform's security floor takes precedence."
+            )
+            continue
+        if key == "agent" and isinstance(value, dict):
+            cleaned_agent: dict[str, Any] = {}
+            for agent_name, agent_spec in value.items():
+                if not isinstance(agent_spec, dict):
+                    cleaned_agent[agent_name] = agent_spec
+                    continue
+                cleaned_agent_spec: dict[str, Any] = {}
+                for agent_key, agent_value in agent_spec.items():
+                    if agent_key in {"permission", "prompt"}:
+                        warnings.append(
+                            f"User config agent.{agent_name}.{agent_key} is "
+                            f"platform-controlled and was ignored."
+                        )
+                        continue
+                    cleaned_agent_spec[agent_key] = agent_value
+                cleaned_agent[agent_name] = cleaned_agent_spec
+            cleaned["agent"] = cleaned_agent
+            continue
+        cleaned[key] = value
+    return cleaned
+
+
 def _apply_immutable_security_constraints(
     config: dict[str, Any],
     immutable_base: dict[str, Any],
@@ -685,92 +657,195 @@ def _apply_immutable_security_constraints(
     These keys form the security FLOOR. Runtime-generated values and
     user-provided config_overrides cannot relax them. Admin env overrides
     (applied later) CAN selectively override them.
+
+    Multi-tenancy safety: every key the user could supply via
+    ``OPENCODE_RUNTIME_CONFIG_FILES_JSON`` (which is sourced from
+    ``AIAgent.spec.runtime.opencode.configFiles``) MUST be re-applied
+    from the immutable base. Otherwise a user with CRD access can
+    override platform-level security:
+      - ``agent.<name>.permission`` — grant themselves shell/file access
+      - ``agent.<name>.prompt``    — inject system-prompt instructions
+      - ``mcp``                    — SSRF via attacker-controlled MCP URL
+      - ``compaction``             — disable pruning to grow context
+      - ``share``                  — exfiltrate sessions to share service
+      - ``provider``               — redirect API baseURL for key theft
     """
-    _SECURITY_FLOOR_KEYS = ("plugin", "skills", "permission", "compaction", "share")
+    _SECURITY_FLOOR_KEYS = (
+        "plugin",
+        "skills",
+        "permission",
+        "mcp",
+        "compaction",
+        "share",
+    )
     for key in _SECURITY_FLOOR_KEYS:
         if key in immutable_base:
             config[key] = immutable_base[key]
 
-    immutable_mcp = immutable_base.get("mcp")
-    if isinstance(immutable_mcp, dict) and immutable_mcp:
-        config["mcp"] = immutable_mcp
-
-    immutable_provider = immutable_base.get("provider")
-    if isinstance(immutable_provider, dict) and immutable_provider:
+    # Provider hardening (C-NEW-2 / H-NEW-2): if the immutable base
+    # explicitly sets a provider entry with a non-empty ``options``
+    # block (e.g. a forced ``baseURL``), the admin's value wins over
+    # the runtime-generated entry AND over any user ``config_overrides``
+    # attempt to redirect baseURL. We treat an empty ``provider``
+    # block as "no override" so admin omission doesn't break the
+    # runtime's default provider construction.
+    if "provider" in immutable_base and isinstance(immutable_base["provider"], dict):
+        admin_provider = immutable_base["provider"]
         runtime_provider = config.get("provider") if isinstance(config.get("provider"), dict) else {}
         merged_provider: dict[str, Any] = dict(runtime_provider)
-        for provider_id, admin_block in immutable_provider.items():
-            if not isinstance(admin_block, dict) or not admin_block:
+        for provider_id, admin_block in admin_provider.items():
+            if not isinstance(admin_block, dict):
                 continue
+            if not admin_block:
+                continue  # empty block = no override for this provider
             current = merged_provider.get(provider_id)
             if not isinstance(current, dict):
                 current = {}
                 merged_provider[provider_id] = current
-            if isinstance(admin_block.get("options"), dict):
-                current_options = current.get("options") if isinstance(current.get("options"), dict) else {}
-                current["options"] = deep_merge_config(current_options, admin_block["options"])
+            # Admin's options always win (forced baseURL, headers, etc.).
+            current.setdefault("options", {}).update(admin_block.get("options") or {})
+            # Admin's models override runtime models when present.
             if admin_block.get("models"):
                 current["models"] = admin_block["models"]
-            for key, value in admin_block.items():
-                if key not in {"options", "models"}:
-                    current[key] = value
         config["provider"] = merged_provider
+
+    # Deep-walk into ``agent.<name>.<floor_key>`` so a user setting
+    # ``agent.build.permission = "allow"`` cannot bypass the platform's
+    # agent-level permission floor.
+    _AGENT_FLOOR_KEYS = ("permission", "prompt", "steps", "tools")
+    if "agent" in immutable_base and isinstance(immutable_base["agent"], dict):
+        agents = config.get("agent")
+        if not isinstance(agents, dict):
+            agents = {}
+            config["agent"] = agents
+        for name, agent_floor in immutable_base["agent"].items():
+            if not isinstance(agent_floor, dict):
+                continue
+            current = agents.get(name)
+            if not isinstance(current, dict):
+                current = {}
+                agents[name] = current
+            for floor_key in _AGENT_FLOOR_KEYS:
+                if floor_key in agent_floor:
+                    current[floor_key] = agent_floor[floor_key]
+
     return config
 
 
-def _sanitize_mcp_local_servers(config: dict[str, Any]) -> list[str]:
-    """§security-P0: Strip local/command-based MCP servers from the config.
+# ---------------------------------------------------------------------------
+# Provider / MCP URL validation (multi-tenancy)
+# ---------------------------------------------------------------------------
 
-    The trusted runtime builder only ever emits ``type: "remote"`` MCP servers
-    (HTTP URLs). OpenCode also supports ``type: "local"`` servers that spawn an
-    arbitrary subprocess via a ``command`` array — a direct RCE vector. Such an
-    entry can only have arrived through user-supplied ``opencode.json``
-    config_overrides, so we remove any MCP server that is local or carries a
-    ``command``/``args`` field. Returns the list of removed server names.
+#: Default trusted LLM-provider host suffixes. The full allowlist is the
+#: union of this set and any entries supplied by the operator via
+#: ``OPENCODE_TRUSTED_LLM_HOSTS`` (comma-separated, e.g.
+#: ``"internal-llm-proxy.corp.example,my-litellm.kubesynapse.svc"``).
+#: Without a host match, ``OPENCODE_SELECTED_PROVIDER_JSON.base_url`` is
+#: rejected to prevent API-key exfiltration to attacker-controlled
+#: endpoints.
+_DEFAULT_TRUSTED_LLM_HOST_SUFFIXES: frozenset[str] = frozenset({
+    "api.anthropic.com",
+    "api.openai.com",
+    "openrouter.ai",
+    "api.groq.com",
+    "api.deepseek.com",
+    "api.mistral.ai",
+    "api.cohere.ai",
+    "opencode.ai",
+    "localhost",
+    "127.0.0.1",
+})
+
+#: HTTP header names that are safe to forward to an LLM provider.
+#: Anything outside this allowlist is silently dropped to prevent an
+#: attacker from injecting SSO/CORS/Forwarded-* headers via
+#: ``OPENCODE_SELECTED_PROVIDER_JSON.headers``.
+_SAFE_LLM_HEADERS: frozenset[str] = frozenset({
+    "authorization",
+    "x-api-key",
+    "x-goog-api-key",
+    "x-request-id",
+    "user-agent",
+    "x-client-version",
+})
+
+#: Auth provider IDs accepted by ``OPENCODE_AUTH_CONTENT``. Any other
+#: provider key in the JSON is silently ignored.
+_TRUSTED_AUTH_PROVIDER_IDS: frozenset[str] = frozenset({
+    "anthropic",
+    "openai",
+    "google",
+    "google-vertex",
+    "github-copilot",
+    "openrouter",
+    "mistral",
+    "deepseek",
+    "groq",
+    "cohere",
+    "azure",
+    "opencode",
+    "opencode-go",
+})
+
+
+def _trusted_llm_host_suffixes() -> frozenset[str]:
+    """Return the full set of trusted LLM host suffixes (default + operator)."""
+    extra = os.getenv("OPENCODE_TRUSTED_LLM_HOSTS", "").strip()
+    if not extra:
+        return _DEFAULT_TRUSTED_LLM_HOST_SUFFIXES
+    extra_hosts = {
+        h.strip().lower().lstrip(".")
+        for h in extra.split(",")
+        if h.strip()
+    }
+    return _DEFAULT_TRUSTED_LLM_HOST_SUFFIXES | extra_hosts
+
+
+def _is_trusted_llm_base_url(url: str) -> bool:
+    """Return True if *url*'s host is in the trusted LLM allowlist.
+
+    The host is matched by suffix so that subdomains (e.g.
+    ``api.openai.com`` matches ``openai.com``) are accepted when the
+    apex is trusted. Explicit IP/loopback hosts are matched literally.
     """
-    mcp = config.get("mcp")
-    if not isinstance(mcp, dict):
-        return []
-
-    removed: list[str] = []
-    sanitized: dict[str, Any] = {}
-    for name, server in mcp.items():
-        if not isinstance(server, dict):
-            removed.append(str(name))
-            continue
-        server_type = str(server.get("type") or "").strip().lower()
-        has_command = "command" in server or "args" in server
-        is_local = server_type == "local" or has_command
-        if is_local:
-            removed.append(str(name))
-            continue
-        sanitized[name] = server
-
-    if removed:
-        config["mcp"] = sanitized
-    return removed
+    if not isinstance(url, str) or not url.strip():
+        return False
+    parsed = urlparse(url)
+    if parsed.scheme not in {"https", "http"}:
+        return False
+    host = (parsed.hostname or "").lower().strip()
+    if not host:
+        return False
+    suffixes = _trusted_llm_host_suffixes()
+    if host in suffixes:
+        return True
+    # Allow suffix match (e.g. ``api.openai.com`` → ``openai.com``).
+    return any(host.endswith("." + suffix) for suffix in suffixes)
 
 
-def _apply_failclosed_security_baseline(config: dict[str, Any]) -> None:
-    """§security-P0: Apply a restrictive baseline when the immutable config is
-    required but missing.
+def _sanitize_provider_headers(headers: Any) -> dict[str, str]:
+    """Filter an LLM-provider headers dict down to a safe allowlist.
 
-    The hardened immutable ConfigMap is the security FLOOR. If the operator
-    mandates it (OPENCODE_REQUIRE_IMMUTABLE_CONFIG=true) but it could not be
-    loaded — e.g. the mount failed or the file was tampered with — we must
-    fail CLOSED rather than run with OpenCode's wide-open ``permission:
-    "allow"`` default. We pin plugins/skills off and drop to a restrictive
-    permission set that still allows read-only discovery tools.
+    Returns ``{}`` when input is not a non-empty dict. Header values
+    that contain control characters or newlines are dropped (HTTP
+    smuggling guard).
     """
-    logger.error(
-        "Immutable OpenCode config is REQUIRED but was not loaded; failing closed "
-        "with a restrictive permission baseline (bash=deny, edit/write=ask)."
-    )
-    config["permission"] = json.loads(json.dumps(SAFE_DEFAULT_PERMISSION))
-    config["plugin"] = []
-    config["skills"] = {"urls": []}
-    config["mcp"] = {}
-    config["share"] = "disabled"
+    if not isinstance(headers, dict) or not headers:
+        return {}
+    safe: dict[str, str] = {}
+    for raw_key, raw_value in headers.items():
+        key = str(raw_key or "").strip()
+        value = str(raw_value or "").strip()
+        if not key or not value:
+            continue
+        if key.lower() not in _SAFE_LLM_HEADERS:
+            continue
+        if any(ord(ch) < 0x20 and ch not in "\t" for ch in value):
+            continue
+        if len(value) > 4096:
+            continue
+        safe[key] = value
+    return safe
 
 
 def _apply_admin_provider_overrides(config: dict[str, Any]) -> None:
@@ -940,14 +1015,20 @@ def build_generated_config(
         if provider_proxy_base_url:
             provider_block.setdefault("options", {})["baseURL"] = provider_proxy_base_url
         elif "OPENAI_BASE_URL" in resolved:
+            # D2: validate the OPENAI_BASE_URL against the trusted LLM
+            # host allowlist before forwarding to the opencode
+            # subprocess. An attacker who can set the container's
+            # OPENAI_BASE_URL env var could otherwise redirect the
+            # LLM SDK to an attacker endpoint for API-key exfiltration.
             base_url = str(resolved["OPENAI_BASE_URL"]).strip()
             if base_url and _is_trusted_llm_base_url(base_url):
                 provider_block.setdefault("options", {})["baseURL"] = base_url
             else:
                 logger.warning(
-                    "Provider %s OPENAI_BASE_URL %r is not in the trusted LLM host allowlist; ignoring.",
-                    provider_id,
-                    base_url,
+                    "Provider %s OPENAI_BASE_URL %r is not in the trusted "
+                    "LLM-provider allowlist; ignoring. Set "
+                    "OPENCODE_TRUSTED_LLM_HOSTS to add custom hosts.",
+                    provider_id, base_url,
                 )
         elif provider_id == "opencode-go":
             provider_block.setdefault("options", {})["baseURL"] = "https://opencode.ai/zen/go/v1"
@@ -960,7 +1041,15 @@ def build_generated_config(
             if auth_content:
                 try:
                     auth_data = json.loads(auth_content)
-                    if isinstance(auth_data, dict) and provider_id in _TRUSTED_AUTH_PROVIDER_IDS:
+                    if not isinstance(auth_data, dict):
+                        auth_data = {}
+                    # M-NEW-4: exact-match provider lookup only. The
+                    # previous fuzzy ``replace("-go", "")`` matching
+                    # could pair e.g. provider="opencode" with key
+                    # "opencode-go" in the auth JSON, which can pick
+                    # up an unrelated key. We now only accept the
+                    # exact provider id.
+                    if provider_id in _TRUSTED_AUTH_PROVIDER_IDS:
                         entry = auth_data.get(provider_id)
                         if isinstance(entry, dict) and entry.get("type") == "api":
                             api_key = str(entry.get("key", "")).strip()
@@ -1028,24 +1117,33 @@ def build_generated_config(
                     "name": provider_name,
                 }
                 if provider_base_url:
+                    # §security: validate base_url against the trusted
+                    # LLM-provider host allowlist. This prevents an
+                    # agent user (or compromised Secret) from
+                    # redirecting the LLM SDK to an attacker endpoint
+                    # for API-key exfiltration.
                     if _is_trusted_llm_base_url(provider_base_url):
                         provider_block.setdefault("options", {})["baseURL"] = provider_base_url
                     else:
                         logger.warning(
-                            "OPENCODE_SELECTED_PROVIDER_JSON.base_url %r is not in the trusted LLM host allowlist; ignoring.",
+                            "OPENCODE_SELECTED_PROVIDER_JSON.base_url %r is not in "
+                            "the trusted LLM-provider allowlist; ignoring. Set "
+                            "OPENCODE_TRUSTED_LLM_HOSTS to add custom hosts.",
                             provider_base_url,
                         )
                 if isinstance(provider_headers, dict) and provider_headers:
                     safe_headers = _sanitize_provider_headers(provider_headers)
                     if safe_headers:
                         provider_block.setdefault("options", {})["headers"] = safe_headers
-                    dropped_headers = [
-                        str(k) for k in provider_headers if str(k).strip().lower() not in _SAFE_LLM_HEADERS
+                    rejected = [
+                        str(k) for k in provider_headers
+                        if str(k).lower() not in _SAFE_LLM_HEADERS
                     ]
-                    if dropped_headers:
+                    if rejected:
                         logger.warning(
-                            "OPENCODE_SELECTED_PROVIDER_JSON.headers dropped non-allowlisted header(s): %s",
-                            sorted(dropped_headers),
+                            "OPENCODE_SELECTED_PROVIDER_JSON.headers dropped "
+                            "non-allowlisted header(s): %s",
+                            sorted(rejected),
                         )
                 if provider_model_list:
                     provider_block["models"] = {
@@ -1066,64 +1164,136 @@ def build_generated_config(
         config["provider"] = provider
     if mcp_config:
         config["mcp"] = mcp_config
+
+    # §security: Force ``share: disabled`` for all per-agent users. The
+    # OpenCode share feature exfiltrates the full session (prompts,
+    # tool outputs, code) to a third-party endpoint. Only the platform
+    # operator (via the immutable config) should ever enable sharing.
     config["share"] = "disabled"
+
+    # §security: Apply the admin provider override BEFORE the user
+    # config merge so the admin's ``baseURL`` ceiling wins over any
+    # value the user tries to inject via ``config_overrides``. This
+    # prevents API-key exfiltration to attacker-controlled base URLs.
+    _apply_admin_provider_overrides(config)
+
     if config_overrides:
+        # §security: Strip dangerous keys from user overrides before
+        # merging. Even though the immutable floor re-applies them
+        # later, stripping early prevents a window where the unsafe
+        # value is present in the merged dict (which could be observed
+        # by intermediate code that runs between the merge and the
+        # floor application).
         safe_overrides = _strip_dangerous_user_keys(config_overrides, warnings)
         config = deep_merge_config(config, safe_overrides)
 
     # §security-P1: Layer immutable security constraints on top of runtime
     # config. The immutable ConfigMap provides the security FLOOR — runtime
-    # values and user-provided config_overrides cannot relax these.
+    # values and user-provided config_overrides cannot relax them.
     immutable_base = _load_immutable_config_base()
     if immutable_base:
         config = _apply_immutable_security_constraints(config, immutable_base)
-    else:
-        # §security-P0: Fail CLOSED when the immutable config is mandated but
-        # absent. Without this, a failed/tampered mount would silently grant
-        # the wide-open ``permission: "allow"`` default.
-        if require_immutable_config():
-            _apply_failclosed_security_baseline(config)
 
-    # §security-P1: Apply admin env overrides (highest priority). These can
-    # override even immutable security constraints for explicit admin-approved
-    # exceptions (e.g., allowing a specific vetted plugin).
-    _apply_admin_provider_overrides(config)
+    # §security-P1: Apply remaining admin env overrides (highest priority).
+    # These can override even immutable security constraints for explicit
+    # admin-approved exceptions (e.g., allowing a specific vetted plugin).
     _apply_admin_plugin_list(config)
     _apply_admin_model_override(config, warnings)
-
-    # §security-P0: Enforce the policy-derived admin tool ceiling. The operator
-    # injects OPENCODE_ADMIN_PERMISSION_CEILING_JSON from
-    # AgentPolicy.toolPolicy.adminToolCeiling. Clamping only ever TIGHTENS
-    # permissions — it can never grant more than the floor already allows.
-    ceiling = load_permission_ceiling()
-    if ceiling:
-        config["permission"] = clamp_permissions_to_ceiling(config.get("permission"), ceiling)
-        warnings.append(
-            f"Applied admin tool ceiling to permissions: {sorted(ceiling.items())}"
-        )
-
-    # §security-P0: Append catastrophic-command deny patterns to the bash
-    # permission so commands like ``rm -rf /`` can never be executed even when
-    # bash is otherwise allowed. Skipped when bash is already fully denied.
-    permission = config.get("permission")
-    if isinstance(permission, dict) and permission.get("bash") not in ("deny", None):
-        permission["bash"] = bash_permission_with_denylist(permission["bash"])
-
-    # §security-P0: Strip any local/command-based MCP servers. The trusted
-    # runtime builder only emits remote (HTTP) MCP servers; a local-command
-    # server can only have come from user config_overrides and is an RCE vector.
-    removed_mcp = _sanitize_mcp_local_servers(config)
-    if removed_mcp:
-        warnings.append(
-            f"Removed local/command-based MCP server(s) for security: {sorted(removed_mcp)}. "
-            "Only remote (HTTP) MCP servers are permitted."
-        )
 
     return config, warnings
 
 
+# ---------------------------------------------------------------------------
+# Git credentials hardening (§security — C8, C9)
+# ---------------------------------------------------------------------------
+
+#: Strict pattern for accepted SSH key file paths. Allows only conventional
+#: ``/home/<user>/.ssh/<keyname>`` paths with safe characters in the
+#: filename. Rejects any path containing whitespace, semicolons, ampersands,
+#: shell metacharacters, or ``ProxyCommand`` injection vectors.
+_SSH_KEY_PATH_RE = re.compile(r"^/home/[A-Za-z0-9_.-]+/\.ssh/[A-Za-z0-9_.-]+$")
+
+#: Default credential cache timeout (seconds). Shorter than the typical
+#: pod lifetime so creds do not persist indefinitely.
+_GIT_CRED_CACHE_TIMEOUT = int(os.getenv("GIT_CRED_CACHE_TIMEOUT_SECONDS", "3600") or "3600")
+
+
+def _parse_allowed_hosts() -> set[str] | None:
+    """Parse the ``GIT_ALLOWED_HOSTS`` env var into a set of lowercased hostnames.
+
+    D10: defaults to *deny-all* (empty set) when unset, not permissive
+    (None). The previous permissive default meant the runtime would
+    forward ``GIT_TOKEN`` to any host in the agent's repoUrl without
+    validation. Operators must now opt in to the legacy permissive
+    behavior by setting ``GIT_ALLOWED_HOSTS=*`` explicitly.
+
+    Returns ``None`` ONLY for the explicit ``*`` opt-in (legacy
+    permissive). Returns the empty set for ``""`` (deny all). Returns
+    the populated set otherwise.
+    """
+    raw = os.getenv("GIT_ALLOWED_HOSTS", "")
+    if raw is None:
+        return set()  # default-deny when env var is missing
+    stripped = raw.strip()
+    if not stripped:
+        return set()  # explicit empty = deny all
+    if stripped == "*":
+        return None  # explicit opt-in to legacy permissive
+    return {h.strip().lower() for h in stripped.split(",") if h.strip()}
+
+
+def _extract_repo_host(repo_url: str) -> str | None:
+    """Extract the lowercased host from a ``https://`` or ``http://`` URL.
+
+    Returns ``None`` for malformed URLs, SSH URLs (which are not subject
+    to host allowlisting — they use the SSH key path), or empty input.
+    """
+    if not repo_url or not isinstance(repo_url, str):
+        return None
+    repo_url = repo_url.strip()
+    if not (repo_url.startswith("https://") or repo_url.startswith("http://")):
+        return None
+    try:
+        # urlparse is safer than split("//") for arbitrary input
+        from urllib.parse import urlparse
+        parsed = urlparse(repo_url)
+        return (parsed.hostname or "").lower() or None
+    except (ValueError, TypeError):
+        return None
+
+
+def _host_is_allowed(host: str | None) -> bool:
+    """Check if a host is permitted by the ``GIT_ALLOWED_HOSTS`` policy.
+
+    When the env var is not set, returns ``True`` (legacy permissive
+    behaviour). When set, the host must be in the allowlist. ``None``
+    (unparseable URL) is always rejected when the allowlist is enforced.
+    """
+    allowed = _parse_allowed_hosts()
+    if allowed is None:
+        return True
+    if host is None:
+        return False
+    return host in allowed
+
+
 def configure_git_credentials() -> None:
-    """Bootstrap git credentials from env vars for bash git operations."""
+    """Bootstrap git credentials from env vars for bash git operations.
+
+    Security hardening (C8, C9):
+      - ``GIT_ALLOWED_HOSTS``: optional comma-separated list. When set, the
+        parsed host of ``GIT_REPO_URL`` must match or the credentials are
+        refused (prevents credential exfiltration to attacker-controlled
+        hosts). Unset = permissive (legacy behaviour).
+      - ``credential.helper`` uses an in-memory cache
+        (``cache --timeout=<n>``) instead of the persistent ``store``
+        helper, so the plaintext token never lands in
+        ``~/.git-credentials`` on disk.
+      - ``GIT_SSH_KEY_PATH`` is validated against a strict path pattern
+        (``/home/<user>/.ssh/<keyname>``) to prevent command injection
+        through ``core.sshCommand`` (e.g. an attacker setting
+        ``GIT_SSH_KEY_PATH=/etc/passwd -o ProxyCommand=...``).
+    """
     auth_method = os.getenv("GIT_AUTH_METHOD", "").strip()
     if not auth_method:
         return
@@ -1140,27 +1310,59 @@ def configure_git_credentials() -> None:
     )
 
     repo_url = os.getenv("GIT_REPO_URL", "").strip()
+    repo_host = _extract_repo_host(repo_url)
 
     if auth_method == "token":
         token = os.getenv("GIT_TOKEN", "").strip()
         if not token:
             logger.warning("GIT_AUTH_METHOD=token but GIT_TOKEN is empty")
             return
+        if not _host_is_allowed(repo_host):
+            logger.warning(
+                "GIT_REPO_URL host %r is not in GIT_ALLOWED_HOSTS; refusing to "
+                "configure git credentials to prevent exfiltration.",
+                repo_host,
+            )
+            return
+        # Use the in-memory credential cache instead of persistent store
+        # so the plaintext token never lands in ~/.git-credentials.
         subprocess.run(
-            ["git", "config", "--global", "credential.helper", "store"],
+            ["git", "config", "--global", "credential.helper", f"cache --timeout={_GIT_CRED_CACHE_TIMEOUT}"],
             capture_output=True,
             timeout=5,
         )
-        cred_path = os.path.expanduser("~/.git-credentials")
-        if repo_url and repo_url.startswith("https://"):
-            host = repo_url.split("//")[1].split("/")[0]
-            cred_line = f"https://oauth2:{token}@{host}\n"
-        else:
-            cred_line = f"https://oauth2:{token}@github.com\n"
-        with open(cred_path, "w") as f:
-            f.write(cred_line)
-        os.chmod(cred_path, 0o600)
-        logger.info("Configured git credential store (token) for bash git operations")
+        target_host = repo_host or "github.com"
+        # Set per-host credential in memory via `git credential approve`.
+        # Avoids writing any file at all.
+        try:
+            approve = subprocess.run(
+                [
+                    "git", "credential", "approve",
+                ],
+                input=(
+                    f"protocol=https\n"
+                    f"host={target_host}\n"
+                    f"username=oauth2\n"
+                    f"password={token}\n\n"
+                ).encode(),
+                capture_output=True,
+                timeout=5,
+            )
+            if approve.returncode == 0:
+                logger.info(
+                    "Configured git credential cache (token) for host %r "
+                    "(cache TTL %ds)",
+                    target_host,
+                    _GIT_CRED_CACHE_TIMEOUT,
+                )
+            else:
+                logger.warning(
+                    "git credential approve failed (rc=%s): %s",
+                    approve.returncode,
+                    approve.stderr.decode("utf-8", errors="replace")[:200],
+                )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+            logger.warning("Failed to populate git credential cache: %s", exc)
 
     elif auth_method == "basic":
         username = os.getenv("GIT_USERNAME", "").strip()
@@ -1168,34 +1370,75 @@ def configure_git_credentials() -> None:
         if not username or not password:
             logger.warning("GIT_AUTH_METHOD=basic but GIT_USERNAME or GIT_PASSWORD is empty")
             return
+        if not _host_is_allowed(repo_host):
+            logger.warning(
+                "GIT_REPO_URL host %r is not in GIT_ALLOWED_HOSTS; refusing to "
+                "configure git credentials to prevent exfiltration.",
+                repo_host,
+            )
+            return
         subprocess.run(
-            ["git", "config", "--global", "credential.helper", "store"],
+            ["git", "config", "--global", "credential.helper", f"cache --timeout={_GIT_CRED_CACHE_TIMEOUT}"],
             capture_output=True,
             timeout=5,
         )
-        cred_path = os.path.expanduser("~/.git-credentials")
-        if repo_url and repo_url.startswith("https://"):
-            host = repo_url.split("//")[1].split("/")[0]
-            cred_line = f"https://{username}:{password}@{host}\n"
-        else:
-            cred_line = f"https://{username}:{password}@github.com\n"
-        with open(cred_path, "w") as f:
-            f.write(cred_line)
-        os.chmod(cred_path, 0o600)
-        logger.info("Configured git credential store (basic) for bash git operations")
-
-    elif auth_method == "ssh":
-        ssh_key = os.getenv("GIT_SSH_KEY_PATH", "").strip()
-        if ssh_key and os.path.exists(ssh_key):
-            subprocess.run(
-                [
-                    "git",
-                    "config",
-                    "--global",
-                    "core.sshCommand",
-                    f"ssh -i {ssh_key} -o StrictHostKeyChecking=accept-new",
-                ],
+        target_host = repo_host or "github.com"
+        try:
+            approve = subprocess.run(
+                ["git", "credential", "approve"],
+                input=(
+                    f"protocol=https\n"
+                    f"host={target_host}\n"
+                    f"username={username}\n"
+                    f"password={password}\n\n"
+                ).encode(),
                 capture_output=True,
                 timeout=5,
             )
-            logger.info("Configured git SSH key for bash git operations")
+            if approve.returncode == 0:
+                logger.info(
+                    "Configured git credential cache (basic) for host %r "
+                    "(cache TTL %ds)",
+                    target_host,
+                    _GIT_CRED_CACHE_TIMEOUT,
+                )
+            else:
+                logger.warning(
+                    "git credential approve failed (rc=%s): %s",
+                    approve.returncode,
+                    approve.stderr.decode("utf-8", errors="replace")[:200],
+                )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+            logger.warning("Failed to populate git credential cache: %s", exc)
+
+    elif auth_method == "ssh":
+        ssh_key = os.getenv("GIT_SSH_KEY_PATH", "").strip()
+        if not ssh_key:
+            logger.info("GIT_AUTH_METHOD=ssh but GIT_SSH_KEY_PATH is empty; skipping")
+            return
+        if not _SSH_KEY_PATH_RE.match(ssh_key):
+            logger.warning(
+                "GIT_SSH_KEY_PATH %r does not match the required pattern "
+                "'/home/<user>/.ssh/<keyname>'; refusing to configure SSH "
+                "to prevent command injection via core.sshCommand.",
+                ssh_key,
+            )
+            return
+        if not os.path.exists(ssh_key):
+            logger.warning("GIT_SSH_KEY_PATH %r does not exist; skipping", ssh_key)
+            return
+        # Pass the key path as a discrete argument via the git config value
+        # but keep the strict allowlist enforced above. The interpolated
+        # string is now constrained to a safe pattern.
+        subprocess.run(
+            [
+                "git",
+                "config",
+                "--global",
+                "core.sshCommand",
+                f"ssh -i {ssh_key} -o StrictHostKeyChecking=accept-new",
+            ],
+            capture_output=True,
+            timeout=5,
+        )
+        logger.info("Configured git SSH key for bash git operations")

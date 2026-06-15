@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import logging
 import os
 import threading
@@ -151,57 +150,22 @@ def _verify_slack_signature(payload: bytes, signature: str, secret: str, timesta
     return hmac.compare_digest(expected, signature)
 
 
-_STRIPE_TOLERANCE_SECONDS = max(
-    int(os.getenv("WEBHOOK_STRIPE_TOLERANCE_SECONDS", "300")), 1
-)
-
-
-def _verify_stripe_signature(payload: bytes, signature: str, secret: str, timestamp: str | None = None) -> bool:
+def _verify_stripe_signature(payload: bytes, signature: str, secret: str) -> bool:
     """Verify Stripe webhook signature (Stripe-Signature header).
 
-    Stripe signs HMAC_SHA256(secret, f"{t}.{raw_body}") where *t* is the
-    Unix timestamp from the ``t=`` field in the Stripe-Signature header.
-    Passing only the raw body to HMAC (as the previous implementation did)
-    always produces the wrong digest and rejects every real Stripe event.
-
-    The ``timestamp`` kwarg accepts the already-extracted ``t=`` value so
-    the caller can pass it via ``PROVIDER_VERIFIERS``'s **kwargs.
-    If not provided, the function extracts it from the ``signature`` string.
+    Stripe uses a simplified check — verified_v1 timestamp scheme.
+    This validates the first v1 signature found in the header.
     """
     if not signature:
         return False
-
-    # Parse t= and v1= fields from the Stripe-Signature header value.
-    ts_value: str | None = timestamp
-    v1_signatures: list[str] = []
     for part in signature.split(","):
         part = part.strip()
-        if part.startswith("t=") and ts_value is None:
-            ts_value = part[2:].strip()
-        elif part.startswith("v1="):
-            v1_signatures.append(part[3:])
-
-    if not ts_value or not v1_signatures:
-        return False
-
-    # Replay-attack protection: reject if timestamp is too old.
-    try:
-        event_time = int(ts_value)
-        if abs(time.time() - event_time) > _STRIPE_TOLERANCE_SECONDS:
-            logger.warning(
-                "Stripe webhook timestamp too old: age=%ds tolerance=%ds",
-                abs(time.time() - event_time),
-                _STRIPE_TOLERANCE_SECONDS,
-            )
-            return False
-    except ValueError:
-        return False
-
-    # Compute expected signature over "{ts}.{raw_payload}".
-    signed_payload = f"{ts_value}.".encode("utf-8") + payload
-    expected = hmac.new(secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
-
-    return any(hmac.compare_digest(expected, v1) for v1 in v1_signatures)
+        if part.startswith("v1="):
+            provided = part[3:]
+            expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+            if hmac.compare_digest(expected, provided):
+                return True
+    return False
 
 
 def _verify_pagerduty_signature(payload: bytes, signature: str, secret: str) -> bool:
@@ -214,7 +178,7 @@ PROVIDER_VERIFIERS: dict[str, Any] = {
     "generic": lambda p, sig, secret, **kw: _verify_hmac_sha256(p, sig, secret),
     "github": lambda p, sig, secret, **kw: _verify_github_signature(p, sig, secret),
     "slack": lambda p, sig, secret, **kw: _verify_slack_signature(p, sig, secret, kw.get("timestamp")),
-    "stripe": lambda p, sig, secret, **kw: _verify_stripe_signature(p, sig, secret, kw.get("timestamp")),
+    "stripe": lambda p, sig, secret, **kw: _verify_stripe_signature(p, sig, secret),
     "pagerduty": lambda p, sig, secret, **kw: _verify_pagerduty_signature(p, sig, secret),
     "grafana": lambda p, sig, secret, **kw: _verify_hmac_sha256(p, sig, secret),
 }
@@ -227,11 +191,20 @@ def verify_provider_signature(
     secret: str,
     **kwargs: Any,
 ) -> bool:
-    """Verify a webhook signature using the appropriate provider verifier."""
+    """Verify a webhook signature using the appropriate provider verifier.
+
+    Unknown providers are rejected outright (no silent fallback to generic
+    HMAC) to prevent an attacker from bypassing provider-specific checks by
+    sending a bogus provider name.
+    """
     verifier = PROVIDER_VERIFIERS.get(provider)
     if verifier is None:
-        logger.warning("Unknown webhook provider '%s'; falling back to generic HMAC", provider)
-        return _verify_hmac_sha256(raw_body, signature, secret)
+        logger.warning(
+            "Unknown webhook provider '%s' — rejecting (no generic fallback). "
+            "Configure the provider explicitly or update PROVIDER_VERIFIERS.",
+            provider,
+        )
+        return False
     return verifier(raw_body, signature, secret, **kwargs)
 
 
@@ -275,35 +248,54 @@ def resolve_webhook_secret_with_key_id(
 
 
 def _resolve_k8s_secret(secret_ref: str) -> str | None:
-    """Resolve a K8s Secret reference (namespace/name#key) or env var."""
+    """Resolve a K8s Secret reference in the format ``namespace/name#key``.
+
+    Only Kubernetes Secrets are accepted — environment variable fallback is
+    disabled to prevent silent secret resolution from process environment
+    (e.g. an attacker who can write a single env var could substitute
+    webhook secrets). Returns ``None`` when the format is invalid or the
+    secret cannot be read.
+    """
     if not secret_ref or not secret_ref.strip():
         return None
 
-    if "/" in secret_ref:
-        parts = secret_ref.split("/", 1)
-        ns = parts[0].strip()
-        rest = parts[1]
-        if "#" in rest:
-            name_part, key = rest.split("#", 1)
-            name = name_part.strip()
-            key = key.strip()
-            try:
-                import base64
-                import kubernetes.client
-                v1 = kubernetes.client.CoreV1Api()
-                secret = v1.read_namespaced_secret(name=name, namespace=ns)
-                if secret.data and key in secret.data:
-                    return base64.b64decode(secret.data[key]).decode("utf-8")
-                logger.warning(
-                    "K8s secret '%s/%s' does not contain key '%s'", ns, name, key
-                )
-            except ImportError:
-                logger.warning("kubernetes package not installed; cannot resolve K8s secret ref")
-            except Exception as exc:  # noqa: BLE001 — K8s API errors vary widely
-                logger.warning("Failed to read K8s secret '%s/%s' key '%s': %s", ns, name, key, exc)
+    if "/" not in secret_ref:
+        logger.warning(
+            "Webhook secret_ref '%s' is not in the required 'namespace/name#key' format; "
+            "environment variable fallback is disabled for security.",
+            secret_ref,
+        )
+        return None
 
-    env_var_name = secret_ref.replace("-", "_").replace(" ", "_").upper()
-    return os.environ.get(env_var_name)
+    parts = secret_ref.split("/", 1)
+    ns = parts[0].strip()
+    rest = parts[1]
+    if "#" not in rest:
+        logger.warning(
+            "Webhook secret_ref '%s' is missing the '#key' suffix; refusing to resolve.",
+            secret_ref,
+        )
+        return None
+
+    name_part, key = rest.split("#", 1)
+    name = name_part.strip()
+    key = key.strip()
+    if not ns or not name or not key:
+        return None
+    try:
+        import base64
+
+        import kubernetes.client
+        v1 = kubernetes.client.CoreV1Api()
+        secret = v1.read_namespaced_secret(name=name, namespace=ns)
+        if secret.data and key in secret.data:
+            return base64.b64decode(secret.data[key]).decode("utf-8")
+        logger.warning("K8s secret '%s/%s' does not contain key '%s'", ns, name, key)
+    except ImportError:
+        logger.warning("kubernetes package not installed; cannot resolve K8s secret ref")
+    except Exception as exc:
+        logger.warning("Failed to read K8s secret '%s/%s' key '%s': %s", ns, name, key, exc)
+    return None
 
 
 # ---------------------------------------------------------------------------

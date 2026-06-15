@@ -81,8 +81,61 @@ def _serialize_tool_args(tool_args: dict[str, Any] | None) -> str:
     return json.dumps({"truncated": True, "preview": preview}, sort_keys=True)
 
 
+def _is_trusted_hitl_webhook_host(host: str) -> bool:
+    """Return True if *host* is permitted for HITL approval notifications.
+
+    The HITL notification webhook is an outbound call triggered by
+    agent activity. The URL is configured via the
+    ``HITL_NOTIFICATION_WEBHOOK_URL`` env var (D3 defense). To prevent
+    SSRF-style misuse (an attacker who can influence the env var
+    pointing the notification at an internal service or attacker
+    endpoint), the host must match an explicit allowlist. Operators
+    extend the allowlist via ``HITL_TRUSTED_WEBHOOK_HOSTS`` (comma
+    separated host suffixes).
+    """
+    if not host:
+        return False
+    lowered = host.lower().strip().lstrip(".")
+    extra_raw = os.getenv("HITL_TRUSTED_WEBHOOK_HOSTS", "")
+    extras = {
+        h.strip().lower().lstrip(".")
+        for h in extra_raw.split(",")
+        if h.strip()
+    }
+    defaults = {
+        "localhost",
+        "127.0.0.1",
+    }
+    allowed = defaults | extras
+    if lowered in allowed:
+        return True
+    return any(lowered.endswith("." + suffix) for suffix in allowed)
+
+
 def _send_approval_notification(payload: dict[str, Any]) -> None:
     if not HITL_NOTIFICATION_WEBHOOK_URL:
+        return
+
+    # D3: validate the webhook URL before posting. An attacker who
+    # can influence HITL_NOTIFICATION_WEBHOOK_URL could otherwise
+    # use the agent pod to send arbitrary POST requests to internal
+    # services or attacker endpoints (SSRF). The notification
+    # contains the agent name, action, tool name, and request id.
+    from urllib.parse import urlparse
+
+    parsed = urlparse(HITL_NOTIFICATION_WEBHOOK_URL)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        logger.warning(
+            "HITL_NOTIFICATION_WEBHOOK_URL has an invalid scheme or host; skipping."
+        )
+        return
+    if not _is_trusted_hitl_webhook_host(parsed.hostname):
+        logger.warning(
+            "HITL_NOTIFICATION_WEBHOOK_URL host %r is not in the trusted "
+            "webhook-host allowlist; skipping. Set HITL_TRUSTED_WEBHOOK_HOSTS "
+            "to add custom hosts.",
+            parsed.hostname,
+        )
         return
 
     try:

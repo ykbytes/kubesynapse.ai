@@ -30,6 +30,43 @@ import {
 
 /* ---------- simple markdown-to-html renderer ---------- */
 
+function _escapeAttr(value: string): string {
+  // §security-R6: minimal HTML attribute escaper used to prevent
+  // XSS via attribute injection. The earlier renderer injected
+  // user-supplied href / data-lang / message text directly into
+  // HTML attributes, which let a crafted link break out of the
+  // attribute and inject arbitrary markup (e.g. onclick handlers).
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function _safeHref(href: string): string | null {
+  // §security-R6: block dangerous protocols (javascript:, data:,
+  // vbscript:), as well as protocol-relative URLs and any scheme
+  // other than http/https/mailto/tel. Trim whitespace and NULs
+  // before checking — attackers use leading whitespace to bypass
+  // naive regexes.
+  const normalized = href.replace(/[\s\x00-\x1f]/g, "").toLowerCase();
+  if (normalized.startsWith("//")) {
+    return null;
+  }
+  if (/^(javascript|data|vbscript|file|about|chrome|jar):/i.test(normalized)) {
+    return null;
+  }
+  if (!/^(https?|mailto|tel):/i.test(normalized) && !normalized.startsWith("/")) {
+    // Allow relative paths (start with / or be empty) but reject
+    // any other protocol-less URL.
+    if (!/^[./]/.test(normalized) && !normalized.startsWith("#")) {
+      return null;
+    }
+  }
+  return href;
+}
+
 function renderMarkdown(src: string): string {
   if (!src) return '<p class="text-muted-foreground/50 italic">Nothing to preview</p>';
 
@@ -42,8 +79,14 @@ function renderMarkdown(src: string): string {
   // Fenced code blocks
   html = html.replace(
     /```(\w*)\n([\s\S]*?)```/g,
-    (_m, lang, code) =>
-      `<pre class="rounded-lg border border-border/60 bg-background/80 p-3 text-xs font-mono overflow-x-auto my-2"><code${lang ? ` data-lang="${lang}"` : ""}>${code.trimEnd()}</code></pre>`,
+    (_m, lang, code) => {
+      // §security-R6: escape the language token before injecting it
+      // into a data-* attribute. The previous code used `data-lang="${lang}"`
+      // which let an attacker break out of the attribute with `lang='
+      // onclick=...`.
+      const safeLang = _escapeAttr(String(lang || "").trim());
+      return `<pre class="rounded-lg border border-border/60 bg-background/80 p-3 text-xs font-mono overflow-x-auto my-2"><code${safeLang ? ` data-lang="${safeLang}"` : ""}>${code.trimEnd()}</code></pre>`;
+    },
   );
 
   // Inline code
@@ -65,15 +108,19 @@ function renderMarkdown(src: string): string {
   html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
 
-  // Links (reject javascript: / data: / vbscript: protocols to prevent XSS)
+  // §security-R6: links — escape the href and validate the scheme
+  // before injecting it into an HTML attribute. The earlier code
+  // used `href="${href}"` raw, which let a malicious link like
+  // `[click](https://x" onclick="alert(1))` escape the attribute
+  // and inject arbitrary markup.
   html = html.replace(
     /\[([^\]]+)\]\(([^)]+)\)/g,
     (_m: string, label: string, href: string) => {
-      const normalized = href.replace(/[\s\x00-\x1f]/g, "").toLowerCase();
-      if (/^(javascript|data|vbscript)\s*:/i.test(normalized)) {
+      const safeHrefValue = _safeHref(href);
+      if (safeHrefValue === null) {
         return `<span class="text-muted-foreground line-through">${label}</span>`;
       }
-      return `<a class="text-primary underline underline-offset-2" href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+      return `<a class="text-primary underline underline-offset-2" href="${_escapeAttr(safeHrefValue)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
     },
   );
 

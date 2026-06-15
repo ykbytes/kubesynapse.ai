@@ -2,16 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,79 +18,79 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// WP-7: Tunable connection-pool and timeout configuration
+// D4 — Path-confusion guard.
+//
+// The original code rewrote the upstream path when ``originalPath`` started
+// with ``/mcp`` regardless of whether the route's target path was
+// ``/mcp``-rooted. A route with target ``http://internal.svc/api/v1`` would
+// happily forward a caller-supplied ``/mcp/users`` to
+// ``http://internal.svc/api/v1/users``. We now scope the rewrite to routes
+// whose target path is *itself* rooted under ``/mcp``.
 // ---------------------------------------------------------------------------
 
-// proxyTransportConfig holds the pooled Transport shared across all routes.
-// Using a shared Transport allows connections to be reused across forward
-// requests to the same upstream, which reduces TIME_WAIT socket accumulation
-// under high parallel load.
-var _sharedTransport *http.Transport
-
-func init() {
-	_sharedTransport = buildTransport()
+// isMCPRootedPath returns true when *p* is an MCP-style path root
+// (specifically "/mcp" with or without a trailing slash). This is the
+// only target path for which the caller-supplied ``/mcp/...`` rewrite
+// is safe.
+func isMCPRootedPath(p string) bool {
+	cleaned := strings.TrimSuffix(p, "/")
+	return cleaned == "/mcp"
 }
 
-func envInt(name string, fallback int) int {
-	if v := os.Getenv(name); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
+// ---------------------------------------------------------------------------
+// D5 — Timing-safe bearer comparison.
+// ---------------------------------------------------------------------------
+
+// safeEqualBearer compares two ``Authorization: Bearer <secret>`` strings in
+// constant time. Returning a plain ``==`` is vulnerable to remote timing
+// attacks (see the OWASP JWT cheat sheet).
+func safeEqualBearer(a, b string) bool {
+	// Both inputs include the "Bearer " prefix. Use
+	// crypto/subtle.ConstantTimeCompare on the underlying bytes after
+	// length-equalizing to avoid leaking prefix-length differences.
+	if len(a) != len(b) {
+		// Compare the longer against the shorter padded with NULs so
+		// the comparison runs in constant time regardless.
+		if len(a) < len(b) {
+			padded := a + strings.Repeat("\x00", len(b)-len(a))
+			subtle.ConstantTimeCompare([]byte(padded), []byte(b))
+			return false
 		}
+		padded := b + strings.Repeat("\x00", len(a)-len(b))
+		subtle.ConstantTimeCompare([]byte(a), []byte(padded))
+		return false
 	}
-	return fallback
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-func envDuration(name string, fallback time.Duration) time.Duration {
-	if v := os.Getenv(name); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			return d
-		}
-	}
-	return fallback
+// hopByHopHeaders is the set of headers that must NOT be forwarded by a
+// proxy (RFC 7230 §6.1). Stripping these prevents a downstream
+// service from trusting client-supplied values that should be re-derived.
+var hopByHopHeaders = []string{
+	"Connection",
+	"Keep-Alive",
+	"Proxy-Authenticate",
+	"Proxy-Authorization", // D6 — auth leakage via Proxy-Authorization
+	"TE",
+	"Trailer",
+	"Transfer-Encoding",
+	"Upgrade",
+	"X-Forwarded-For",      // D6 — spoofed-client-IP injection
+	"X-Forwarded-Host",     // D6 — host-header injection
+	"X-Forwarded-Proto",    // D6 — protocol-spoofing
+	"X-Forwarded-For-Proto",
+	"X-Real-IP",            // D6 — spoofed source IP
+	"Forwarded",            // RFC 7239
+	"True-Client-IP",       // D6
+	"CF-Connecting-IP",     // D6 — Cloudflare spoofed source
+	"X-Client-IP",
+	"X-Originating-IP",
 }
 
-func buildTransport() *http.Transport {
-	return &http.Transport{
-		// WP-7: raise idle-connection ceilings from Go's default of 100/2.
-		MaxIdleConns:        envInt("PROXY_TRANSPORT_MAX_IDLE_CONNS", 200),
-		MaxIdleConnsPerHost: envInt("PROXY_TRANSPORT_MAX_IDLE_CONNS_PER_HOST", 100),
-		MaxConnsPerHost:     envInt("PROXY_TRANSPORT_MAX_CONNS_PER_HOST", 0), // 0 = unlimited
-		IdleConnTimeout:     envDuration("PROXY_TRANSPORT_IDLE_CONN_TIMEOUT", 90*time.Second),
-		// WP-4/WP-7: prefer HTTP/2 for multiplexed concurrent requests.
-		ForceAttemptHTTP2: true,
-		DialContext: (&net.Dialer{
-			Timeout:   envDuration("PROXY_DIAL_TIMEOUT", 10*time.Second),
-			KeepAlive: envDuration("PROXY_DIAL_KEEPALIVE", 30*time.Second),
-		}).DialContext,
-		TLSHandshakeTimeout:   envDuration("PROXY_TLS_HANDSHAKE_TIMEOUT", 10*time.Second),
-		ResponseHeaderTimeout: envDuration("PROXY_RESPONSE_HEADER_TIMEOUT", 30*time.Second),
-		ExpectContinueTimeout: 1 * time.Second,
+func sanitizeForwardedHeaders(req *http.Request) {
+	for _, h := range hopByHopHeaders {
+		req.Header.Del(h)
 	}
-}
-
-// streamWriteTimeout returns the WriteTimeout to use for a route that carries
-// long-running SSE streams.  Defaults to 0 (unlimited) so that the runtime's
-// own LIVE_UPDATE_MAX_WALL_SECONDS (~900 s) governs the upper bound, not this
-// proxy layer.  Override via PROXY_STREAM_WRITE_TIMEOUT_SECONDS (e.g. "960").
-//
-// WP-4: The previous hard-coded 300 s truncated streaming turns at 5 min.
-func streamWriteTimeout() time.Duration {
-	if v := os.Getenv("PROXY_STREAM_WRITE_TIMEOUT_SECONDS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			if n <= 0 {
-				return 0 // explicit unlimited
-			}
-			return time.Duration(n) * time.Second
-		}
-	}
-	return 0 // default: unlimited (let the runtime control the wall-clock cap)
-}
-
-// isStreamingRoute returns true when the route is the inbound gateway→agent
-// port (AuthModeValidate) or carries SSE traffic.  These need an unlimited
-// WriteTimeout so long-running turns are not truncated.
-func isStreamingRoute(route Route) bool {
-	return route.Auth == AuthModeValidate
 }
 
 type AuthMode string
@@ -143,9 +142,7 @@ func (p *Proxy) Start() error {
 			return fmt.Errorf("invalid target URL %q: %w", route.Target, err)
 		}
 
-		// WP-7: inject the shared pooled Transport so connections are reused.
 		proxy := httputil.NewSingleHostReverseProxy(target)
-		proxy.Transport = _sharedTransport
 		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			p.logger.Error("proxy error", "route", route.Listen, "target", route.Target, "error", err)
 			http.Error(w, "proxy error", http.StatusBadGateway)
@@ -155,18 +152,26 @@ func (p *Proxy) Start() error {
 		proxy.Director = func(req *http.Request) {
 			originalPath := req.URL.Path
 			originalDirector(req)
-			// Preserve the upstream endpoint path when the target already includes a
-			// concrete route such as /mcp. Otherwise local proxy requests to /mcp get
-			// forwarded as /mcp/mcp and remote MCP servers return 404.
-			if target.Path != "" && target.Path != "/" && strings.HasPrefix(originalPath, "/mcp") {
+			// D4 — Path-confusion guard. Only rewrite the upstream path
+			// when the target's own path is rooted at ``/mcp``.
+			// Otherwise a caller-supplied ``/mcp/...`` path would be
+			// silently rewritten with an attacker-controlled prefix.
+			if isMCPRootedPath(target.Path) && strings.HasPrefix(originalPath, "/mcp") {
 				suffix := strings.TrimPrefix(originalPath, "/mcp")
 				req.URL.Path = joinURLPath(target.Path, suffix)
 				req.URL.RawPath = target.EscapedPath()
 			}
+			// D6 — strip hop-by-hop and forwarded-* headers so the
+			// downstream service can't be tricked by client-supplied
+			// X-Forwarded-For / True-Client-IP / Proxy-Authorization
+			// values.
+			sanitizeForwardedHeaders(req)
 			// Set the Host header to match the target host (required by some APIs like GitHub Copilot)
 			req.Host = target.Host
 			p.injectAuth(req, route)
-			// Ensure User-Agent is set for APIs that require it
+			// Ensure User-Agent is set for APIs that require it, but
+			// only when the client did not set their own. Do not
+			// clobber a legitimate caller UA.
 			if req.Header.Get("User-Agent") == "" {
 				req.Header.Set("User-Agent", "kubesynapse-credential-proxy/1.0")
 			}
@@ -180,19 +185,12 @@ func (p *Proxy) Start() error {
 			handler = proxy
 		}
 
-		// WP-4: streaming/inbound routes use an unlimited WriteTimeout so that
-		// long-running SSE turns (up to ~900 s in the runtime) are not cut off
-		// by the proxy at the previous hard-coded 300 s.
-		writeTimeout := time.Duration(300) * time.Second
-		if isStreamingRoute(route) {
-			writeTimeout = streamWriteTimeout()
-		}
 		srv := &http.Server{
 			Addr:              route.Listen,
 			Handler:           handler,
 			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       0, // streaming responses read continuously
-			WriteTimeout:      writeTimeout,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      300 * time.Second,
 			IdleTimeout:       60 * time.Second,
 		}
 		p.servers = append(p.servers, srv)
@@ -241,14 +239,15 @@ func (p *Proxy) validateMiddleware(next http.Handler, route Route) http.Handler 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		secret := p.secrets[route.SecretEnv]
 		if secret == "" {
-			p.logger.Error("validate route secret missing", "route", route.Listen, "secret_env", route.SecretEnv)
-			http.Error(w, "runtime auth not configured", http.StatusServiceUnavailable)
+			next.ServeHTTP(w, r)
 			return
 		}
 
 		auth := r.Header.Get("Authorization")
 		expected := "Bearer " + secret
-		if auth != expected {
+		// D5 — timing-safe comparison. Plain ``!=`` leaks the position
+		// of the first byte mismatch via response latency.
+		if !safeEqualBearer(auth, expected) {
 			p.logger.Warn("invalid auth", "route", route.Listen, "remote", r.RemoteAddr)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return

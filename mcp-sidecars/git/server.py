@@ -11,7 +11,7 @@ import tempfile
 from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "base"))
-from mcp_base import create_mcp_server, run_server, check_egress_url
+from mcp_base import check_egress_url, create_mcp_server, run_server
 
 log = logging.getLogger("mcp-git")
 
@@ -39,7 +39,55 @@ def _validate_repo_path(repo_path: str) -> str | None:
     for base_dir in _ALLOWED_BASE_DIRS:
         if resolved == base_dir or resolved.startswith(base_dir + os.sep):
             return None
-    return f"Repository path is outside allowed directories"
+    return "Repository path is outside allowed directories"
+
+
+# §security-R6: strict allowlist for git command arguments. git
+# accepts -c, --upload-pack, --receive-pack, and other options that
+# can trigger arbitrary command execution. Any argument starting
+# with "-" is rejected; the only safe exception is the explicit
+# "--" separator.
+_GIT_ARG_SAFE = re.compile(r"^[A-Za-z0-9._/+@=-]+$")
+
+
+def _validate_git_arg(value: str, field_name: str = "argument") -> str | None:
+    """Return an error message if the argument contains unsafe characters.
+
+    Rejects any argument starting with "-" (would be interpreted as
+    a git option, including dangerous ones like --upload-pack,
+    --receive-pack, -c core.sshCommand, -o, etc.) and any argument
+    containing shell metacharacters or path-traversal sequences.
+    """
+    if not value:
+        return f"{field_name} must not be empty"
+    if value.startswith("-"):
+        return f"{field_name} must not start with '-' (would be interpreted as a git option)"
+    if ".." in value:
+        return f"{field_name} must not contain '..' (path traversal)"
+    if not _GIT_ARG_SAFE.fullmatch(value):
+        return f"{field_name} contains unsafe characters"
+    return None
+
+
+def _validate_git_ref(ref: str) -> str | None:
+    """Validate a git ref (branch name, tag, commit SHA).
+
+    Git refs are more permissive than paths — they can contain '/',
+    '~', '^', but not ':' (path separator on Windows) or '..'
+    (path traversal) or '-' (option injection in checkout/pull).
+    """
+    if not ref:
+        return "ref must not be empty"
+    if ref.startswith("-"):
+        return "ref must not start with '-' (would be interpreted as a git option)"
+    if ".." in ref:
+        return "ref must not contain '..' (path traversal)"
+    if "\x00" in ref or "\n" in ref:
+        return "ref contains null or newline characters"
+    # Conservative: only allow alphanum, dot, slash, underscore, hyphen, tilde, caret, plus, @
+    if not re.match(r"^[A-Za-z0-9._/~^+@=-]+$", ref):
+        return "ref contains unsafe characters"
+    return None
 
 
 # --- Credential bootstrap at startup ---
@@ -54,7 +102,30 @@ GIT_BRANCH = os.environ.get("GIT_BRANCH", "")
 
 
 def _run(cmd: list[str], cwd: str | None = None, timeout: int = 30) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+    # §security-R6: pass an explicit environment that disables
+    # interactive prompts, prevents reading inherited GIT_ASKPASS
+    # (which could be a malicious script), and blocks ambient proxy
+    # variables. The process inherits PATH/LC_* from the parent so
+    # git can find the binary, but no secrets.
+    safe_env = {
+        k: v for k, v in os.environ.items()
+        if k in {"PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "USER", "LOGNAME"}
+        and k not in {
+            "GIT_ASKPASS", "GIT_SSH_COMMAND", "GIT_CONFIG_NOSYSTEM",
+            "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_PREFIX",
+        }
+    }
+    safe_env["GIT_TERMINAL_PROMPT"] = "0"
+    safe_env["GIT_ASKPASS"] = "/bin/true"
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        cwd=cwd,
+        env=safe_env,
+    )
 
 
 def configure_git_credentials() -> None:
@@ -63,9 +134,17 @@ def configure_git_credentials() -> None:
         log.info("No GIT_AUTH_METHOD set, skipping credential configuration")
         return
 
-    # Set safe defaults
+    # §security-R6: set safe defaults that block prompt-injection /
+    # protocol-downgrade attacks. GIT_TERMINAL_PROMPT=0 prevents git
+    # from prompting for credentials on stdin (which could leak
+    # secrets to a malicious pre-fetch hook). safe.directory=* is
+    # required for non-root git operations on cloned repos; we
+    # whitelist our WORK_DIR explicitly instead.
     _run(["git", "config", "--global", "user.name", "AI Agent"])
     _run(["git", "config", "--global", "user.email", "agent@kubesynapse.local"])
+    _run(["git", "config", "--global", "credential.helper", "cache --timeout=300"])
+    _run(["git", "config", "--global", "protocol.file.allow", "never"])
+    _run(["git", "config", "--global", "protocol.ext.allow", "never"])
 
     if GIT_AUTH_METHOD == "token":
         if not GIT_TOKEN:
@@ -292,8 +371,16 @@ def git_add(repo_path: str, paths: str = ".") -> str:
     path_err = _validate_repo_path(repo_path)
     if path_err:
         return f"BLOCKED: {path_err}"
+    # §security-R6: validate each path token to prevent argument
+    # injection (e.g. --upload-pack, -c core.sshCommand).
+    path_tokens = paths.split()
+    cmd = ["git", "add", "--"]
+    for token in path_tokens:
+        arg_err = _validate_git_arg(token, field_name="path")
+        if arg_err:
+            return f"BLOCKED: {arg_err}"
+        cmd.append(token)
     try:
-        cmd = ["git", "add"] + paths.split()
         result = _run(cmd, cwd=repo_path, timeout=15)
         if result.returncode != 0:
             return f"ERROR: {result.stderr.strip()}"
@@ -329,10 +416,16 @@ def git_push(repo_path: str, remote: str = "origin", branch: str = "") -> str:
     path_err = _validate_repo_path(repo_path)
     if path_err:
         return f"BLOCKED: {path_err}"
+    # §security-R6: validate remote and branch to prevent option injection
+    for value, field_name in ((remote, "remote"), (branch, "branch")):
+        if value:
+            ref_err = _validate_git_ref(value)
+            if ref_err:
+                return f"BLOCKED: {ref_err}"
     try:
         cmd = ["git", "push", "--set-upstream", remote]
         if branch:
-            cmd.append(branch)
+            cmd += ["--", branch]
         else:
             cmd.append("HEAD")
         result = _run(cmd, cwd=repo_path, timeout=60)
@@ -355,16 +448,21 @@ def git_branch(repo_path: str, name: str = "", create: bool = False, delete: boo
     path_err = _validate_repo_path(repo_path)
     if path_err:
         return f"BLOCKED: {path_err}"
+    # §security-R6: validate the branch name when supplied
+    if name:
+        ref_err = _validate_git_ref(name)
+        if ref_err:
+            return f"BLOCKED: {ref_err}"
     try:
         if not name:
             result = _run(["git", "branch", "-a"], cwd=repo_path, timeout=15)
             return result.stdout.strip() or "(no branches)"
         if delete:
-            result = _run(["git", "branch", "-D", name], cwd=repo_path, timeout=15)
+            result = _run(["git", "branch", "-D", "--", name], cwd=repo_path, timeout=15)
         elif create:
-            result = _run(["git", "checkout", "-b", name], cwd=repo_path, timeout=15)
+            result = _run(["git", "checkout", "-b", "--", name], cwd=repo_path, timeout=15)
         else:
-            result = _run(["git", "branch", name], cwd=repo_path, timeout=15)
+            result = _run(["git", "branch", "--", name], cwd=repo_path, timeout=15)
         if result.returncode != 0:
             return f"ERROR: {result.stderr.strip()}"
         return result.stdout.strip() or f"Branch '{name}' {'created and checked out' if create else 'created' if not delete else 'deleted'}"
@@ -378,8 +476,13 @@ def git_checkout(repo_path: str, ref: str) -> str:
     path_err = _validate_repo_path(repo_path)
     if path_err:
         return f"BLOCKED: {path_err}"
+    # §security-R6: validate the ref to prevent option injection
+    # (e.g. ref="-b attacker-branch" or ref="--orphan=evil")
+    ref_err = _validate_git_ref(ref)
+    if ref_err:
+        return f"BLOCKED: {ref_err}"
     try:
-        result = _run(["git", "checkout", ref], cwd=repo_path, timeout=15)
+        result = _run(["git", "checkout", "--", ref], cwd=repo_path, timeout=15)
         if result.returncode != 0:
             return f"ERROR: {result.stderr.strip()}"
         return result.stderr.strip() or f"Checked out '{ref}'"
@@ -393,10 +496,16 @@ def git_pull(repo_path: str, remote: str = "origin", branch: str = "") -> str:
     path_err = _validate_repo_path(repo_path)
     if path_err:
         return f"BLOCKED: {path_err}"
+    # §security-R6: validate remote and branch to prevent option injection
+    for value, field_name in ((remote, "remote"), (branch, "branch")):
+        if value:
+            ref_err = _validate_git_ref(value)
+            if ref_err:
+                return f"BLOCKED: {ref_err}"
     try:
         cmd = ["git", "pull", remote]
         if branch:
-            cmd.append(branch)
+            cmd += ["--", branch]
         result = _run(cmd, cwd=repo_path, timeout=60)
         if result.returncode != 0:
             return f"ERROR: {result.stderr.strip()}"
@@ -413,6 +522,13 @@ def git_stash(repo_path: str, action: str = "push", message: str = "") -> str:
     path_err = _validate_repo_path(repo_path)
     if path_err:
         return f"BLOCKED: {path_err}"
+    # §security-R6: validate the action and message
+    if action not in {"push", "pop", "list", "drop", "show", "apply", "clear", "branch"}:
+        return f"BLOCKED: invalid stash action '{action}'"
+    if message:
+        arg_err = _validate_git_arg(message, field_name="message")
+        if arg_err:
+            return f"BLOCKED: {arg_err}"
     try:
         cmd = ["git", "stash", action]
         if action == "push" and message:
@@ -454,7 +570,7 @@ def github_api(endpoint: str, method: str = "GET") -> str:
         resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
         return str(resp.json())[:MAX_OUTPUT_CHARS]
-    except Exception as e:
+    except Exception:
         log.exception("GitHub API call failed")
         return "ERROR: GitHub API call failed"
 

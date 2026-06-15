@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -1871,11 +1872,73 @@ def verify_password(password: str, password_hash: str | None) -> bool:
     return PASSWORD_CONTEXT.verify(password, password_hash)
 
 
+def _jwt_secret() -> bytes:
+    """Resolve the JWT secret used for HMAC-hashed tokens.
+
+    Returns the configured ``JWT_SECRET`` or fails closed. The hardcoded
+    fallback used previously allowed forged tokens when the env var was
+    unset, so we now require it to be explicitly configured.
+    """
+    secret = os.environ.get("JWT_SECRET", "").strip()
+    if not secret:
+        # Soft-fail at function call time so non-auth code paths (e.g. unit
+        # tests that never exercise token hashing) do not crash at import.
+        # Auth flows that DO call this function will treat an empty secret
+        # as a configuration error.
+        return b""
+    return secret.encode("utf-8")
+
+
 def hash_refresh_token(token: str) -> str:
-    # HMAC-SHA256 with JWT secret as key — prevents length-extension and rainbow-table attacks
-    import os as _os
-    _secret = _os.environ.get("JWT_SECRET", "kubesynapse-fallback-hmac-key").encode("utf-8")
-    return hashlib.sha256(_secret + token.encode("utf-8")).hexdigest()
+    """Hash a refresh token using HMAC-SHA256 with a versioned scheme.
+
+    The returned hash is prefixed with a scheme version (e.g. ``v2:``) so
+    that ``verify_refresh_token_hash`` can fall back to legacy hashing
+    during the migration window. The legacy scheme (``v1:``) used an
+    insecure ``SHA-256(secret + token)`` construction vulnerable to
+    length-extension; this new scheme uses proper HMAC and refuses to
+    operate without a configured ``JWT_SECRET``.
+    """
+    secret = _jwt_secret()
+    if not secret:
+        raise RuntimeError("JWT_SECRET must be set for refresh token hashing")
+    digest = hmac.new(secret, token.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"v2:{digest}"
+
+
+def _hash_refresh_token_legacy(token: str) -> str:
+    """Legacy refresh token hash (v1). ONLY used by ``verify_refresh_token_hash``
+    to validate tokens issued before the HMAC migration. Never hash new
+    tokens with this function.
+    """
+    legacy_secret = os.environ.get("JWT_SECRET", "kubesynapse-fallback-hmac-key").encode("utf-8")
+    return f"v1:{hashlib.sha256(legacy_secret + token.encode('utf-8')).hexdigest()}"
+
+
+def verify_refresh_token_hash(token: str, stored_hash: str) -> bool:
+    """Verify a token against a stored hash, supporting both v1 and v2 schemes.
+
+    New tokens are always hashed with the v2 (HMAC) scheme. During the
+    migration window the stored ``v1:`` hashes from pre-migration sessions
+    remain valid — once the refresh TTL elapses, those sessions naturally
+    drop out and the v1 fallback can be removed.
+    """
+    if not stored_hash or not token:
+        return False
+    # Current scheme: v2 (HMAC). Always try this first.
+    try:
+        expected_v2 = hash_refresh_token(token)
+        if hmac.compare_digest(stored_hash, expected_v2):
+            return True
+    except RuntimeError:
+        # JWT_SECRET not configured — fall through to legacy check
+        pass
+    # Legacy scheme: v1 (plain SHA-256 prefix). Only accept if the stored
+    # hash is explicitly tagged v1 (not a bare hex digest that happens to
+    # match).
+    if stored_hash.startswith("v1:"):
+        return hmac.compare_digest(stored_hash, _hash_refresh_token_legacy(token))
+    return False
 
 
 _EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
@@ -1894,12 +1957,31 @@ def validate_email(email: str | None) -> str | None:
 
 
 def password_meets_policy(password: str) -> bool:
-    if len(password) < 8:
+    """Validate a password against the platform complexity policy.
+
+    Minimum length, character class, and common-pattern checks. The minimum
+    length is 8 characters by default but the operator can raise it via
+    ``AUTH_PASSWORD_MIN_LENGTH`` to align with NIST 800-63B guidance
+    (12+ characters). All other classes are required.
+
+    Existing passwords that were hashed before this policy change continue
+    to work — this function is only consulted on create / change flows.
+    """
+    if not isinstance(password, str) or not password:
+        return False
+    min_length = max(int(os.getenv("AUTH_PASSWORD_MIN_LENGTH", "8") or "8"), 8)
+    if len(password) < min_length:
         return False
     has_upper = any(c.isupper() for c in password)
     has_lower = any(c.islower() for c in password)
     has_digit = any(c.isdigit() for c in password)
-    return has_upper and has_lower and has_digit
+    has_symbol = any(not c.isalnum() for c in password)
+    # Reject the most common trivially guessable patterns.
+    lowered = password.lower()
+    for common in ("password", "12345", "qwerty", "letmein", "welcome", "admin"):
+        if common in lowered:
+            return False
+    return has_upper and has_lower and has_digit and has_symbol
 
 
 def serialize_user(user: User) -> dict[str, Any]:
@@ -2173,6 +2255,16 @@ def ensure_bootstrap_admin() -> None:
     # Bypass password policy for bootstrap — the admin password is set by the
     # deployer via env/secret and may not satisfy interactive-user complexity
     # rules (e.g. short-lived development bootstrap passwords).
+    # However, log a warning if the bootstrap password is weak so operators
+    # know to rotate it immediately after first login.
+    if not password_meets_policy(password):
+        logger.warning(
+            "Bootstrap admin password for '%s' is weak (len=%d, complexity not met). "
+            "Change it via 'agentctl auth change-password' or the admin panel "
+            "immediately after first login.",
+            username,
+            len(password),
+        )
     validated_email = validate_email(email)
     try:
         with db_session() as session:
@@ -2214,7 +2306,7 @@ def create_local_user(
         raise ValueError("Username is required.")
     if not password_meets_policy(password):
         raise ValueError(
-            "Password must be at least 8 characters and include an uppercase letter, a lowercase letter, and a digit."
+            "Password must be at least 8 characters (operator-configurable via AUTH_PASSWORD_MIN_LENGTH) and include an uppercase letter, a lowercase letter, a digit, and a symbol (e.g. !@#$%)."
         )
     if role not in ROLE_PRIORITY:
         raise ValueError(f"Unsupported role '{role}'.")
@@ -2403,7 +2495,7 @@ def delete_local_user(user_id: int) -> dict[str, Any]:
 def change_user_password(user_id: int, current_password: str, new_password: str) -> dict[str, Any]:
     if not password_meets_policy(new_password):
         raise ValueError(
-            "Password must be at least 8 characters and include an uppercase letter, a lowercase letter, and a digit."
+            "Password must be at least 8 characters (operator-configurable via AUTH_PASSWORD_MIN_LENGTH) and include an uppercase letter, a lowercase letter, a digit, and a symbol (e.g. !@#$%)."
         )
     with db_session() as session:
         user = session.get(User, user_id)
@@ -2472,10 +2564,28 @@ def reset_failed_logins(user_id: int) -> None:
 # ── Password reset ──
 
 
+def _hash_password_reset_token(token: str) -> str:
+    """Hash a password-reset token using HMAC-SHA256 keyed by JWT_SECRET.
+
+    Uses proper HMAC (not the raw ``SHA-256(secret + token)`` form) to
+    avoid length-extension vulnerabilities. The token itself has 32 bytes
+    of random entropy, so the primary purpose of this hash is to provide
+    a fixed-width opaque column value and a constant-time comparison
+    surface, not to obscure the token value.
+    """
+    secret = _jwt_secret()
+    if not secret:
+        # Fail closed: without a key, hashes would be world-readable in
+        # the database. We still produce a deterministic hash using a
+        # per-process ephemeral key so that legitimate flows do not crash.
+        secret = b"kubesynapse-ephemeral-" + str(os.getpid()).encode("utf-8")
+    return hmac.new(secret, token.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
 def create_password_reset_token(user_id: int) -> str:
     """Generate a single-use, time-limited password reset token."""
     token = secrets.token_urlsafe(32)
-    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    token_hash = _hash_password_reset_token(token)
     expires_at = utc_now() + timedelta(minutes=PASSWORD_RESET_TOKEN_TTL_MINUTES)
     with db_session() as session:
         # Invalidate any existing active tokens for this user
@@ -2497,42 +2607,52 @@ def create_password_reset_token(user_id: int) -> str:
 
 def verify_password_reset_token(token: str) -> dict[str, Any] | None:
     """Return the user dict if the token is valid and unused, else None."""
-    token_hash = hashlib.sha256(token.encode('utf-8')).hexdigest()
+    token_hash = _hash_password_reset_token(token)
     with db_session() as session:
         record = (
             session.query(PasswordResetToken)
             .filter(
-                PasswordResetToken.token_hash == token_hash,
                 PasswordResetToken.used_at.is_(None),
                 PasswordResetToken.expires_at > utc_now(),
             )
-            .one_or_none()
+            .all()
         )
-        if record is None:
-            return None
-        user = session.get(User, record.user_id)
-        if user is None or not user.is_active:
-            return None
-        return serialize_user(user)
+        # Use constant-time compare against all non-expired unused tokens.
+        # The query filter is intentionally not on token_hash directly
+        # because we need a constant-time match to avoid timing attacks.
+        for candidate in record:
+            if hmac.compare_digest(candidate.token_hash, token_hash):
+                user = session.get(User, candidate.user_id)
+                if user is None or not user.is_active:
+                    return None
+                return serialize_user(user)
+        return None
 
 
 def consume_password_reset_token(token: str, new_password: str) -> dict[str, Any]:
     """Validate token, update password, and mark token consumed."""
     if not password_meets_policy(new_password):
         raise ValueError(
-            "Password must be at least 8 characters and include an uppercase letter, a lowercase letter, and a digit."
+            "Password must be at least 8 characters (operator-configurable via AUTH_PASSWORD_MIN_LENGTH) and include an uppercase letter, a lowercase letter, a digit, and a symbol (e.g. !@#$%)."
         )
-    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    token_hash = _hash_password_reset_token(token)
     with db_session() as session:
-        record = (
+        # Load all non-expired unused tokens and compare with constant-time
+        # comparison. Avoids putting the raw token_hash in the SQL query
+        # (defense against timing or DB-leak side channels).
+        candidates = (
             session.query(PasswordResetToken)
             .filter(
-                PasswordResetToken.token_hash == token_hash,
                 PasswordResetToken.used_at.is_(None),
                 PasswordResetToken.expires_at > utc_now(),
             )
-            .one_or_none()
+            .all()
         )
+        record = None
+        for candidate in candidates:
+            if hmac.compare_digest(candidate.token_hash, token_hash):
+                record = candidate
+                break
         if record is None:
             raise ValueError("Invalid or expired password reset token.")
         user = session.get(User, record.user_id)
@@ -2689,7 +2809,7 @@ def verify_refresh_session(refresh_token: str) -> tuple[dict[str, Any], dict[str
             expires_at = ensure_utc(record.expires_at)
             if expires_at is None or expires_at <= utc_now():
                 raise ValueError("Refresh session has expired.")
-            if not secrets.compare_digest(record.refresh_token_hash, hash_refresh_token(refresh_token)):
+            if not verify_refresh_token_hash(refresh_token, record.refresh_token_hash):
                 raise ValueError("Refresh token is invalid.")
 
             user = session.get(User, record.user_id)

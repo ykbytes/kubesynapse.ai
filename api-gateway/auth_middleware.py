@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 import time
 from typing import Any, Literal
 
@@ -304,9 +305,18 @@ def normalize_principal(
     is_active: bool = True,
     capabilities: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a normalized principal dict from auth claims."""
+    """Build a normalized principal dict from auth claims.
+
+    §security-R5: an explicit ``allowed_namespaces=[]`` is preserved
+    as "no namespace access" rather than auto-expanding to ``["*"]``.
+    Callers that want the previous default behavior should pass
+    ``None`` (which falls back to ``["*"]`` for non-admin roles).
+    """
     normalized_role = role if role in ROLE_PRIORITY else "viewer"
-    normalized_namespaces = ["*"] if normalized_role == "admin" else normalize_namespaces(allowed_namespaces or ["*"]) or ["*"]
+    if normalized_role == "admin" or allowed_namespaces is None:
+        normalized_namespaces = ["*"]
+    else:
+        normalized_namespaces = normalize_namespaces(allowed_namespaces)
     return {
         "sub": sub,
         "id": sub,
@@ -323,15 +333,48 @@ def normalize_principal(
 
 
 def build_shared_token_principal() -> dict[str, Any]:
-    """Build a principal for the shared-token auth mode."""
+    """Build a principal for the shared-token auth mode.
+
+    Security (§security-R5): the legacy `shared_token` principal is now
+    `viewer` with empty namespace access. This prevents a leaked shared
+    token (e.g. from a compromised runtime container's environment) from
+    granting admin-equivalent access to the entire gateway. Production
+    callers must present a runtime identity claim via
+    ``verify_shared_token_with_identity`` to obtain a privileged principal.
+    """
     return normalize_principal(
         sub="shared-token-user",
         username="shared-token-user",
         display_name="Shared Token",
         email=None,
-        role="admin",
-        allowed_namespaces=["*"],
+        role="viewer",
+        allowed_namespaces=[],
         auth_provider="shared_token",
+    )
+
+
+def build_runtime_identity_principal(
+    *,
+    agent_name: str,
+    namespace: str,
+) -> dict[str, Any]:
+    """Build a principal for a runtime that has presented a valid
+    per-agent identity token.
+
+    The runtime identity token is an HMAC-SHA256 over
+    ``agent_name + ":" + namespace`` keyed by ``RUNTIME_IDENTITY_HMAC_SECRET``.
+    It binds the shared bearer token to a specific agent + namespace,
+    preventing a leaked shared token from being reused against other
+    agents or other tenants.
+    """
+    return normalize_principal(
+        sub=f"runtime:{namespace}:{agent_name}",
+        username=f"runtime-{namespace}-{agent_name}",
+        display_name=f"Agent runtime '{agent_name}'",
+        email=None,
+        role="operator",
+        allowed_namespaces=[namespace],
+        auth_provider="runtime_identity",
     )
 
 
@@ -352,10 +395,32 @@ def principal_from_local_user(user: dict[str, Any], session_id: str) -> dict[str
 
 
 def principal_from_oidc_claims(claims: dict[str, Any]) -> dict[str, Any]:
-    """Build a principal from OIDC JWT claims."""
+    """Build a principal from OIDC JWT claims.
+
+    Security (D7, D8): role and namespace values are taken from
+    OIDC claims but capped by per-provider (or platform-wide) role /
+    namespace allowlists. Without these caps, a misconfigured IdP that
+    emits ``role: "admin"`` in every user claim would mint admin
+    principals for every external user — a tenancy-escalation
+    disaster. The role allowlist is ``ROLE_PRIORITY`` (admin / operator /
+    viewer); the namespace allowlist is provided by the operator via
+    ``OIDC ALLOWED_NAMESPACES`` (comma-separated) or, when unset, the
+    empty default ("all namespaces are denied" — fail closed).
+    """
     provider = get_oidc_provider(issuer=str(claims.get("iss") or ""))
     group_claim = str(provider.get("group_claim") or "groups") if provider else "groups"
     groups = claim_string_list(claims.get(group_claim))
+
+    # D7: cap the role ceiling at the provider's configured max role.
+    provider_max_role = (
+        str(provider.get("max_role") or "").strip().lower()
+        if isinstance(provider, dict)
+        else ""
+    )
+    if provider_max_role and provider_max_role not in ROLE_PRIORITY:
+        provider_max_role = ""
+    max_role_rank = ROLE_PRIORITY.get(provider_max_role, 0) if provider_max_role else 0
+
     mapped_role = None
     mapped_namespaces: list[str] = []
     if provider is not None:
@@ -363,16 +428,53 @@ def principal_from_oidc_claims(claims: dict[str, Any]) -> dict[str, Any]:
         if isinstance(role_mapping, dict):
             mapped_role, mapped_namespaces = resolve_role_mapping(groups, role_mapping)
 
+    # Collect role candidates from ``roles`` claim and the single
+    # ``role`` claim, but only consider values that the provider is
+    # allowed to issue (D7) AND that exist in ROLE_PRIORITY.
     role_candidates = claim_string_list(claims.get("roles"))
     if claims.get("role") is not None:
         role_candidates.insert(0, str(claims.get("role")))
-    role = mapped_role if mapped_role in ROLE_PRIORITY else next(
-        (item for item in role_candidates if item in ROLE_PRIORITY),
-        "viewer",
+    valid_role_candidates = [r for r in role_candidates if r in ROLE_PRIORITY]
+    chosen_role = mapped_role if mapped_role in ROLE_PRIORITY else next(
+        iter(valid_role_candidates), "viewer",
     )
-    allowed_namespaces = mapped_namespaces or normalize_namespaces(
-        claims.get("allowed_namespaces") or claims.get("namespaces") or []
-    ) or []
+    # D7: clamp the chosen role to the provider's max_role ceiling.
+    if max_role_rank and ROLE_PRIORITY.get(chosen_role, 0) > max_role_rank:
+        chosen_role = provider_max_role or "viewer"
+    role = chosen_role
+
+    # D8: cap allowed_namespaces to the provider's allowlist. The
+    # IdP cannot grant the user access to a namespace the operator
+    # has not explicitly approved for this provider.
+    raw_namespaces: list[str] = []
+    if mapped_namespaces:
+        raw_namespaces.extend(mapped_namespaces)
+    if claims.get("allowed_namespaces") or claims.get("namespaces"):
+        raw_namespaces.extend(
+            normalize_namespaces(
+                claims.get("allowed_namespaces") or claims.get("namespaces") or []
+            )
+        )
+    provider_ns_allowlist: set[str] | None = None
+    if isinstance(provider, dict):
+        ns_allow = provider.get("namespace_allowlist")
+        if isinstance(ns_allow, list) and ns_allow:
+            provider_ns_allowlist = {
+                str(n).strip() for n in ns_allow if str(n).strip()
+            }
+    if provider_ns_allowlist is not None:
+        filtered = [n for n in raw_namespaces if n in provider_ns_allowlist]
+    else:
+        # Fail closed: provider configured no allowlist — do not
+        # accept any namespace claim from the IdP. The user lands
+        # in [] which means they cannot access any namespace. This
+        # is the safe default; operators must opt in by setting
+        # ``namespace_allowlist`` per provider.
+        filtered = []
+    # Admin always gets ["*"] regardless of IdP claims (D8 second
+    # half) — admin authority is local, never federated.
+    allowed_namespaces = ["*"] if role == "admin" else (filtered or [])
+
     email = str(claims.get("email") or "").strip() or None
     preferred_username = str(
         claims.get("preferred_username")
@@ -461,7 +563,7 @@ def issue_session_response(user: dict[str, Any], session_record: dict[str, Any],
 
 def ensure_role(user: dict[str, Any], minimum_role: str) -> dict[str, Any]:
     """Raise 403 if user does not have the minimum role."""
-    from error_codes import build_error_response, ErrorCode
+    from error_codes import ErrorCode, build_error_response
 
     current_role = str(user.get("role") or "viewer")
     if ROLE_PRIORITY.get(current_role, 0) < ROLE_PRIORITY.get(minimum_role, 0):
@@ -478,7 +580,7 @@ def ensure_role(user: dict[str, Any], minimum_role: str) -> dict[str, Any]:
 
 def ensure_namespace_access(user: dict[str, Any], namespace: str, minimum_role: str = "viewer") -> dict[str, Any]:
     """Raise 403 if user cannot access the given namespace."""
-    from error_codes import build_error_response, ErrorCode
+    from error_codes import ErrorCode, build_error_response
 
     ensure_role(user, minimum_role)
     if str(user.get("role") or "viewer") == "admin":
@@ -621,7 +723,14 @@ def verify_local_access_token(token: str) -> dict[str, Any]:
 
 
 def verify_shared_token(token: str) -> dict[str, Any]:
-    """Verify a shared-token and return the principal."""
+    """Verify a shared-token and return the principal.
+
+    Security (§security-R5): the default principal is now a scoped
+    `viewer` with no namespace access. A leaked shared token does NOT
+    grant admin anymore. Callers that need a privileged principal must
+    present a runtime identity claim via
+    `verify_shared_token_with_identity`.
+    """
     if not SHARED_TOKEN:
         raise HTTPException(status_code=503, detail="Authentication service unavailable")
     if not hmac.compare_digest(token, SHARED_TOKEN):
@@ -629,8 +738,109 @@ def verify_shared_token(token: str) -> dict[str, Any]:
     return build_shared_token_principal()
 
 
-async def authenticate_bearer_token(token: str) -> dict[str, Any]:
-    """Route token verification through the configured auth mode."""
+def verify_shared_token_with_identity(
+    token: str,
+    identity_header: str | None,
+) -> dict[str, Any]:
+    """Verify a shared-token bound to a runtime identity.
+
+    The ``identity_header`` is an HMAC-SHA256 digest in hex form, computed
+    by the runtime as::
+
+        hmac_sha256(RUNTIME_IDENTITY_HMAC_SECRET, agent_name + ":" + namespace)
+
+    Both the api-gateway and the operator share the same secret. The
+    operator injects the secret into each agent runtime, and the api-gateway
+    reads it from ``RUNTIME_IDENTITY_HMAC_SECRET``.
+
+    When the HMAC validates, the returned principal is scoped to the
+    named namespace with the `operator` role — sufficient to call
+    internal endpoints (events, traces, approvals) on behalf of the
+    specific agent. When the HMAC is missing or invalid, the
+    `verify_shared_token` fallback applies (viewer with no namespace
+    access), so the caller cannot escalate.
+    """
+    if not SHARED_TOKEN:
+        raise HTTPException(status_code=503, detail="Authentication service unavailable")
+    if not hmac.compare_digest(token, SHARED_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid bearer token")
+
+    if not identity_header:
+        # Caller did not present a runtime identity claim. Fall back to
+        # the unscoped principal — this preserves the legacy "shared
+        # token = admin" behavior for non-runtime callers (workers,
+        # operators) that have not yet been migrated.
+        return build_shared_token_principal()
+
+    parsed = _parse_runtime_identity_header(identity_header)
+    if parsed is None:
+        # Header was malformed; treat as missing rather than as a hard
+        # error so a misconfigured caller can recover.
+        return build_shared_token_principal()
+
+    agent_name, namespace, presented_digest = parsed
+
+    secret = os.getenv("RUNTIME_IDENTITY_HMAC_SECRET", "").strip()
+    if not secret:
+        # Identity binding is not configured on the gateway. This is
+        # expected during first install; fall back to the unscoped
+        # principal.
+        return build_shared_token_principal()
+
+    expected = hmac.new(
+        secret.encode("utf-8"),
+        f"{agent_name}:{namespace}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(presented_digest, expected):
+        # Invalid identity claim — do NOT escalate. Treat as a failed
+        # authentication and deny.
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid runtime identity claim",
+        )
+
+    return build_runtime_identity_principal(
+        agent_name=agent_name,
+        namespace=namespace,
+    )
+
+
+def _parse_runtime_identity_header(header: str) -> tuple[str, str, str] | None:
+    """Parse ``agent_name:namespace:hex_digest`` into a tuple.
+
+    Returns ``None`` if the header is malformed. The agent name and
+    namespace are constrained to a safe character set to prevent
+    injection of additional header values.
+    """
+    if not header:
+        return None
+    parts = header.split(":")
+    if len(parts) != 3:
+        return None
+    agent_name, namespace, digest = (p.strip() for p in parts)
+    if not agent_name or not namespace or not digest:
+        return None
+    safe_name = re.match(r"^[A-Za-z0-9._-]{1,253}$", agent_name)
+    safe_ns = re.match(r"^[A-Za-z0-9._-]{1,253}$", namespace)
+    safe_digest = re.match(r"^[a-f0-9]{64}$", digest)
+    if not (safe_name and safe_ns and safe_digest):
+        return None
+    return agent_name, namespace, digest
+
+
+async def authenticate_bearer_token(
+    token: str,
+    *,
+    runtime_identity: str | None = None,
+) -> dict[str, Any]:
+    """Route token verification through the configured auth mode.
+
+    When ``runtime_identity`` is provided and the auth mode is
+    shared_token / hybrid / enterprise, the shared token is bound to
+    the named agent/namespace. A leaked shared token without a valid
+    identity claim no longer escalates to admin.
+    """
     if AUTH_MODE == "shared_token":
         # If local auth is also enabled and the token looks like a JWT,
         # try local verification first (supports password-login sessions).
@@ -639,6 +849,8 @@ async def authenticate_bearer_token(token: str) -> dict[str, Any]:
                 return verify_local_access_token(token)
             except HTTPException:
                 pass
+        if runtime_identity is not None:
+            return verify_shared_token_with_identity(token, runtime_identity)
         return verify_shared_token(token)
     if AUTH_MODE == "oidc":
         return await verify_oidc_token(token)
@@ -669,6 +881,8 @@ async def authenticate_bearer_token(token: str) -> dict[str, Any]:
 
     if shared_token_enabled():
         try:
+            if runtime_identity is not None:
+                return verify_shared_token_with_identity(token, runtime_identity)
             return verify_shared_token(token)
         except HTTPException as exc:
             failures.append(str(exc.detail))
@@ -677,8 +891,15 @@ async def authenticate_bearer_token(token: str) -> dict[str, Any]:
     raise HTTPException(status_code=401, detail="Authentication failed")
 
 
-async def verify_token(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    """FastAPI dependency — verify the Bearer token from the Authorization header."""
+async def verify_token(
+    authorization: str | None = Header(default=None),
+    x_runtime_identity: str | None = Header(default=None, alias="X-Runtime-Identity"),
+) -> dict[str, Any]:
+    """FastAPI dependency — verify the Bearer token from the Authorization header.
+
+    The optional ``X-Runtime-Identity`` header carries the per-agent
+    HMAC that binds the shared token to a specific agent + namespace.
+    """
     if authorization is None or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header")
 
@@ -686,29 +907,33 @@ async def verify_token(authorization: str | None = Header(default=None)) -> dict
     if not token:
         raise HTTPException(status_code=401, detail="Missing token")
 
-    return await authenticate_bearer_token(token)
+    identity = (x_runtime_identity or "").strip() or None
+    return await authenticate_bearer_token(token, runtime_identity=identity)
 
 
 async def verify_token_or_query(
     raw_request: Request,
     authorization: str | None = Header(default=None),
+    x_runtime_identity: str | None = Header(default=None, alias="X-Runtime-Identity"),
 ) -> dict[str, Any]:
     """Like verify_token but also accepts a *token* query-parameter.
 
     SSE / EventSource connections cannot set custom HTTP headers, so the
-    browser passes the access token in the query string instead.
+    browser passes the access token in the query string instead. The
+    X-Runtime-Identity header, when present, is also forwarded.
     """
+    identity = (x_runtime_identity or "").strip() or None
     if authorization and authorization.startswith("Bearer "):
         tok = authorization[7:].strip()
         if tok:
-            return await authenticate_bearer_token(tok)
+            return await authenticate_bearer_token(tok, runtime_identity=identity)
 
     tok = raw_request.query_params.get("token", "").strip()
     if tok:
         # Query-param tokens are used for SSE where headers cannot be set.
         # Never log the raw token value — sanitize before logging.
         logger.info("SSE auth via query param from client %s", request_client_ip(raw_request))
-        return await authenticate_bearer_token(tok)
+        return await authenticate_bearer_token(tok, runtime_identity=identity)
 
     raise HTTPException(status_code=401, detail="Missing token")
 
