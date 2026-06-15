@@ -333,17 +333,28 @@ fi
 # ---------------------------------------------------------------------------
 step "Step 6/7 — Install (or upgrade) Helm release '${RELEASE_NAME}'"
 step "Building chart dependencies"
-run helm dependency build "${CHART_PATH}"
+HELM_CHART_PATH="${CHART_PATH}"
+HELM_LOCAL_IMAGES_VALUES="${LOCAL_IMAGES_VALUES_PATH}"
+HELM_KIND_QUICKSTART_VALUES="${KIND_QUICKSTART_VALUES_PATH}"
+HELM_SKILLS_CATALOG="${SKILLS_CATALOG_PATH}"
+if [[ -n "$WINDOWS_KUBECONFIG" ]]; then
+  # Windows helm.exe can't read /mnt/c paths; convert to Windows style
+  HELM_CHART_PATH="$(wslpath -w "${CHART_PATH}" 2>/dev/null || echo "${CHART_PATH}")"
+  HELM_LOCAL_IMAGES_VALUES="$(wslpath -w "${LOCAL_IMAGES_VALUES_PATH}" 2>/dev/null || echo "${LOCAL_IMAGES_VALUES_PATH}")"
+  HELM_KIND_QUICKSTART_VALUES="$(wslpath -w "${KIND_QUICKSTART_VALUES_PATH}" 2>/dev/null || echo "${KIND_QUICKSTART_VALUES_PATH}")"
+  HELM_SKILLS_CATALOG="$(wslpath -w "${SKILLS_CATALOG_PATH}" 2>/dev/null || echo "${SKILLS_CATALOG_PATH}")"
+fi
+run helm dependency build "${HELM_CHART_PATH}"
 HELM_ARGS=(
-  upgrade --install "${RELEASE_NAME}" "${CHART_PATH}"
+  upgrade --install "${RELEASE_NAME}" "${HELM_CHART_PATH}"
   --namespace "${NAMESPACE}"
   --create-namespace
   --kube-context "${CLUSTER_CONTEXT}"
   --wait
   --timeout "${HELM_TIMEOUT_MINUTES}m"
   --force-conflicts
-  -f "${LOCAL_IMAGES_VALUES_PATH}"
-  -f "${KIND_QUICKSTART_VALUES_PATH}"
+  -f "${HELM_LOCAL_IMAGES_VALUES}"
+  -f "${HELM_KIND_QUICKSTART_VALUES}"
   --set-string "platformSecrets.native.litellmMasterKey=${LITELLM_MASTER_KEY}"
   --set-string "platformSecrets.native.apiGatewaySharedToken=${SHARED_TOKEN}"
   --set-string "platformSecrets.native.databasePassword=${DATABASE_PASSWORD}"
@@ -352,7 +363,7 @@ HELM_ARGS=(
   --set-string "apiGateway.auth.bootstrapAdminUsername=${ADMIN_USERNAME}"
 )
 if [[ -f "$SKILLS_CATALOG_PATH" ]]; then
-  HELM_ARGS+=("--set-file" "skillsCatalog.catalogJson=${SKILLS_CATALOG_PATH}")
+  HELM_ARGS+=("--set-file" "skillsCatalog.catalogJson=${HELM_SKILLS_CATALOG}")
 fi
 
 run helm "${HELM_ARGS[@]}"
