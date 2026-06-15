@@ -123,6 +123,50 @@ ensure_secret() {
 # ---------------------------------------------------------------------------
 # Step 0 — preflight
 # ---------------------------------------------------------------------------
+# WSL/Windows PATH bridge: when running from WSL, Windows binaries (kind.exe,
+# helm.exe) may not be on PATH.  Create symlinks in a temp dir and prepend it.
+if [[ "$(uname -s 2>/dev/null)" == *MINGW* || "$(uname -s 2>/dev/null)" == *MSYS* || -d "/mnt/c/Users" ]]; then
+  _KSbin="/tmp/ksbin"
+  mkdir -p "$_KSbin"
+  _needs_link() { command -v "$1" &>/dev/null || [[ -x "$_KSbin/$1" ]]; }
+  # kind — check WinGet, C:\bin, and Program Files
+  if ! _needs_link kind; then
+    for p in \
+      "/mnt/c/bin/kind.exe" \
+      "/mnt/c/Program Files/kind/kind.exe" \
+      "$(find /mnt/c/Users/*/AppData/Local/Microsoft/WinGet/Packages -name 'kind.exe' 2>/dev/null | head -1)"; do
+      if [[ -n "$p" && -f "$p" ]]; then
+        ln -sf "$p" "$_KSbin/kind" 2>/dev/null || true
+        break
+      fi
+    done
+  fi
+  # helm — check WinGet and choco
+  if ! _needs_link helm; then
+    for p in \
+      "/mnt/c/ProgramData/chocolatey/bin/helm.exe" \
+      "$(find /mnt/c/Users/*/AppData/Local/Microsoft/WinGet/Packages -name 'helm.exe' 2>/dev/null | head -1)"; do
+      if [[ -n "$p" && -f "$p" ]]; then
+        ln -sf "$p" "$_KSbin/helm" 2>/dev/null || true
+        break
+      fi
+    done
+  fi
+  # kubectl — check WinGet (usually also available natively in WSL)
+  if ! command -v kubectl &>/dev/null; then
+    for p in \
+      "/mnt/c/Users/*/AppData/Local/Microsoft/WinGet/Packages/kubectl.exe" \
+      "/mnt/c/ProgramData/chocolatey/bin/kubectl.exe"; do
+      if [[ -n "$p" && -f "$p" ]]; then
+        ln -sf "$p" "$_KSbin/kubectl" 2>/dev/null || true
+        break
+      fi
+    done
+  fi
+  export PATH="$_KSbin:$PATH"
+  unset _needs_link _KSbin
+fi
+
 : > "$LOG_FILE"
 banner "KubeSynapse local install  (cluster: ${CLUSTER_NAME})"
 
