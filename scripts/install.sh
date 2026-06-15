@@ -86,9 +86,29 @@ need() {
 }
 
 random_suffix() {
+  # Generate a cryptographically-random alphanumeric suffix of exactly $len
+  # characters. We use openssl rand as the primary source (universally
+  # available, returns the requested number of bytes, no SIGPIPE race) and
+  # fall back to /dev/urandom if openssl is missing. We do NOT pipe the
+  # output through a SIGPIPE-prone `tr | head` chain with an `awk` fallback,
+  # because that combination misbehaves under `set -o pipefail`: `tr` exits
+  # with 128+SIGPIPE the moment `head` closes the pipe, the pipeline returns
+  # non-zero, the awk fallback runs, and the resulting password balloons
+  # from 14 to 80+ characters.
   local len="${1:-32}"
-  LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c "$len" || \
-    awk -v len="$len" 'BEGIN{srand(); for(i=0;i<len;i++){c="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"; printf "%s", substr(c,int(rand()*length(c))+1)}}'
+  local out
+  if command -v openssl >/dev/null 2>&1; then
+    # Request 2x bytes to survive the alphanumeric filter cleanly.
+    out="$(openssl rand -base64 "$((len * 2))" 2>/dev/null | tr -dc 'A-Za-z0-9' | head -c "$len")" || true
+  fi
+  if [[ -z "$out" || "${#out}" -lt "$len" ]]; then
+    out="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c "$len")" || true
+  fi
+  # Last-resort fill (should never be hit): deterministic chars.
+  if [[ -z "$out" || "${#out}" -lt "$len" ]]; then
+    out="$(printf '%s' "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" | head -c "$len")"
+  fi
+  printf "%s" "${out:0:$len}"
 }
 
 ensure_secret() {
@@ -118,6 +138,29 @@ need base64
 [[ -f "$KIND_QUICKSTART_VALUES_PATH" ]] || fail "Kind quickstart overlay not found at $KIND_QUICKSTART_VALUES_PATH"
 if [[ ! -f "$SKILLS_CATALOG_PATH" ]]; then
   warn "Skills catalog not found at $SKILLS_CATALOG_PATH — the in-app Catalog tab will be empty."
+fi
+
+# ---------------------------------------------------------------------------
+# WSL ↔ Windows kubeconfig bridge
+# ---------------------------------------------------------------------------
+# When kind.exe (Windows binary) runs from WSL bash, it writes kubeconfig to
+# the Windows HOME (C:\Users\<user>\.kube\config).  WSL's kubectl reads from
+# /home/<user>/.kube/config — a different file.  We detect this mismatch and
+# set KUBECONFIG to merge both files so kubectl can see kind contexts.
+WINDOWS_KUBECONFIG=""
+if [[ "$(uname -s 2>/dev/null)" == *MINGW* || "$(uname -s 2>/dev/null)" == *MSYS* || -d "/mnt/c/Users" ]]; then
+  # Running under WSL or Git Bash — find the Windows kubeconfig
+  WIN_USER="$(cmd.exe /C "echo %USERNAME%" 2>/dev/null | tr -d '\r' || true)"
+  if [[ -n "$WIN_USER" && -f "/mnt/c/Users/${WIN_USER}/.kube/config" ]]; then
+    WINDOWS_KUBECONFIG="/mnt/c/Users/${WIN_USER}/.kube/config"
+    # Prepend Windows config so kubectl sees kind contexts created by kind.exe
+    if [[ -z "${KUBECONFIG:-}" ]]; then
+      export KUBECONFIG="${HOME}/.kube/config:${WINDOWS_KUBECONFIG}"
+    else
+      export KUBECONFIG="${KUBECONFIG}:${WINDOWS_KUBECONFIG}"
+    fi
+    ok "Detected WSL/Git Bash — bridging Windows kubeconfig (${WINDOWS_KUBECONFIG})"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -153,7 +196,15 @@ fi
 
 if [[ -z "${CLUSTER_EXISTS}" ]]; then
   step "Creating kind cluster '${CLUSTER_NAME}'"
-  run kind create cluster --name "${CLUSTER_NAME}" --wait 120s
+  KIND_ARGS=(--name "${CLUSTER_NAME}" --wait 120s)
+  # When kind is a Windows binary (kind.exe) running in WSL, it writes
+  # kubeconfig to the Windows HOME.  Pass --kubeconfig with a Windows-style
+  # path so the context lands in the file we merged into KUBECONFIG above.
+  if [[ -n "$WINDOWS_KUBECONFIG" ]]; then
+    WIN_PATH="C:\\Users\\${WIN_USER}\\.kube\\config"
+    KIND_ARGS+=(--kubeconfig "$WIN_PATH")
+  fi
+  run kind create cluster "${KIND_ARGS[@]}"
 fi
 
 step "Switching kubectl to '${CLUSTER_CONTEXT}'"
