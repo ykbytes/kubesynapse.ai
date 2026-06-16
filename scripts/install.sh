@@ -265,6 +265,23 @@ IMAGES=(
   "docker.io/litellm/litellm:v1.82.3-stable|deploy/litellm|deploy/litellm/Dockerfile"
 )
 
+# MCP sidecar image tags (built by scripts/build-mcp-images.sh)
+MCP_IMAGES=(
+  "localhost/kubesynapse/mcp-base:dev"
+  "localhost/kubesynapse/mcp-base-debian:dev"
+  "localhost/kubesynapse/mcp-code-exec:dev"
+  "localhost/kubesynapse/mcp-collector:dev"
+  "localhost/kubesynapse/mcp-git:dev"
+  "localhost/kubesynapse/mcp-web-search:dev"
+  "localhost/kubesynapse/mcp-documents:dev"
+  "localhost/kubesynapse/mcp-browser:dev"
+  "localhost/kubesynapse/mcp-kubernetes:dev"
+  "localhost/kubesynapse/mcp-messaging:dev"
+  "localhost/kubesynapse/mcp-rag:dev"
+  "localhost/kubesynapse/mcp-database:dev"
+  "localhost/kubesynapse/mcp-github-adapter:dev"
+)
+
 if [[ -z "${SKIP_BUILD}" ]]; then
   step "Step 3/7 — Build images (a few minutes on a cold cache)"
   IFS='|' read -r -a PARTS <<< "${IMAGES[0]}"
@@ -279,6 +296,8 @@ if [[ -z "${SKIP_BUILD}" ]]; then
       run ${CONTAINER_CLI} build -t "${tag}" "${REPO_ROOT}/${ctx}"
     fi
   done
+  step "Building MCP sidecar images"
+  run "${REPO_ROOT}/scripts/build-mcp-images.sh"
 else
   step "Step 3/7 — Skipping image builds (SKIP_BUILD set)"
 fi
@@ -293,6 +312,10 @@ if [[ -z "${SKIP_LOAD}" ]]; then
     tag="${parts[0]}"
     step "Loading image '${tag}' into kind"
     run kind load docker-image "${tag}" --name "${CLUSTER_NAME}"
+  done
+  for mcp_tag in "${MCP_IMAGES[@]}"; do
+    step "Loading MCP image '${mcp_tag}' into kind"
+    run kind load docker-image "${mcp_tag}" --name "${CLUSTER_NAME}"
   done
 else
   step "Step 4/7 — Skipping kind image load (SKIP_LOAD set)"

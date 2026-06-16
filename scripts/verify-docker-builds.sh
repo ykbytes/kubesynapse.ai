@@ -40,12 +40,12 @@ build_image "web-ui" "./web-ui"
 build_image "opencode-runtime" "./opencode-runtime"
 build_image "collector-agent" "./collector-agent"
 
-# MCP sidecars
-for sidecar in code-exec web-search documents browser database git github-adapter kubernetes messaging rag; do
-  if [ -f "./mcp-sidecars/$sidecar/Dockerfile" ]; then
-    build_image "mcp-$sidecar" "./mcp-sidecars/$sidecar"
-  fi
-done
+# MCP sidecars — delegated to build-mcp-images.sh which handles base selection and staging
+step "Building MCP sidecar images"
+if ! bash "$(dirname "$0")/build-mcp-images.sh"; then
+  echo "❌ MCP sidecar builds failed"
+  FAILED=1
+fi
 
 echo ""
 if [ $FAILED -eq 0 ]; then
