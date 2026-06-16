@@ -38,7 +38,8 @@ COPY --from=builder /root/.local/bin /usr/local/bin/
 # Copy application code
 COPY main.py _core.py constants.py auth_store.py enterprise_auth.py jwt_utils.py \
      auth_middleware.py trace_store.py traces_router.py dependencies.py \
-     webhook_security.py structured_logging.py migration_runner.py error_codes.py ./
+     webhook_security.py structured_logging.py migration_runner.py error_codes.py \
+     optimization_store.py agent_cache.py gateway_validation.py ./
 COPY routers/ ./routers/
 COPY services/ ./services/
 COPY migrations/ ./migrations/

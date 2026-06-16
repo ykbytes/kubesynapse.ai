@@ -29,6 +29,7 @@ from routers.auth import router as auth_router
 from routers.chat import router as chat_router
 from routers.llm import router as llm_router
 from routers.observability import router as observability_router
+from routers.optimizations import router as optimizations_router
 from routers.webhooks import router as webhooks_router
 from routers.workflows import router as workflows_router
 from routers.incidents import router as incidents_router
@@ -47,9 +48,7 @@ app = FastAPI(
     openapi_url="/api/v1/openapi.json",
 )
 
-# Prometheus metrics (if available)
-if _Instrumentator is not None:
-    _Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+# Prometheus metrics are initialized in _core.py (disabled — see comment there)
 
 # CORS middleware
 app.add_middleware(
@@ -120,6 +119,7 @@ app.include_router(workflows_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(llm_router, prefix="/api/v1")
 app.include_router(observability_router, prefix="/api/v1")
+app.include_router(optimizations_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
 app.include_router(incidents_router, prefix="/api/v1")
 app.include_router(a2a_router)  # A2A uses /a2a prefix (defined in router itself)

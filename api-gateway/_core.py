@@ -373,8 +373,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-if _Instrumentator is not None:
-    _Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+# Prometheus metrics disabled: prometheus-fastapi-instrumentator is
+# incompatible with the current FastAPI/Starlette version (_IncludedRouter
+# has no .path attribute), causing 500 errors on every request.
+# if _Instrumentator is not None:
+#     _Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
 def cors_origins() -> list[str]:
