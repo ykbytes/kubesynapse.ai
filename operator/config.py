@@ -118,6 +118,13 @@ CREDENTIAL_PROXY_IMAGE: str = os.getenv("CREDENTIAL_PROXY_IMAGE", "docker.io/kub
 CREDENTIAL_PROXY_IMAGE_PULL_POLICY: str = get_string_env("CREDENTIAL_PROXY_IMAGE_PULL_POLICY", "IfNotPresent")
 CREDENTIAL_PROXY_ENABLED: bool = os.getenv("CREDENTIAL_PROXY_ENABLED", "true").strip().lower() in ("true", "1", "yes")
 
+# When set, overrides the default RUNTIME_AUTH_REQUIRED derivation from CREDENTIAL_PROXY_ENABLED.
+# Accepts "true"/"false"/"1"/"0"/"yes"/"no". Empty string means use default.
+_RUNTIME_AUTH_REQUIRED_RAW: str = os.getenv("RUNTIME_AUTH_REQUIRED", "").strip().lower()
+RUNTIME_AUTH_REQUIRED_OVERRIDE: bool | None = (
+    _RUNTIME_AUTH_REQUIRED_RAW in ("true", "1", "yes") if _RUNTIME_AUTH_REQUIRED_RAW else None
+)
+
 RUNTIME_SERVICE_ACCOUNT: str = os.getenv("RUNTIME_SERVICE_ACCOUNT", "kubesynapse-agent-runtime")
 RUNTIME_CLUSTER_ROLE: str = os.getenv("RUNTIME_CLUSTER_ROLE", "kubesynapse-agent-runtime-role")
 

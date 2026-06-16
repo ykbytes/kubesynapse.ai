@@ -64,6 +64,7 @@ from config import (
     PI_RUNTIME_IMAGE,
     PI_RUNTIME_IMAGE_PULL_POLICY,
     PROVIDER_REGISTRY_CONFIGMAP_NAME,
+    RUNTIME_AUTH_REQUIRED_OVERRIDE,
     RUNTIME_SERVICE_ACCOUNT,
     SECRET_NAME,
     SUPPORTED_RUNTIME_KINDS,
@@ -2490,7 +2491,9 @@ def create_agent_statefulset_manifest(
             {"name": "MCP_HUB_NAMESPACE", "value": MCP_HUB_NAMESPACE},
             {"name": "CREDENTIAL_PROXY_ENABLED", "value": "true" if CREDENTIAL_PROXY_ENABLED else "false"},
             {"name": "CREDENTIAL_PROXY_MCP_HUB_PORT", "value": str(CREDENTIAL_PROXY_MCP_HUB_PORT)},
-            {"name": "RUNTIME_AUTH_REQUIRED", "value": "true"},
+            # The credential proxy validates inbound bearer auth on port 8080
+            # and forwards to the inner runtime on 8081 after stripping it.
+            {"name": "RUNTIME_AUTH_REQUIRED", "value": str(RUNTIME_AUTH_REQUIRED_OVERRIDE).lower() if RUNTIME_AUTH_REQUIRED_OVERRIDE is not None else ("false" if CREDENTIAL_PROXY_ENABLED else "true")},
             {
                 "name": "RUNTIME_BEARER_TOKEN",
                 "valueFrom": {
