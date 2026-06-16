@@ -1,6 +1,88 @@
 {
   "sidecarName": "messaging",
   "version": "1.0.0",
+  "description": "Send emails via SMTP and post messages to Slack. Credentials are provided via environment variables; SMTP hosts can be allowlisted.",
+  "tools": [
+    {
+      "name": "send_email",
+      "description": "Send an email via SMTP using configured credentials.",
+      "parameters": [
+        {
+          "name": "to",
+          "type": "string",
+          "required": true,
+          "description": "Recipient email address."
+        },
+        {
+          "name": "subject",
+          "type": "string",
+          "required": true,
+          "description": "Email subject."
+        },
+        {
+          "name": "body",
+          "type": "string",
+          "required": true,
+          "description": "Plain text email body."
+        },
+        {
+          "name": "smtp_host",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "SMTP server host. Defaults to SMTP_HOST env var."
+        },
+        {
+          "name": "smtp_port",
+          "type": "integer",
+          "required": false,
+          "default": 587,
+          "description": "SMTP server port. Defaults to SMTP_PORT env var."
+        }
+      ],
+      "returns": "Confirmation or error message.",
+      "whenToUse": "Use when the user explicitly asks to send an email notification or summary.",
+      "whenNotToUse": "Do not use for spam, unsolicited messages, or when SMTP credentials are not configured.",
+      "examples": [
+        "send_email(to='ops@example.com', subject='Alert', body='CPU is high')"
+      ]
+    },
+    {
+      "name": "send_slack_message",
+      "description": "Send a message to a Slack channel.",
+      "parameters": [
+        {
+          "name": "channel",
+          "type": "string",
+          "required": true,
+          "description": "Slack channel ID or #channel-name."
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "required": true,
+          "description": "Message text."
+        }
+      ],
+      "returns": "Confirmation with message timestamp or error.",
+      "whenToUse": "Use when the user explicitly asks to notify a Slack channel.",
+      "whenNotToUse": "Do not use without a configured SLACK_TOKEN or for channels the token cannot access.",
+      "examples": [
+        "send_slack_message(channel='#alerts', text='Deployment complete')"
+      ]
+    },
+    {
+      "name": "list_slack_channels",
+      "description": "List public Slack channels accessible to the bot.",
+      "parameters": [],
+      "returns": "List of channel names and IDs.",
+      "whenToUse": "Use when you need to find the correct channel ID/name before sending a message.",
+      "whenNotToUse": "Do not use when the channel is already known.",
+      "examples": [
+        "list_slack_channels()"
+      ]
+    }
+  ],
   "allowedTools": ["send_email", "send_slack_message", "list_slack_channels"],
   "networkEgress": {
     "domains": ["slack.com", "*.slack.com", "*.slack-msgs.com"],

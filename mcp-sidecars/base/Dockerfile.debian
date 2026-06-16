@@ -1,0 +1,47 @@
+# syntax=docker/dockerfile:1.7
+# mcp-base-debian — shared runtime for MCP sidecars that cannot run on
+# Alpine/musl (e.g. Playwright, ONNX runtime).  Same layout as mcp-base.
+FROM python:3.12-slim-bookworm AS builder
+
+WORKDIR /app
+COPY base/requirements-base.lock /app/requirements-base.lock
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc \
+    && python -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /opt/venv/bin/pip install --no-cache-dir -r /app/requirements-base.lock \
+    && find /opt/venv -type d \( -name tests -o -name test -o -name testing -o -name docs -o -name examples \) -prune -exec rm -rf {} + 2>/dev/null || true \
+    && apt-get purge -y gcc \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+FROM python:3.12-slim-bookworm
+
+LABEL org.opencontainers.image.title="KubeSynapse MCP Base (Debian)"
+LABEL org.opencontainers.image.description="Debian-based common runtime for KubeSynapse MCP sidecars"
+LABEL org.opencontainers.image.source="https://github.com/kubesynapse/kubesynapse"
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    MCP_LISTEN_PORT=8080 \
+    MCP_HEALTH_PORT=8090 \
+    MCP_SERVER_TYPE=base \
+    PATH=/opt/venv/bin:$PATH
+
+RUN groupadd -r -g 1000 mcpuser \
+    && useradd -r -u 1000 -g mcpuser -d /home/mcpuser -m -s /sbin/nologin mcpuser \
+    && mkdir -p /app && chown -R mcpuser:mcpuser /app \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
+COPY --chown=mcpuser:mcpuser base/mcp_base.py /app/mcp_base.py
+
+USER mcpuser
+EXPOSE 8080 8090
+
+CMD ["python", "-c", "print('mcp-base-debian: no server module mounted')"]

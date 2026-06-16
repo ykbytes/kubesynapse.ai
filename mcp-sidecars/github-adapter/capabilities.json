@@ -1,6 +1,40 @@
 {
   "sidecarName": "github-adapter",
   "version": "1.0.0",
+  "description": "Bridge from the KubeSynapse runtime's /tools/<name> interface to an upstream GitHub MCP server over streamable HTTP. A GitHub token must be forwarded in the request header.",
+  "tools": [
+    {
+      "name": "call_upstream_tool",
+      "description": "Proxy any tool call to the upstream GitHub MCP server.",
+      "parameters": [
+        {
+          "name": "tool_name",
+          "type": "string",
+          "required": true,
+          "description": "Name of the GitHub MCP tool to invoke (e.g. create_issue, get_file_contents)."
+        },
+        {
+          "name": "tool_args",
+          "type": "object",
+          "required": false,
+          "default": {},
+          "description": "Arguments for the upstream tool."
+        },
+        {
+          "name": "github_token",
+          "type": "string",
+          "required": true,
+          "description": "GitHub personal access token forwarded via the X-GitHub-Token header."
+        }
+      ],
+      "returns": "Result from the upstream GitHub MCP server.",
+      "whenToUse": "Use when the user asks to interact with GitHub repositories, issues, pull requests, files, or workflows and the platform has configured a GitHub MCP upstream.",
+      "whenNotToUse": "Do not use when the task can be accomplished with local git commands or when no GitHub token is available.",
+      "examples": [
+        "call_upstream_tool(tool_name='get_file_contents', tool_args={\"owner\":\"org\",\"repo\":\"repo\",\"path\":\"README.md\"})"
+      ]
+    }
+  ],
   "allowedTools": [],
   "networkEgress": {
     "domains": [],

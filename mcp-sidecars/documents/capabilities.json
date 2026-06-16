@@ -1,6 +1,95 @@
 {
   "sidecarName": "documents",
   "version": "1.0.0",
+  "description": "Read text from PDF, Excel (.xlsx), and Word (.docx) files, and create simple PDFs. Files must be located in the configured work directory or /tmp.",
+  "tools": [
+    {
+      "name": "read_pdf",
+      "description": "Extract text content from a PDF file.",
+      "parameters": [
+        {
+          "name": "file_path",
+          "type": "string",
+          "required": true,
+          "description": "Absolute path to a PDF file inside the allowed work directory."
+        }
+      ],
+      "returns": "Extracted text, paginated and truncated to a safe limit.",
+      "whenToUse": "Use when the user asks about content in a PDF document.",
+      "whenNotToUse": "Do not use for files outside the allowed directories or for non-PDF files.",
+      "examples": [
+        "read_pdf(file_path='/tmp/report.pdf')"
+      ]
+    },
+    {
+      "name": "read_xlsx",
+      "description": "Read an Excel workbook and return sheet contents as tabular text.",
+      "parameters": [
+        {
+          "name": "file_path",
+          "type": "string",
+          "required": true,
+          "description": "Absolute path to an .xlsx file inside the allowed work directory."
+        },
+        {
+          "name": "sheet_name",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "Optional sheet name. If omitted, all sheets are read."
+        }
+      ],
+      "returns": "Tabular text representation of sheet data.",
+      "whenToUse": "Use when the user asks about spreadsheet data.",
+      "whenNotToUse": "Do not use for non-Excel files or files outside the allowed directories.",
+      "examples": [
+        "read_xlsx(file_path='/tmp/data.xlsx', sheet_name='Sheet1')"
+      ]
+    },
+    {
+      "name": "read_docx",
+      "description": "Extract text content from a Word (.docx) file.",
+      "parameters": [
+        {
+          "name": "file_path",
+          "type": "string",
+          "required": true,
+          "description": "Absolute path to a .docx file inside the allowed work directory."
+        }
+      ],
+      "returns": "Extracted paragraph text, truncated to a safe limit.",
+      "whenToUse": "Use when the user asks about content in a Word document.",
+      "whenNotToUse": "Do not use for files outside the allowed directories or for .doc files (only .docx is supported).",
+      "examples": [
+        "read_docx(file_path='/tmp/notes.docx')"
+      ]
+    },
+    {
+      "name": "create_pdf",
+      "description": "Create a simple PDF from plain text and save it in the work directory.",
+      "parameters": [
+        {
+          "name": "text",
+          "type": "string",
+          "required": true,
+          "description": "Text content to write into the PDF."
+        },
+        {
+          "name": "output_filename",
+          "type": "string",
+          "required": false,
+          "default": "output.pdf",
+          "description": "Output filename (basename only, no paths)."
+        }
+      ],
+      "returns": "Path to the created PDF file.",
+      "whenToUse": "Use when the user requests a PDF export of generated text.",
+      "whenNotToUse": "Do not use for rich formatting, images, or complex layouts.",
+      "examples": [
+        "create_pdf(text='Hello, world!', output_filename='hello.pdf')"
+      ]
+    }
+  ],
   "allowedTools": ["read_pdf", "read_xlsx", "read_docx", "create_pdf"],
   "networkEgress": {
     "domains": [],

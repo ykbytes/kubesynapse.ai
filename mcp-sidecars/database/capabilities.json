@@ -1,6 +1,56 @@
 {
   "sidecarName": "database",
   "version": "1.0.0",
+  "description": "Run read-only SQL queries against PostgreSQL, MySQL, or SQLite databases. Only SELECT/WITH queries are allowed; write operations and DDL are blocked.",
+  "tools": [
+    {
+      "name": "query_sql",
+      "description": "Execute a read-only SELECT or WITH query and return tabular results.",
+      "parameters": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "SQL query. Must start with SELECT or WITH and contain no write/DDL keywords."
+        }
+      ],
+      "returns": "Tabular text output with columns and up to 50 rows.",
+      "whenToUse": "Use when you need to inspect data in a configured database. Call list_tables or describe_table first if you do not know the schema.",
+      "whenNotToUse": "Do not use for INSERT, UPDATE, DELETE, DROP, ALTER, or any data modification. Do not use when DATABASE_URL is not configured.",
+      "examples": [
+        "query_sql(query='SELECT COUNT(*) FROM users')"
+      ]
+    },
+    {
+      "name": "list_tables",
+      "description": "List all tables in the configured database.",
+      "parameters": [],
+      "returns": "List of table names.",
+      "whenToUse": "Use before writing queries to discover available tables.",
+      "whenNotToUse": "Do not use when the schema is already known.",
+      "examples": [
+        "list_tables()"
+      ]
+    },
+    {
+      "name": "describe_table",
+      "description": "Describe columns, types, and primary key of a table.",
+      "parameters": [
+        {
+          "name": "table_name",
+          "type": "string",
+          "required": true,
+          "description": "Name of an existing table."
+        }
+      ],
+      "returns": "Column names, types, nullability, and primary key information.",
+      "whenToUse": "Use before querying a table to understand its columns and keys.",
+      "whenNotToUse": "Do not use for non-existent tables or for guessing table names.",
+      "examples": [
+        "describe_table(table_name='users')"
+      ]
+    }
+  ],
   "allowedTools": ["query_sql", "list_tables", "describe_table"],
   "networkEgress": {
     "domains": [],

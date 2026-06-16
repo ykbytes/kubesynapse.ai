@@ -1,6 +1,84 @@
 {
   "sidecarName": "code-exec",
   "version": "1.0.0",
+  "description": "Execute short, sandboxed code snippets in Python, Bash, or Node.js. Network access is denied; use only for computation, file manipulation in /tmp, or tooling that does not require external calls.",
+  "tools": [
+    {
+      "name": "run_python",
+      "description": "Execute a Python code snippet and return stdout/stderr.",
+      "parameters": [
+        {
+          "name": "code",
+          "type": "string",
+          "required": true,
+          "description": "Python source code to execute."
+        },
+        {
+          "name": "timeout",
+          "type": "integer",
+          "required": false,
+          "default": 30,
+          "description": "Execution timeout in seconds (max 60)."
+        }
+      ],
+      "returns": "Combined stdout/stderr output, with likely secrets redacted.",
+      "whenToUse": "Use for data transformation, parsing, math, or any logic best expressed in Python without network access.",
+      "whenNotToUse": "Do not use for running shell commands or for code that needs network access, secrets, or persistent state outside /tmp.",
+      "examples": [
+        "run_python(code='import json; print(json.dumps({\"x\": 1}))')"
+      ]
+    },
+    {
+      "name": "run_bash",
+      "description": "Execute a Bash command and return stdout/stderr.",
+      "parameters": [
+        {
+          "name": "command",
+          "type": "string",
+          "required": true,
+          "description": "Single Bash command or pipeline."
+        },
+        {
+          "name": "timeout",
+          "type": "integer",
+          "required": false,
+          "default": 30,
+          "description": "Execution timeout in seconds (max 60)."
+        }
+      ],
+      "returns": "Combined stdout/stderr output, with likely secrets redacted.",
+      "whenToUse": "Use for shell-based file inspection, text processing with grep/awk, or invoking installed CLI tools locally.",
+      "whenNotToUse": "Do not use for network operations, privilege escalation, writing outside /tmp, or interactive commands.",
+      "examples": [
+        "run_bash(command='ls -la /tmp')"
+      ]
+    },
+    {
+      "name": "run_node",
+      "description": "Execute a Node.js code snippet and return stdout/stderr.",
+      "parameters": [
+        {
+          "name": "code",
+          "type": "string",
+          "required": true,
+          "description": "JavaScript source code to execute."
+        },
+        {
+          "name": "timeout",
+          "type": "integer",
+          "required": false,
+          "default": 30,
+          "description": "Execution timeout in seconds (max 60)."
+        }
+      ],
+      "returns": "Combined stdout/stderr output, with likely secrets redacted.",
+      "whenToUse": "Use when the task is easiest in JavaScript/Node.js, such as JSON manipulation or regex operations.",
+      "whenNotToUse": "Do not use for network access, requiring npm packages, or persistent state outside /tmp.",
+      "examples": [
+        "run_node(code='console.log(JSON.stringify({x: 1}))')"
+      ]
+    }
+  ],
   "allowedTools": ["run_python", "run_bash", "run_node"],
   "networkEgress": {
     "mode": "deny-all",

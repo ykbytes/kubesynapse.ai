@@ -1,6 +1,70 @@
 {
   "sidecarName": "web-search",
   "version": "1.0.0",
+  "description": "Search the public web with DuckDuckGo, fetch raw pages, and extract readable text. Use only for public/external information; internal cluster or private data should use other sidecars.",
+  "tools": [
+    {
+      "name": "web_search",
+      "description": "Run a DuckDuckGo text search and return titles, URLs, and snippets.",
+      "parameters": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "Search query string."
+        },
+        {
+          "name": "max_results",
+          "type": "integer",
+          "required": false,
+          "default": 5,
+          "description": "Maximum number of results to return (capped at 10)."
+        }
+      ],
+      "returns": "Formatted search results with title, URL, and snippet per result.",
+      "whenToUse": "Use when the user asks about current events, public documentation, external APIs, or facts not present in the conversation context.",
+      "whenNotToUse": "Do not use for internal Kubernetes state, private repositories, secrets, or tasks that can be answered from already-provided context.",
+      "examples": [
+        "web_search(query='Kubernetes 1.35 release notes', max_results=3)"
+      ]
+    },
+    {
+      "name": "fetch_url",
+      "description": "Fetch the raw HTTP body of a public URL and return it as text.",
+      "parameters": [
+        {
+          "name": "url",
+          "type": "string",
+          "required": true,
+          "description": "Public http:// or https:// URL. Private/internal IPs and hostnames are blocked."
+        }
+      ],
+      "returns": "Raw response body text, truncated to a safe limit.",
+      "whenToUse": "Use when you need the exact markup or raw content of a specific public page.",
+      "whenNotToUse": "Do not use for HTML pages where you only need human-readable text; prefer extract_text. Do not use for internal endpoints.",
+      "examples": [
+        "fetch_url(url='https://example.com/api/docs')"
+      ]
+    },
+    {
+      "name": "extract_text",
+      "description": "Fetch a public URL and return the human-readable text content with HTML stripped.",
+      "parameters": [
+        {
+          "name": "url",
+          "type": "string",
+          "required": true,
+          "description": "Public http:// or https:// URL. Private/internal IPs and hostnames are blocked."
+        }
+      ],
+      "returns": "Clean, readable text extracted from the page body.",
+      "whenToUse": "Use when you need to read article content, documentation prose, or page text without parsing HTML.",
+      "whenNotToUse": "Do not use when you need raw HTML/headers or when the page is an API returning structured data.",
+      "examples": [
+        "extract_text(url='https://docs.python.org/3/library/itertools.html')"
+      ]
+    }
+  ],
   "allowedTools": ["web_search", "fetch_url", "extract_text"],
   "networkEgress": {
     "domains": ["*"],

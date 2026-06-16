@@ -1,6 +1,70 @@
 {
   "sidecarName": "rag",
   "version": "1.0.0",
+  "description": "Index text chunks and perform semantic search against a Qdrant vector database. Useful for retrieval-augmented generation over a private document corpus.",
+  "tools": [
+    {
+      "name": "index_documents",
+      "description": "Index a list of text chunks into the Qdrant collection.",
+      "parameters": [
+        {
+          "name": "texts",
+          "type": "array",
+          "required": true,
+          "description": "List of text strings to embed and index."
+        },
+        {
+          "name": "metadata",
+          "type": "array",
+          "required": false,
+          "default": [],
+          "description": "Optional list of source labels, one per text chunk."
+        }
+      ],
+      "returns": "Number of documents indexed.",
+      "whenToUse": "Use when you need to add documents to the knowledge base before searching.",
+      "whenNotToUse": "Do not use when the corpus is already indexed or when QDRANT_URL is not configured.",
+      "examples": [
+        "index_documents(texts=['KubeSynapse is a platform...'], metadata=['docs/intro.md'])"
+      ]
+    },
+    {
+      "name": "semantic_search",
+      "description": "Search the indexed corpus for chunks semantically similar to a query.",
+      "parameters": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "Natural language query."
+        },
+        {
+          "name": "top_k",
+          "type": "integer",
+          "required": false,
+          "default": 5,
+          "description": "Number of top results to return (max 20)."
+        }
+      ],
+      "returns": "Ranked list of matching text chunks with similarity scores and sources.",
+      "whenToUse": "Use when answering questions that require grounding in a private document corpus.",
+      "whenNotToUse": "Do not use for public web search; prefer web_search.",
+      "examples": [
+        "semantic_search(query='how does incident management work?', top_k=5)"
+      ]
+    },
+    {
+      "name": "collection_info",
+      "description": "Return metadata about the current Qdrant collection.",
+      "parameters": [],
+      "returns": "Collection name, point count, vector count, and status.",
+      "whenToUse": "Use to verify indexing status or check collection size.",
+      "whenNotToUse": "Do not use when the collection state is irrelevant.",
+      "examples": [
+        "collection_info()"
+      ]
+    }
+  ],
   "allowedTools": ["index_documents", "semantic_search", "collection_info"],
   "networkEgress": {
     "domains": [],

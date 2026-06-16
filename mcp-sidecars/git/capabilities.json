@@ -1,6 +1,333 @@
 {
   "sidecarName": "git",
   "version": "1.0.0",
+  "description": "Run read-only and write Git operations against allowed repositories, plus call the GitHub REST API. Paths are restricted to the configured work directory and /tmp.",
+  "tools": [
+    {
+      "name": "git_clone",
+      "description": "Clone a Git repository into the work directory.",
+      "parameters": [
+        {
+          "name": "repo_url",
+          "type": "string",
+          "required": true,
+          "description": "HTTPS or SSH URL of the repository to clone."
+        },
+        {
+          "name": "target_dir",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "Optional subdirectory name under the work directory."
+        }
+      ],
+      "returns": "Clone output or an error message.",
+      "whenToUse": "Use when you need a local copy of a repository before reading files, diffs, or logs.",
+      "whenNotToUse": "Do not use for repositories outside the allowed Git host allowlist or when credentials are not configured.",
+      "examples": [
+        "git_clone(repo_url='https://github.com/org/repo.git', target_dir='repo')"
+      ]
+    },
+    {
+      "name": "git_status",
+      "description": "Show working tree status of a cloned repository.",
+      "parameters": [
+        {
+          "name": "repo_path",
+          "type": "string",
+          "required": true,
+          "description": "Absolute path to the repository inside the work directory."
+        }
+      ],
+      "returns": "Git status output.",
+      "whenToUse": "Use to check modified, staged, or untracked files in a local repo.",
+      "whenNotToUse": "Do not use on paths that are not Git repositories.",
+      "examples": [
+        "git_status(repo_path='/tmp/repo')"
+      ]
+    },
+    {
+      "name": "git_diff",
+      "description": "Show changes between commits, branches, or the working tree.",
+      "parameters": [
+        {
+          "name": "repo_path",
+          "type": "string",
+          "required": true,
+          "description": "Absolute path to the repository inside the work directory."
+        },
+        {
+          "name": "target",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "Optional commit, branch, or range to diff against."
+        }
+      ],
+      "returns": "Diff output.",
+      "whenToUse": "Use to inspect code changes in a cloned repository.",
+      "whenNotToUse": "Do not use when you only need file content; prefer reading files directly.",
+      "examples": [
+        "git_diff(repo_path='/tmp/repo', target='HEAD~1')"
+      ]
+    },
+    {
+      "name": "git_log",
+      "description": "Show recent commit history.",
+      "parameters": [
+        {
+          "name": "repo_path",
+          "type": "string",
+          "required": true,
+          "description": "Absolute path to the repository inside the work directory."
+        },
+        {
+          "name": "max_count",
+          "type": "integer",
+          "required": false,
+          "default": 20,
+          "description": "Maximum number of commits to return."
+        }
+      ],
+      "returns": "Commit log output.",
+      "whenToUse": "Use to understand recent changes, authors, or commit messages.",
+      "whenNotToUse": "Do not use when the repository history is already known.",
+      "examples": [
+        "git_log(repo_path='/tmp/repo', max_count=10)"
+      ]
+    },
+    {
+      "name": "git_add",
+      "description": "Stage files in a repository.",
+      "parameters": [
+        {
+          "name": "repo_path",
+          "type": "string",
+          "required": true,
+          "description": "Absolute path to the repository inside the work directory."
+        },
+        {
+          "name": "paths",
+          "type": "string",
+          "required": true,
+          "description": "Paths or patterns to stage."
+        }
+      ],
+      "returns": "Add output or error.",
+      "whenToUse": "Use as part of a commit workflow after creating or modifying files.",
+      "whenNotToUse": "Do not use for destructive operations or outside the allowed work directory.",
+      "examples": [
+        "git_add(repo_path='/tmp/repo', paths='.')"
+      ]
+    },
+    {
+      "name": "git_commit",
+      "description": "Commit staged changes.",
+      "parameters": [
+        {
+          "name": "repo_path",
+          "type": "string",
+          "required": true,
+          "description": "Absolute path to the repository inside the work directory."
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "required": true,
+          "description": "Commit message."
+        }
+      ],
+      "returns": "Commit output or error.",
+      "whenToUse": "Use after staging changes to persist them locally.",
+      "whenNotToUse": "Do not use when there are no staged changes or when commit signing is required.",
+      "examples": [
+        "git_commit(repo_path='/tmp/repo', message='Update README')"
+      ]
+    },
+    {
+      "name": "git_push",
+      "description": "Push commits to a remote repository.",
+      "parameters": [
+        {
+          "name": "repo_path",
+          "type": "string",
+          "required": true,
+          "description": "Absolute path to the repository inside the work directory."
+        },
+        {
+          "name": "remote",
+          "type": "string",
+          "required": false,
+          "default": "origin",
+          "description": "Remote name."
+        },
+        {
+          "name": "branch",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "Branch to push. Defaults to current branch."
+        }
+      ],
+      "returns": "Push output or error.",
+      "whenToUse": "Use after committing to publish changes.",
+      "whenNotToUse": "Do not use without configured credentials or when the remote is not allowlisted.",
+      "examples": [
+        "git_push(repo_path='/tmp/repo', branch='main')"
+      ]
+    },
+    {
+      "name": "git_branch",
+      "description": "List, create, or delete branches.",
+      "parameters": [
+        {
+          "name": "repo_path",
+          "type": "string",
+          "required": true,
+          "description": "Absolute path to the repository inside the work directory."
+        },
+        {
+          "name": "operation",
+          "type": "string",
+          "required": false,
+          "default": "list",
+          "description": "One of: list, create, delete."
+        },
+        {
+          "name": "branch_name",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "Branch name for create/delete operations."
+        }
+      ],
+      "returns": "Branch output or error.",
+      "whenToUse": "Use to inspect or manage branches before checkout or push.",
+      "whenNotToUse": "Do not use to delete protected or remote-tracking branches without care.",
+      "examples": [
+        "git_branch(repo_path='/tmp/repo', operation='create', branch_name='feature-x')"
+      ]
+    },
+    {
+      "name": "git_checkout",
+      "description": "Switch to a branch or commit.",
+      "parameters": [
+        {
+          "name": "repo_path",
+          "type": "string",
+          "required": true,
+          "description": "Absolute path to the repository inside the work directory."
+        },
+        {
+          "name": "ref",
+          "type": "string",
+          "required": true,
+          "description": "Branch name, tag, or commit SHA."
+        }
+      ],
+      "returns": "Checkout output or error.",
+      "whenToUse": "Use to switch to a specific branch or commit before reading or modifying files.",
+      "whenNotToUse": "Do not use for refs that are not validated Git refs.",
+      "examples": [
+        "git_checkout(repo_path='/tmp/repo', ref='main')"
+      ]
+    },
+    {
+      "name": "git_pull",
+      "description": "Fetch and merge changes from a remote branch.",
+      "parameters": [
+        {
+          "name": "repo_path",
+          "type": "string",
+          "required": true,
+          "description": "Absolute path to the repository inside the work directory."
+        },
+        {
+          "name": "remote",
+          "type": "string",
+          "required": false,
+          "default": "origin",
+          "description": "Remote name."
+        },
+        {
+          "name": "branch",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "Branch to pull. Defaults to current branch."
+        }
+      ],
+      "returns": "Pull output or error.",
+      "whenToUse": "Use to update a local clone before inspecting or editing.",
+      "whenNotToUse": "Do not use when the working tree has uncommitted changes that could conflict.",
+      "examples": [
+        "git_pull(repo_path='/tmp/repo')"
+      ]
+    },
+    {
+      "name": "git_stash",
+      "description": "Stash or unstash working tree changes.",
+      "parameters": [
+        {
+          "name": "repo_path",
+          "type": "string",
+          "required": true,
+          "description": "Absolute path to the repository inside the work directory."
+        },
+        {
+          "name": "operation",
+          "type": "string",
+          "required": false,
+          "default": "push",
+          "description": "One of: push, pop, list, drop."
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "Optional stash message."
+        }
+      ],
+      "returns": "Stash output or error.",
+      "whenToUse": "Use to temporarily save uncommitted changes before switching branches or pulling.",
+      "whenNotToUse": "Do not use when you intend to discard changes permanently.",
+      "examples": [
+        "git_stash(repo_path='/tmp/repo', operation='push', message='WIP')"
+      ]
+    },
+    {
+      "name": "github_api",
+      "description": "Call the GitHub REST API.",
+      "parameters": [
+        {
+          "name": "method",
+          "type": "string",
+          "required": true,
+          "description": "HTTP method, e.g. GET, POST, PATCH, DELETE."
+        },
+        {
+          "name": "endpoint",
+          "type": "string",
+          "required": true,
+          "description": "GitHub API path, e.g. /repos/owner/repo/issues."
+        },
+        {
+          "name": "data",
+          "type": "object",
+          "required": false,
+          "default": {},
+          "description": "Optional JSON request body."
+        }
+      ],
+      "returns": "API response JSON or error.",
+      "whenToUse": "Use when you need GitHub-specific data (issues, PRs, releases, workflows) not available via local git commands.",
+      "whenNotToUse": "Do not use for non-GitHub APIs or for operations the configured token cannot perform.",
+      "examples": [
+        "github_api(method='GET', endpoint='/repos/owner/repo/issues')"
+      ]
+    }
+  ],
   "allowedTools": [
     "git_clone", "git_status", "git_diff", "git_log", "git_add",
     "git_commit", "git_push", "git_branch", "git_checkout", "git_pull",

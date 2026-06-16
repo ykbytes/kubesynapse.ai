@@ -1,6 +1,113 @@
 {
   "sidecarName": "browser",
   "version": "1.0.0",
+  "description": "Automate a headless Chromium browser to browse pages, take screenshots, click elements, and fill forms. Only public http/https URLs are allowed; private/internal IPs are blocked.",
+  "tools": [
+    {
+      "name": "browse_url",
+      "description": "Navigate to a public URL and return the visible text content.",
+      "parameters": [
+        {
+          "name": "url",
+          "type": "string",
+          "required": true,
+          "description": "Public http:// or https:// URL."
+        },
+        {
+          "name": "wait_seconds",
+          "type": "integer",
+          "required": false,
+          "default": 3,
+          "description": "Seconds to wait after page load for dynamic content (max 10)."
+        }
+      ],
+      "returns": "Visible text content of the page body.",
+      "whenToUse": "Use when a page requires JavaScript rendering or interaction to retrieve meaningful text.",
+      "whenNotToUse": "Do not use for static pages where extract_text from web-search would suffice. Do not use for internal/private URLs.",
+      "examples": [
+        "browse_url(url='https://example.com/dashboard', wait_seconds=2)"
+      ]
+    },
+    {
+      "name": "screenshot",
+      "description": "Take a screenshot of a public URL and save it as a PNG in the work directory.",
+      "parameters": [
+        {
+          "name": "url",
+          "type": "string",
+          "required": true,
+          "description": "Public http:// or https:// URL."
+        },
+        {
+          "name": "full_page",
+          "type": "boolean",
+          "required": false,
+          "default": false,
+          "description": "Capture the full scrollable page instead of the viewport."
+        }
+      ],
+      "returns": "Path to the saved screenshot file.",
+      "whenToUse": "Use when the user explicitly asks for a visual capture of a public page.",
+      "whenNotToUse": "Do not use for internal pages or when the user only needs text content.",
+      "examples": [
+        "screenshot(url='https://example.com', full_page=true)"
+      ]
+    },
+    {
+      "name": "click_element",
+      "description": "Click an element on a public page by CSS selector and return the resulting page text.",
+      "parameters": [
+        {
+          "name": "url",
+          "type": "string",
+          "required": true,
+          "description": "Public http:// or https:// URL."
+        },
+        {
+          "name": "selector",
+          "type": "string",
+          "required": true,
+          "description": "CSS selector of the element to click."
+        }
+      ],
+      "returns": "Visible text content after the click.",
+      "whenToUse": "Use to interact with navigation, buttons, or tabs that reveal content.",
+      "whenNotToUse": "Do not use for destructive actions, form submission, or internal URLs.",
+      "examples": [
+        "click_element(url='https://example.com', selector='button#load-more')"
+      ]
+    },
+    {
+      "name": "fill_form",
+      "description": "Fill a form field on a public page by CSS selector and return the resulting page text.",
+      "parameters": [
+        {
+          "name": "url",
+          "type": "string",
+          "required": true,
+          "description": "Public http:// or https:// URL."
+        },
+        {
+          "name": "selector",
+          "type": "string",
+          "required": true,
+          "description": "CSS selector of the input field."
+        },
+        {
+          "name": "value",
+          "type": "string",
+          "required": true,
+          "description": "Value to enter into the field."
+        }
+      ],
+      "returns": "Visible text content after filling the field.",
+      "whenToUse": "Use to populate search boxes or filter inputs that update page content dynamically.",
+      "whenNotToUse": "Do not use to submit authentication forms, payment forms, or internal applications.",
+      "examples": [
+        "fill_form(url='https://example.com/search', selector='input[name=q]', value='kubernetes')"
+      ]
+    }
+  ],
   "allowedTools": ["browse_url", "screenshot", "click_element", "fill_form"],
   "networkEgress": {
     "domains": ["*"],

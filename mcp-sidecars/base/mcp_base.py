@@ -260,7 +260,7 @@ def _wrap_tool_decorator(server: FastMCP) -> None:
 # ---------------------------------------------------------------------------
 
 class _HealthHandler(BaseHTTPRequestHandler):
-    """Minimal HTTP handler for /healthz and /readyz."""
+    """Minimal HTTP handler for health, readiness, and capability discovery."""
 
     def log_message(self, format: str, *args: Any) -> None:
         log.debug("Health server: %s", format % args)
@@ -271,6 +271,12 @@ class _HealthHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             payload = json.dumps({"status": "ok", "server": MCP_SERVER_TYPE})
+            self.wfile.write(payload.encode("utf-8"))
+        elif self.path in ("/capabilities", "/tools"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            payload = json.dumps(get_capabilities(), indent=2, default=str)
             self.wfile.write(payload.encode("utf-8"))
         else:
             self.send_response(404)
@@ -286,7 +292,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     requests are denied (401).
     """
 
-    EXEMPT_PATHS = frozenset({"/healthz", "/readyz"})
+    EXEMPT_PATHS = frozenset({"/healthz", "/readyz", "/capabilities", "/tools"})
 
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
         if request.url.path in self.EXEMPT_PATHS:

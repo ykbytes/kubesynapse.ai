@@ -1,29 +1,39 @@
-# ── Stage 1: Extract node binary from slim node image ──
-FROM node:22-slim AS node-bin
+# syntax=docker/dockerfile:1.7
+# mcp-code-exec — execute Python, Bash, and Node.js snippets safely.
+# Multi-stage build copies only the Node.js binary from the official Alpine
+# image, avoiding the full ~200 MB node layer.
+ARG MCP_BASE_TAG=localhost/kubesynapse/mcp-base:dev
+FROM node:20-alpine AS node-bin
+RUN apk add --no-cache binutils && strip /usr/local/bin/node && rm -rf /var/cache/apk/*
 
-# ── Stage 2: Python runtime with extracted node ──
-FROM python:3.12-slim
+FROM ${MCP_BASE_TAG}
+LABEL org.opencontainers.image.title="KubeSynapse MCP Code Execution"
+LABEL org.opencontainers.image.description="Sandboxed code execution sidecar for KubeSynapse agents"
+LABEL org.opencontainers.image.source="https://github.com/kubesynapse/kubesynapse"
 
-# Copy node and npm binaries from node image (~200MB saved vs apt install)
+USER root
+# bash is required for the run_bash tool; libstdc++/libgcc are required by
+# the Node.js binary copied from the Alpine node stage.
+RUN apk add --no-cache bash libstdc++ libgcc \
+    && rm -rf /var/cache/apk/* /tmp/*
 COPY --from=node-bin /usr/local/bin/node /usr/local/bin/node
-COPY --from=node-bin /usr/local/lib/node_modules /usr/local/lib/node_modules
-COPY --from=node-bin /opt/ /opt/
-
-# Install only bash (node already copied)
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash \
-    && ln -s /usr/local/bin/node /usr/local/bin/nodejs 2>/dev/null || true \
-    && rm -rf /var/lib/apt/lists/*
+RUN ln -sf /usr/local/bin/node /usr/local/bin/nodejs 2>/dev/null || true \
+    && node --version >/dev/null 2>&1
 
 WORKDIR /app
-COPY base/requirements-base.txt /app/requirements-base.txt
-COPY code-exec/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements-base.txt -r requirements.txt
-COPY base/mcp_base.py /app/mcp_base.py
-COPY code-exec/server.py /app/server.py
-COPY code-exec/capabilities.json /app/capabilities.json
-ENV MCP_LISTEN_PORT=8082
-RUN useradd -u 1000 -m mcpuser || true
-USER 1000
-EXPOSE 8082
+COPY --chown=mcpuser:mcpuser code-exec/requirements.txt /app/requirements.txt
+COPY --chown=mcpuser:mcpuser code-exec/requirements.lock /app/requirements.lock
+RUN /opt/venv/bin/pip install --no-cache-dir -r /app/requirements.lock && \
+    rm -rf /tmp/*
+
+COPY --chown=mcpuser:mcpuser code-exec/server.py /app/server.py
+COPY --chown=mcpuser:mcpuser code-exec/capabilities.json /app/capabilities.json
+
+ENV MCP_SERVER_TYPE=code-exec \
+    MCP_LISTEN_PORT=8082 \
+    MCP_HEALTH_PORT=8092 \
+    TMPDIR=/tmp
+
+USER mcpuser
+EXPOSE 8082 8092
 CMD ["python", "/app/server.py"]

@@ -1,9 +1,118 @@
 {
   "sidecarName": "collector",
   "version": "1.0.0",
+  "description": "Gather intelligence from registered collector agents deployed on Kubernetes clusters and VMs. All operations are read-only by policy.",
+  "tools": [
+    {
+      "name": "list_collectors",
+      "description": "List all registered collector agents and their online/offline status.",
+      "parameters": [],
+      "returns": "JSON list of collectors with name, URL, status, cluster, node, and capabilities.",
+      "whenToUse": "Use first to discover which collectors are available before running scripts.",
+      "whenNotToUse": "Do not use when the target collector is already known.",
+      "examples": [
+        "list_collectors()"
+      ]
+    },
+    {
+      "name": "list_builtin_scripts",
+      "description": "List built-in read-only scripts available on a collector agent.",
+      "parameters": [
+        {
+          "name": "collector_name",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "Name of the collector to query. Defaults to the first available collector."
+        }
+      ],
+      "returns": "JSON list of built-in scripts and collector capabilities.",
+      "whenToUse": "Use to discover what ready-made collection scripts are available.",
+      "whenNotToUse": "Do not use when you already know the script name.",
+      "examples": [
+        "list_builtin_scripts(collector_name='prod-cluster')"
+      ]
+    },
+    {
+      "name": "gather_info",
+      "description": "Run a read-only bash or python script on a collector agent to gather system/cluster information.",
+      "parameters": [
+        {
+          "name": "script",
+          "type": "string",
+          "required": true,
+          "description": "Bash or Python script to execute. Must be read-only."
+        },
+        {
+          "name": "script_type",
+          "type": "string",
+          "required": false,
+          "default": "bash",
+          "description": "Script language: 'bash' or 'python'."
+        },
+        {
+          "name": "collector_name",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "Target collector name. Defaults to the first available collector."
+        },
+        {
+          "name": "timeout",
+          "type": "integer",
+          "required": false,
+          "default": 30,
+          "description": "Execution timeout in seconds (max 60)."
+        }
+      ],
+      "returns": "Collector execution result.",
+      "whenToUse": "Use to collect configuration, status, metrics, or diagnostic data from a remote cluster or VM.",
+      "whenNotToUse": "Do not use for write, delete, or mutation operations. Do not use when COLLECTOR_ENDPOINTS is not configured.",
+      "examples": [
+        "gather_info(script='kubectl get pods -A', script_type='bash', collector_name='prod-cluster')"
+      ]
+    },
+    {
+      "name": "get_system_info",
+      "description": "Get system information from a specific collector agent.",
+      "parameters": [
+        {
+          "name": "collector_name",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "Name of the collector to query. Defaults to the first available collector."
+        }
+      ],
+      "returns": "System info JSON from the collector.",
+      "whenToUse": "Use to quickly inspect OS, node, or cluster metadata.",
+      "whenNotToUse": "Do not use when you need custom queries; prefer gather_info.",
+      "examples": [
+        "get_system_info(collector_name='prod-cluster')"
+      ]
+    },
+    {
+      "name": "fan_out_collect",
+      "description": "Run a built-in script on all registered collectors in parallel.",
+      "parameters": [
+        {
+          "name": "script_name",
+          "type": "string",
+          "required": true,
+          "description": "Name of a built-in script to run on every collector."
+        }
+      ],
+      "returns": "Aggregated results from all collectors.",
+      "whenToUse": "Use when you need the same read-only diagnostic across multiple clusters or nodes at once.",
+      "whenNotToUse": "Do not use for custom scripts; use gather_info for one-off scripts.",
+      "examples": [
+        "fan_out_collect(script_name='cluster_overview')"
+      ]
+    }
+  ],
   "allowedTools": [
     "list_collectors", "list_builtin_scripts", "gather_info",
-    "run_builtin_script", "get_system_info", "fan_out_collect"
+    "get_system_info", "fan_out_collect"
   ],
   "networkEgress": {
     "domains": [],

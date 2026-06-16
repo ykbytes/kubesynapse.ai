@@ -1,0 +1,11 @@
+# Keep Docker build contexts small and avoid OneDrive xattr issues on cache dirs.
+**/.git
+**/.pytest_cache
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.mypy_cache
+**/.ruff_cache
+**/.hypothesis
+**/.coverage
+**/htmlcov

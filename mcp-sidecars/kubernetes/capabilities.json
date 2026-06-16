@@ -1,6 +1,123 @@
 {
   "sidecarName": "kubernetes",
   "version": "1.0.0",
+  "description": "Query Kubernetes resources and read pod logs. Secrets, service accounts, RBAC, and CSR objects are blocked. Writes are not supported.",
+  "tools": [
+    {
+      "name": "list_pods",
+      "description": "List pods and their status in a namespace.",
+      "parameters": [
+        {
+          "name": "namespace",
+          "type": "string",
+          "required": false,
+          "default": "default",
+          "description": "Kubernetes namespace."
+        }
+      ],
+      "returns": "Tabular list of pod names and phases.",
+      "whenToUse": "Use to get a quick overview of pods in a namespace.",
+      "whenNotToUse": "Do not use when you need detailed pod specs or logs.",
+      "examples": [
+        "list_pods(namespace='default')"
+      ]
+    },
+    {
+      "name": "get_pod_logs",
+      "description": "Get recent logs from a specific pod.",
+      "parameters": [
+        {
+          "name": "namespace",
+          "type": "string",
+          "required": true,
+          "description": "Kubernetes namespace."
+        },
+        {
+          "name": "pod_name",
+          "type": "string",
+          "required": true,
+          "description": "Name of the pod."
+        },
+        {
+          "name": "tail_lines",
+          "type": "integer",
+          "required": false,
+          "default": 50,
+          "description": "Number of log lines to retrieve (max 200)."
+        }
+      ],
+      "returns": "Recent container logs.",
+      "whenToUse": "Use for troubleshooting, error investigation, or checking application output.",
+      "whenNotToUse": "Do not use for pods in namespaces outside the allowlist.",
+      "examples": [
+        "get_pod_logs(namespace='default', pod_name='my-app-0', tail_lines=100)"
+      ]
+    },
+    {
+      "name": "kubectl_get",
+      "description": "Get a summary of Kubernetes resources of a given type.",
+      "parameters": [
+        {
+          "name": "resource_type",
+          "type": "string",
+          "required": true,
+          "description": "Plural resource type, e.g. pods, services, deployments, nodes."
+        },
+        {
+          "name": "namespace",
+          "type": "string",
+          "required": false,
+          "default": "default",
+          "description": "Namespace for namespaced resources. Ignored for cluster-scoped resources."
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "Optional specific resource name. If omitted, lists all resources of the type."
+        }
+      ],
+      "returns": "Resource summary or a single resource detail.",
+      "whenToUse": "Use to inspect deployments, services, nodes, events, or other safe resource types.",
+      "whenNotToUse": "Do not use for secrets, serviceaccounts, roles, rolebindings, clusterroles, clusterrolebindings, tokenreviews, or certificatesigningrequests.",
+      "examples": [
+        "kubectl_get(resource_type='deployments', namespace='default')",
+        "kubectl_get(resource_type='nodes', name='node-1')"
+      ]
+    },
+    {
+      "name": "kubectl_describe",
+      "description": "Describe a Kubernetes resource in detail.",
+      "parameters": [
+        {
+          "name": "resource_type",
+          "type": "string",
+          "required": true,
+          "description": "Plural resource type."
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "description": "Resource name."
+        },
+        {
+          "name": "namespace",
+          "type": "string",
+          "required": false,
+          "default": "default",
+          "description": "Namespace for namespaced resources."
+        }
+      ],
+      "returns": "Detailed resource description.",
+      "whenToUse": "Use when you need events, conditions, or full metadata for debugging.",
+      "whenNotToUse": "Do not use for blocked resource types or resources outside allowed namespaces.",
+      "examples": [
+        "kubectl_describe(resource_type='pods', name='my-app-0', namespace='default')"
+      ]
+    }
+  ],
   "allowedTools": ["list_pods", "get_pod_logs", "kubectl_get", "kubectl_describe"],
   "networkEgress": {
     "domains": [],
