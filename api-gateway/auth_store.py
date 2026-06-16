@@ -37,6 +37,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 logger = logging.getLogger("api-gateway.auth-store")
 
@@ -127,6 +128,8 @@ _engine_kwargs: dict[str, Any] = {
 
 if DATABASE_URL.startswith("sqlite"):
     _engine_kwargs["connect_args"] = {"check_same_thread": False}
+    if DATABASE_URL == "sqlite:///:memory:":
+        _engine_kwargs["poolclass"] = StaticPool
     logger.warning("⚠️  Using SQLite database — this is NOT recommended for production. Use PostgreSQL.")
 else:
     # PostgreSQL production pool settings (§2.3 — Enhanced from hardening audit)
@@ -2239,13 +2242,19 @@ def ensure_bootstrap_admin() -> None:
 
     existing = get_user_by_username(username)
     if existing is not None:
-        # Ensure the bootstrap user always has admin role
-        if str(existing.role) != "admin":
+        needs_update = bool(str(existing.role) != "admin")
+        if not verify_password(password, cast(str, existing.password_hash)):
+            needs_update = True
+        if needs_update:
             with db_session() as session:
                 user = session.get(User, existing.id)
                 if user is not None:
-                    user.role = "admin"  # type: ignore[assignment]
-                    logger.info("Promoted bootstrap account '%s' to admin role.", username)
+                    if str(user.role) != "admin":
+                        user.role = "admin"  # type: ignore[assignment]
+                        logger.info("Promoted bootstrap account '%s' to admin role.", username)
+                    if not verify_password(password, cast(str, user.password_hash)):
+                        user.password_hash = hash_password(password)  # type: ignore[assignment]
+                        logger.info("Updated bootstrap admin password for '%s'.", username)
         return
 
     email = os.getenv("AUTH_BOOTSTRAP_ADMIN_EMAIL", "").strip() or None
