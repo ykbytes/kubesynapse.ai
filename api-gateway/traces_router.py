@@ -571,6 +571,8 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
         cache_read_tokens = _coerce_int(payload.get("cache_read_tokens"))
         cache_write_tokens = _coerce_int(payload.get("cache_write_tokens"))
         reasoning_tokens = _coerce_int(payload.get("reasoning_tokens"))
+        reasoning_text = (payload or {}).get("reasoning_text", "") or ""
+        finish_reason = (payload or {}).get("finish_reason", "") or ""
         record = trace_store.LLMCallRecord(
             id=f"llm-{uuid.uuid4().hex[:12]}",
             execution_id=execution_id,
@@ -594,6 +596,9 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
             started_at=_event_timestamp_to_utc(event_data.get("timestamp")) or trace_store.utc_now(),
             prompt_preview=payload.get("prompt_preview", "")[:1024],
             response_preview=payload.get("response_preview", "")[:2048],
+            reasoning_text=reasoning_text or None,
+            finish_reason=finish_reason or None,
+            reasoning_chars=len(reasoning_text) if reasoning_text else 0,
         )
         session.add(record)
         step = (
@@ -636,6 +641,8 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
                     "step_name": "runtime-invoke",
                     "step_type": "llm",
                 })
+        reasoning_text = (payload or {}).get("reasoning_text", "") or ""
+        finish_reason = (payload or {}).get("finish_reason", "") or ""
         record = trace_store.LLMCallRecord(
             id=f"llm-{uuid.uuid4().hex[:12]}",
             execution_id=execution_id,
@@ -651,6 +658,9 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
             cost_usd=event_data.get("cost_usd"),
             latency_ms=event_data.get("duration_ms"),
             started_at=_event_timestamp_to_utc(event_data.get("timestamp")) or trace_store.utc_now(),
+            reasoning_text=reasoning_text or None,
+            finish_reason=finish_reason or None,
+            reasoning_chars=len(reasoning_text) if reasoning_text else 0,
         )
         session.add(record)
         # Update step aggregates

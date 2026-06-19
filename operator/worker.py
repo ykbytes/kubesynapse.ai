@@ -1268,6 +1268,8 @@ def _emit_traces_from_result(result: dict[str, Any]) -> None:
                 cost_usd=cost_usd,
                 latency_ms=latency_ms,
                 provider=str(metadata.get("provider") or result.get("provider") or "") or None,
+                reasoning_text=str(metadata.get("reasoning_text") or ""),
+                finish_reason=str(metadata.get("finish_reason") or ""),
             )
     except Exception:
         logger.debug("Trace emission failed", exc_info=True)

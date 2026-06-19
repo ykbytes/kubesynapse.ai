@@ -34,8 +34,9 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
-    inspect,
     String,
+    Text,
+    inspect,
     text,
 )
 from sqlalchemy.exc import OperationalError, ProgrammingError
@@ -311,6 +312,15 @@ class LLMCallRecord(Base):
     prompt_preview = Column(String(1024), nullable=True)
     response_preview = Column(String(2048), nullable=True)
     trace_event_index = Column(Integer, nullable=True)
+    reasoning_text = Column(Text, nullable=True)
+    full_prompt = Column(Text, nullable=True)
+    full_response = Column(Text, nullable=True)
+    system_prompt = Column(Text, nullable=True)
+    finish_reason = Column(String(64), nullable=True)
+    reasoning_chars = Column(Integer, nullable=True, default=0)
+    prompt_chars_full = Column(Integer, nullable=True, default=0)
+    response_chars_full = Column(Integer, nullable=True, default=0)
+    system_prompt_chars = Column(Integer, nullable=True, default=0)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -330,6 +340,11 @@ class LLMCallRecord(Base):
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "prompt_preview": self.prompt_preview,
             "response_preview": self.response_preview,
+            "reasoning_text": self.reasoning_text,
+            "full_prompt": self.full_prompt,
+            "full_response": self.full_response,
+            "system_prompt": self.system_prompt,
+            "finish_reason": self.finish_reason,
         }
 
 

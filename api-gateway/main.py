@@ -13,7 +13,6 @@ import logging
 
 # Import shared infrastructure needed by the app factory
 from _core import (
-    _Instrumentator,
     cors_origins,
     lifespan,
 )
@@ -47,9 +46,9 @@ app = FastAPI(
     openapi_url="/api/v1/openapi.json",
 )
 
-# Prometheus metrics (if available)
-if _Instrumentator is not None:
-    _Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+# Prometheus metrics (if available) — disabled due to _IncludedRouter compat issue
+# if _Instrumentator is not None:
+#     _Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 # CORS middleware
 app.add_middleware(

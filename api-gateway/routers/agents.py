@@ -162,6 +162,10 @@ def _record_invoke_trace(
 
             if llm_calls_count > 0:
                 model_name = str(data.get("model") or agent.get("spec", {}).get("model", "unknown"))
+                reasoning_text = metadata.get("reasoning_text", "") or ""
+                finish_reason = metadata.get("finish_reason", "") or ""
+                full_prompt = data.get("full_prompt", "") or ""
+                full_response = data.get("full_response", "") or ""
                 llm_record = LLMCallRecord(
                     id=f"llm-{execution_id[:12]}",
                     execution_id=execution_id,
@@ -177,6 +181,10 @@ def _record_invoke_trace(
                     cost_usd=float(cost_info) if cost_info else None,
                     latency_ms=duration_ms,
                     started_at=started_at,
+                    reasoning_text=reasoning_text or None,
+                    finish_reason=finish_reason or None,
+                    full_prompt=full_prompt or None,
+                    full_response=full_response or None,
                 )
                 session.add(llm_record)
 

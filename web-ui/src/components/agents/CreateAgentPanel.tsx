@@ -11,7 +11,6 @@ import {
   PlusCircle,
   RefreshCw,
   Search,
-  Sparkles,
   Wand2,
   X,
 } from "lucide-react";
@@ -54,14 +53,6 @@ import { SYSTEM_PROMPT_MAX_CHARS, systemPromptLengthError } from "../../lib/agen
 import { getRuntimeSignal } from "../../lib/agentSignals";
 
 type ConnectionFilterValue = "all" | "selected" | "remote" | "hub" | "sidecar";
-
-const SKILL_CATEGORY_STYLES: Record<string, string> = {
-  design: "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-200",
-  development: "border-sky-500/30 bg-sky-500/10 text-sky-200",
-  document: "border-amber-500/30 bg-amber-500/10 text-amber-200",
-  communication: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
-  productivity: "border-cyan-500/30 bg-cyan-500/10 text-cyan-200",
-};
 
 interface CreateAgentPanelProps {
   token: string;
@@ -883,7 +874,7 @@ export function CreateAgentPanel({
           </TabsContent>
 
           <TabsContent value="files" className="animate-fade-in space-y-4">
-            <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+            <div className="grid gap-4 xl:grid-cols-[1fr_280px]">
               <Card className="shadow-none">
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
@@ -893,7 +884,7 @@ export function CreateAgentPanel({
                       </div>
                       <div>
                         <CardTitle className="text-sm">Skill library</CardTitle>
-                        <CardDescription>Attach curated skills from the catalog with one click. Each skill adds its bundled Markdown files to the agent.</CardDescription>
+                        <CardDescription>Attach curated skills from the catalog with one click.</CardDescription>
                       </div>
                     </div>
                     <div className="flex items-center gap-1">
@@ -927,32 +918,32 @@ export function CreateAgentPanel({
                     </Select>
                   </div>
 
-                  <ScrollArea className="max-h-[430px] pr-3">
-                    <div className="space-y-3">
+                  <div className="max-h-[480px] overflow-y-auto pr-1">
+                    <div className="space-y-2">
                       {filteredSkills.map((skill) => {
                         const detail = skillDetailsById[skill.id];
                         const attached = hasSkillAttached(detail, draftPaths);
                         return (
                           <div
                             key={skill.id}
-                            className={`rounded-2xl border p-4 transition ${
+                            className={`rounded-lg border p-3 transition ${
                               attached
-                                ? "border-primary/35 bg-primary/10 shadow-inner shadow-primary/10"
-                                : "border-border/70 bg-background/60 hover:border-primary/20 hover:bg-accent/35"
+                                ? "border-primary/20 bg-primary/5"
+                                : "border-border/30 bg-muted/15 hover:bg-muted/25"
                             }`}
                           >
                             <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0 space-y-2">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="font-medium text-foreground">{skill.name}</p>
-                                  <Badge variant="outline" className={SKILL_CATEGORY_STYLES[skill.category] ?? ""}>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-medium text-foreground">{skill.name}</p>
+                                <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                                  {skill.description}
+                                </p>
+                                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 capitalize">
                                     {skill.category}
                                   </Badge>
-                                </div>
-                                <p className="text-sm leading-6 text-muted-foreground">{skill.description}</p>
-                                <div className="flex flex-wrap gap-2">
-                                  {skill.tags.slice(0, 4).map((tag) => (
-                                    <Badge key={tag} variant="secondary" className="rounded-full px-2.5 py-0.5 text-[10px]">
+                                  {skill.tags.slice(0, 3).map((tag) => (
+                                    <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">
                                       {tag}
                                     </Badge>
                                   ))}
@@ -961,10 +952,11 @@ export function CreateAgentPanel({
                               <Button
                                 variant={attached ? "secondary" : "default"}
                                 size="sm"
+                                className="h-7 shrink-0 text-xs"
                                 onClick={() => void handleToggleSkill(skill.id)}
                                 disabled={skillBusyId === skill.id || !token.trim()}
                               >
-                                {skillBusyId === skill.id ? <LoaderCircle className="mr-1.5 h-4 w-4 animate-spin" /> : null}
+                                {skillBusyId === skill.id ? <LoaderCircle className="mr-1 size-3.5 animate-spin" /> : null}
                                 {attached ? "Remove" : "Attach"}
                               </Button>
                             </div>
@@ -972,60 +964,47 @@ export function CreateAgentPanel({
                         );
                       })}
                       {!catalogLoading && filteredSkills.length === 0 ? (
-                        <div className="rounded-2xl border border-dashed border-border/70 bg-background/40 px-4 py-8 text-center text-sm text-muted-foreground">
+                        <div className="rounded-lg border border-dashed border-border/40 py-8 text-center text-sm text-muted-foreground">
                           No skills match the current filters.
                         </div>
                       ) : null}
                     </div>
-                  </ScrollArea>
+                  </div>
                 </CardContent>
               </Card>
 
-              <Card className="shadow-none">
-                <CardHeader className="pb-3">
-                  <div className="flex items-center gap-2">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-violet-500/20 bg-violet-500/10 text-violet-300">
-                      <Sparkles className="h-4 w-4" />
-                    </div>
-                    <div>
-                      <CardTitle className="text-sm">Attached guidance</CardTitle>
-                      <CardDescription>See which curated skills and custom files will ship with the agent.</CardDescription>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
-                      <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">Catalog skills</p>
-                      <p className="mt-1 text-xl font-semibold text-foreground">{selectedCatalogSkills.length}</p>
-                    </div>
-                    <div className="rounded-2xl border border-border/60 bg-background/60 p-3">
-                      <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">Markdown files</p>
-                      <p className="mt-1 text-xl font-semibold text-foreground">{skillFileDrafts.length}</p>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <p className="text-xs font-medium text-foreground">Selected catalog skills</p>
-                    {selectedCatalogSkills.length > 0 ? (
-                      <div className="flex flex-wrap gap-2">
-                        {selectedCatalogSkills.map((skill) => (
-                          <Badge key={skill.id} variant="secondary" className="rounded-full px-3 py-1">
-                            {skill.name}
-                          </Badge>
-                        ))}
+              {/* Compact sidebar */}
+              <div className="space-y-3">
+                <Card className="shadow-none">
+                  <CardContent className="p-4">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="rounded-lg border border-border/30 bg-muted/15 p-2.5">
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground/60">Skills</p>
+                        <p className="mt-0.5 text-lg font-semibold text-foreground">{selectedCatalogSkills.length}</p>
                       </div>
-                    ) : (
-                      <p className="text-sm text-muted-foreground">No curated skills attached yet.</p>
-                    )}
-                  </div>
-                  <div className="rounded-2xl border border-border/60 bg-background/60 p-3 text-sm text-muted-foreground">
-                    Curated skills are added as ordinary Markdown files, so you can still inspect and edit them before creation.
-                  </div>
-                </CardContent>
-              </Card>
+                      <div className="rounded-lg border border-border/30 bg-muted/15 p-2.5">
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground/60">Files</p>
+                        <p className="mt-0.5 text-lg font-semibold text-foreground">{skillFileDrafts.length}</p>
+                      </div>
+                    </div>
+                    <div className="mt-3 space-y-1.5">
+                      {selectedCatalogSkills.length > 0 ? (
+                        selectedCatalogSkills.map((skill) => (
+                          <div key={skill.id} className="flex items-center gap-1.5">
+                            <span className="size-1.5 shrink-0 rounded-full bg-primary/40" />
+                            <span className="truncate text-xs text-foreground/70">{skill.name}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-xs text-muted-foreground/50">No skills attached yet.</p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
             </div>
 
-            <Accordion type="single" collapsible className="rounded-2xl border border-border/70 bg-background/50 px-4">
+            <Accordion type="single" collapsible className="rounded-xl border border-border/40 bg-muted/15 px-4">
               <AccordionItem value="advanced-files" className="border-none">
                 <AccordionTrigger className="py-4 text-sm font-medium">Advanced file editors</AccordionTrigger>
                 <AccordionContent className="space-y-4">

@@ -164,6 +164,8 @@ class TraceClient:
         cost_usd: float | None = None,
         latency_ms: float | None = None,
         provider: str | None = None,
+        reasoning_text: str = "",
+        finish_reason: str = "",
     ) -> None:
         self._append_event(
             event_type="llm_call_completed",
@@ -181,6 +183,8 @@ class TraceClient:
                 "latency_ms": latency_ms,
                 "prompt_preview": prompt[:1024],
                 "response_preview": response[:2048],
+                "reasoning_text": reasoning_text,
+                "finish_reason": finish_reason,
             },
         )
 

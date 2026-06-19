@@ -454,6 +454,8 @@ def emit_llm_call(
     duration_ms: int | None = None,
     session_id: str | None = None,
     thread_id: str | None = None,
+    reasoning_text: str = "",
+    finish_reason: str = "",
 ) -> None:
     _sync_emit({
         "event_type": "llm.call",
@@ -461,7 +463,7 @@ def emit_llm_call(
         "session_id": session_id,
         "thread_id": thread_id,
         "severity": "info",
-        "payload": {"model": model},
+        "payload": {"model": model, "reasoning_text": reasoning_text, "finish_reason": finish_reason},
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "cache_read_tokens": cache_read_tokens,

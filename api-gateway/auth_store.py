@@ -139,7 +139,6 @@ else:
     _engine_kwargs["pool_recycle"] = pool_recycle
     _engine_kwargs["pool_timeout"] = pool_timeout
     _engine_kwargs["connect_args"] = {
-        "connect_timeout": 10,
         "options": f"-c statement_timeout={max(int(os.getenv('DB_STATEMENT_TIMEOUT_MS', '30000')), 5000)}ms",
     }
 
@@ -158,7 +157,6 @@ class User(Base):
     password_hash = Column(String(255), nullable=True)
     role = Column(String(32), nullable=False, default="viewer")
     allowed_namespaces = Column(JSON, nullable=False, default=list)
-    capabilities = Column(JSON, nullable=False, default=dict)
     auth_provider = Column(String(64), nullable=False, default="local")
     external_id = Column(String(255), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
@@ -1910,7 +1908,6 @@ def serialize_user(user: User) -> dict[str, Any]:
         "display_name": user.display_name,
         "role": user.role,
         "allowed_namespaces": normalize_allowed_namespaces_for_role(user.role, user.allowed_namespaces),
-        "capabilities": dict(user.capabilities or {}),
         "auth_provider": user.auth_provider,
         "is_active": bool(user.is_active),
         "created_at": ensure_utc(user.created_at).isoformat() if user.created_at else None,
@@ -2207,7 +2204,6 @@ def create_local_user(
     allowed_namespaces: list[str] | None = None,
     auth_provider: str = "local",
     external_id: str | None = None,
-    capabilities: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_username = username.strip().lower()
     if not normalized_username:
@@ -2224,7 +2220,6 @@ def create_local_user(
         allowed_namespaces,
         default_namespaces=DEFAULT_ALLOWED_NAMESPACES,
     )
-    sanitized_capabilities = _sanitize_capabilities(role, capabilities or {})
 
     with db_session() as session:
         if session.query(User).filter(User.username == normalized_username).one_or_none() is not None:
@@ -2239,7 +2234,6 @@ def create_local_user(
             password_hash=hash_password(password),
             role=role,
             allowed_namespaces=normalized_allowed_namespaces,
-            capabilities=sanitized_capabilities,
             auth_provider=auth_provider,
             external_id=external_id,
             is_active=True,
@@ -2318,7 +2312,6 @@ def update_user_fields(
     role: str | None = None,
     is_active: bool | None = None,
     allowed_namespaces: list[str] | None = None,
-    capabilities: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     with db_session() as session:
         user = session.get(User, user_id)
@@ -2346,31 +2339,10 @@ def update_user_fields(
                 user.allowed_namespaces,
                 default_namespaces=DEFAULT_ALLOWED_NAMESPACES,
             )
-        if capabilities is not None:
-            sanitized = _sanitize_capabilities(next_role, capabilities)
-            user.capabilities = sanitized
         user.updated_at = utc_now()
         session.flush()
         session.refresh(user)
         return serialize_user(user)
-
-
-def _sanitize_capabilities(role: str, capabilities: dict[str, Any]) -> dict[str, Any]:
-    """Strip unsupported capabilities and force-least-privilege defaults."""
-    if not isinstance(capabilities, dict):
-        return {}
-    sanitized: dict[str, Any] = {}
-    for key, value in capabilities.items():
-        if key == "runtime:logs":
-            if role == "admin":
-                # Admin is always allowed; we don't need to store it.
-                continue
-            if not isinstance(value, bool):
-                raise ValueError("Capability 'runtime:logs' must be a boolean.")
-            sanitized["runtime:logs"] = value
-        # Unknown capability keys are dropped silently to keep this contract
-        # forward-compatible — old admin clients won't crash on new flags.
-    return sanitized
 
 
 def delete_local_user(user_id: int) -> dict[str, Any]:

@@ -46,6 +46,28 @@ _pooled_client_base_url: str = ""
 _pooled_client_auth_key: str = ""
 
 
+class _PooledClientProxy:
+    """Context-manager-safe wrapper around the pooled httpx.Client.
+
+    Delegates all attribute access to the pooled client but overrides
+    ``__exit__`` so that ``with runtime_http_client() as client:`` does NOT
+    close the shared connection pool — only the program-level shutdown path
+    (``close_pooled_client``) closes the underlying client.
+    """
+
+    def __init__(self, client: httpx.Client) -> None:
+        object.__setattr__(self, "_wrapped", client)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_wrapped"), name)
+
+    def __enter__(self) -> httpx.Client:
+        return object.__getattribute__(self, "_wrapped")
+
+    def __exit__(self, *args: Any) -> None:
+        pass  # never close the pooled client
+
+
 def _opencode_server_auth() -> tuple[str, str] | None:
     password = _supervisor_mod.resolve_opencode_server_password()
     if not password:
@@ -96,22 +118,6 @@ def close_pooled_client() -> None:
             _pooled_client = None
 
 
-class RuntimeHttpClientLease:
-    """No-close context manager for the shared OpenCode HTTP client."""
-
-    def __init__(self, client: httpx.Client) -> None:
-        self._client = client
-
-    def __enter__(self) -> httpx.Client:
-        return self._client
-
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
-        return False
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._client, name)
-
-
 # ---------------------------------------------------------------------------
 # Ascending message-ID generator (matches OpenCode's ID format so that
 # string comparison ``lastUser.id < lastAssistant.id`` works correctly in
@@ -148,15 +154,16 @@ def ensure_server_running() -> None:
         raise HTTPException(status_code=503, detail="OpenCode server is not running")
 
 
-def runtime_http_client() -> RuntimeHttpClientLease:
+def runtime_http_client() -> _PooledClientProxy:
     """Return the shared pooled httpx client for the OpenCode server.
 
-    Existing call sites use ``with runtime_http_client() as client``. Returning
-    the raw ``httpx.Client`` would close the shared pool at the end of each
-    block, so this function returns a lightweight lease whose ``__exit__`` is a
-    no-op. The real client is closed only by ``close_pooled_client()``.
+    WP-6: Returns the module-level pooled client instead of constructing a
+    new one per call.  Callers must NOT close this client (it is shared); all
+    existing ``with runtime_http_client() as client:`` call sites continue to
+    work because the returned proxy's ``__exit__`` is a no-op that never
+    closes the underlying connection pool.
     """
-    return RuntimeHttpClientLease(_get_pooled_client())
+    return _PooledClientProxy(_get_pooled_client())
 
 
 def build_model_payload(model_ref: str) -> dict[str, str]:
@@ -569,21 +576,33 @@ def list_pending_permissions() -> list[dict[str, Any]]:
 
 
 def auto_approve_pending_questions() -> list[str]:
-    """Auto-handle pending permission requests in autonomous mode.
+    """Auto-approve all pending questions and permission requests.
 
     This is used when the runtime is operating in autonomous/headless mode
     (HITL_MODE=disabled) where no human is available to interactively
     approve bash/edit/write tool use. The OpenCode immutable config sets
     permissions to "ask" as a security floor, but in autonomous mode these
-    permission prompts must be handled to avoid deadlock.
+    questions must be auto-approved to avoid deadlock.
 
-    Regular model questions are intentionally not answered here. Guessing
-    "Yes" can approve arbitrary user-visible choices, so those questions remain
-    available through the existing /question endpoints and SSE events.
+    Handles two separate question types:
+    1. Regular questions via GET /question and POST /question/{id}/reply
+    2. Permission questions via GET /permission and POST /permission/{id}/reply
 
-    Returns a list of approved permission IDs.
+    Returns a list of all approved question/permission IDs.
     """
     approved_ids: list[str] = []
+
+    # Handle regular questions
+    questions = list_pending_questions()
+    for q in questions:
+        qid = str(q.get("id", "")).strip()
+        if not qid:
+            continue
+        if reply_to_question(qid, [["Yes"]]):
+            approved_ids.append(qid)
+            logger.info("Auto-approved question %s (autonomous mode)", qid)
+        else:
+            logger.warning("Failed to auto-approve question %s", qid)
 
     # Handle permission questions (bash/edit/write "ask" prompts)
     # These have IDs starting with "per_" and use a different endpoint.

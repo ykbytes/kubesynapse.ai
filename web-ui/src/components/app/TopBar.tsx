@@ -1,7 +1,6 @@
 import { Check, CheckCircle2, ChevronDown, Loader2, Palette, XCircle } from "lucide-react";
 import { KubeSynapseLogo } from "@/components/shared/KubeSynapseLogo";
 import { useState, useEffect, useCallback } from "react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { StatusBadge } from "../shared/StatusBadge";
@@ -251,7 +250,6 @@ export function TopBar({
               />
             </div>
           )}
-          {currentUser ? <Badge variant="outline" className="hidden h-5 bg-card/72 px-1.5 text-[10px] text-muted-foreground sm:inline-flex">{currentUser.role}</Badge> : null}
           <ThemePicker />
           <NotificationCenter />
           <ConnectionDialog

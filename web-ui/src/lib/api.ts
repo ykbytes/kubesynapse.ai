@@ -2876,6 +2876,9 @@ function parseLLMCallRecordPayload(payload: unknown, label = "LLMCallRecord"): L
       readOptionalNumber(record, "estimated_cost_usd", label) ??
       readOptionalNumber(record, "cost_usd", label),
     latency_ms: readOptionalNumber(record, "latency_ms", label) ?? 0,
+    reasoning_tokens: readOptionalNumber(record, "reasoning_tokens", label) ?? 0,
+    reasoning_text: readOptionalString(record, "reasoning_text", label),
+    finish_reason: readOptionalString(record, "finish_reason", label),
     prompt_preview: readOptionalString(record, "prompt_preview", label),
     response_preview: readOptionalString(record, "response_preview", label),
     created_at:
