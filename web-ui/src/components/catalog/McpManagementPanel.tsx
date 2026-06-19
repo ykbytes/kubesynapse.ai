@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AlertTriangle, Plug, RefreshCw } from "lucide-react";
+import { AlertTriangle, RefreshCw } from "lucide-react";
 
 import {
   createMcpConnection,
@@ -15,7 +14,6 @@ import {
   fetchMcpConnectionBindings,
   fetchMcpConnections,
   fetchMcpRegistry,
-  fetchMcpProfiles,
   fetchMcpStats,
   fetchMcpCategories,
   refreshMcpConnectionOAuth,
@@ -28,12 +26,10 @@ import type {
   McpCategory,
   McpConnection,
   McpConnectionBinding,
-  McpProfile,
   McpRegistryServer,
   McpStats,
 } from "@/types";
 
-import { McpArchitectureTab } from "../mcp/McpArchitectureTab";
 import { McpConnectionsTab } from "../mcp/McpConnectionsTab";
 import {
   type McpConnectionDraft,
@@ -43,10 +39,9 @@ import {
   resolveEffectiveRemoteEndpoint,
   trimRecordValues,
 } from "../mcp/mcp-helpers";
-import { McpProfilesTab } from "../mcp/McpProfilesTab";
 import { McpRegistryTab } from "../mcp/McpRegistryTab";
 
-type McpManagementTab = "registry" | "connections" | "profiles" | "architecture";
+type McpManagementTab = "registry" | "connections";
 
 interface McpManagementPanelProps {
   token: string;
@@ -90,7 +85,6 @@ function validateConnectionDraft(
 
 export function McpManagementPanel({ token, namespace }: McpManagementPanelProps) {
   const [registry, setRegistry] = useState<McpRegistryServer[]>([]);
-  const [profiles, setProfiles] = useState<McpProfile[]>([]);
   const [stats, setStats] = useState<McpStats | null>(null);
   const [categories, setCategories] = useState<McpCategory[]>([]);
   const [connections, setConnections] = useState<McpConnection[]>([]);
@@ -126,15 +120,13 @@ export function McpManagementPanel({ token, namespace }: McpManagementPanelProps
     setLoading(true);
     setError("");
     try {
-      const [reg, prof, st, cats, savedConnections] = await Promise.all([
+      const [reg, st, cats, savedConnections] = await Promise.all([
         fetchMcpRegistry(token),
-        fetchMcpProfiles(token),
         fetchMcpStats(token),
         fetchMcpCategories(token),
         fetchMcpConnections(token, namespace),
       ]);
       setRegistry(reg);
-      setProfiles(prof);
       setStats(st);
       setCategories(cats);
       setConnections(savedConnections);
@@ -423,22 +415,7 @@ export function McpManagementPanel({ token, namespace }: McpManagementPanelProps
 
   return (
     <ScrollArea className="flex-1">
-      <div className="mx-auto max-w-7xl space-y-4 p-3 pb-20 sm:p-4 md:pb-0">
-        {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/60 bg-gradient-to-br from-background/95 to-muted/25 px-4 py-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <Plug className="h-5 w-5 text-foreground/60" />
-            <h1 className="text-base font-semibold text-foreground">MCP Server Registry</h1>
-            <Badge variant="outline" className="border-border/60 bg-background/80 text-xs">
-              {namespace}
-            </Badge>
-          </div>
-          <Button variant="outline" size="sm" onClick={() => void loadData()} disabled={loading} className="gap-1.5">
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
-        </div>
-
+      <div className="mx-auto max-w-7xl space-y-3 p-3 pb-20 sm:p-4 md:pb-0">
         {error && (
           <Card className="border-destructive/30 bg-destructive/8 rounded-2xl">
             <CardContent className="flex items-center gap-3 py-3">
@@ -448,35 +425,29 @@ export function McpManagementPanel({ token, namespace }: McpManagementPanelProps
           </Card>
         )}
 
-        {/* Stats */}
-        {stats && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            <span>Servers <span className="font-semibold tabular-nums text-foreground">{stats.total_servers}</span></span>
-            <span>·</span>
-            <span>Tools <span className="font-semibold tabular-nums text-foreground">{stats.total_tools}</span></span>
-            <span>·</span>
-            <span>Profiles <span className="font-semibold tabular-nums text-foreground">{stats.total_profiles}</span></span>
-            <span>·</span>
-            <span>Categories <span className="font-semibold tabular-nums text-foreground">{stats.categories}</span></span>
+        {/* Tabs — compact inline switcher */}
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as McpManagementTab)} className="space-y-3">
+          <div className="flex items-center gap-3">
+            <TabsList className="h-8 gap-0.5 rounded-lg border border-border/40 bg-muted/20 p-0.5">
+              <TabsTrigger value="registry" className="h-7 rounded-md px-3 text-xs">
+                Registry
+              </TabsTrigger>
+              <TabsTrigger value="connections" className="h-7 rounded-md px-3 text-xs">
+                Connections
+              </TabsTrigger>
+            </TabsList>
+            {stats && (
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <span>{stats.total_servers} servers</span>
+                <span>·</span>
+                <span>{stats.total_tools} tools</span>
+              </div>
+            )}
+            <Button variant="outline" size="sm" onClick={() => void loadData()} disabled={loading} className="ml-auto h-7 gap-1.5 text-xs">
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
           </div>
-        )}
-
-        {/* Tabs */}
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as McpManagementTab)} className="space-y-4">
-          <TabsList className="h-auto flex-wrap justify-start gap-1 rounded-2xl border border-border/60 bg-background/70 p-1">
-            <TabsTrigger value="registry" className="rounded-xl px-4 py-2 text-sm">
-              Registry
-            </TabsTrigger>
-            <TabsTrigger value="connections" className="rounded-xl px-4 py-2 text-sm">
-              Connections
-            </TabsTrigger>
-            <TabsTrigger value="profiles" className="rounded-xl px-4 py-2 text-sm">
-              Profiles
-            </TabsTrigger>
-            <TabsTrigger value="architecture" className="rounded-xl px-4 py-2 text-sm">
-              Architecture
-            </TabsTrigger>
-          </TabsList>
 
           <TabsContent value="registry">
             <McpRegistryTab
@@ -515,14 +486,6 @@ export function McpManagementPanel({ token, namespace }: McpManagementPanelProps
               onRefreshOAuth={handleRefreshSelectedConnectionOAuth}
               onNewConnection={handleStartNewConnection}
             />
-          </TabsContent>
-
-          <TabsContent value="profiles">
-            <McpProfilesTab profiles={profiles} />
-          </TabsContent>
-
-          <TabsContent value="architecture">
-            <McpArchitectureTab />
           </TabsContent>
         </Tabs>
       </div>

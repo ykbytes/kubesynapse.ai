@@ -2505,6 +2505,16 @@ def create_agent_statefulset_manifest(
                 },
             },
             {
+                "name": "API_GATEWAY_SHARED_TOKEN",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": SECRET_NAME,
+                        "key": "API_GATEWAY_SHARED_TOKEN",
+                        "optional": True,
+                    }
+                },
+            },
+            {
                 "name": "OPENCODE_SERVER_PASSWORD",
                 "valueFrom": {
                     "secretKeyRef": {

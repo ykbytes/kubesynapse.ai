@@ -1197,6 +1197,8 @@ export interface LLMCallRecord {
   cache_read_tokens?: number | null;
   cache_write_tokens?: number | null;
   reasoning_tokens?: number | null;
+  reasoning_text?: string | null;
+  finish_reason?: string | null;
   total_tokens: number;
   cost_usd?: number | null;
   estimated_cost_usd?: number | null;

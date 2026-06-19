@@ -658,10 +658,10 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
             total_tokens = prompt_tokens + completion_tokens + cache_read_tokens + cache_write_tokens + reasoning_tokens
         if total_tokens == 0:
             return  # Skip zero-token LLM call events (nothing to record)
-        full_prompt = _coerce_text(event_data.get("prompt_text") or event_data.get("full_prompt"))
-        full_response = _coerce_text(event_data.get("response_text") or event_data.get("full_response"))
-        reasoning_text = _coerce_text(event_data.get("reasoning_text"))
-        system_prompt_val = _coerce_text(event_data.get("system_prompt"))
+        full_prompt = _coerce_text(payload.get("prompt_text") or payload.get("full_prompt") or event_data.get("prompt_text") or event_data.get("full_prompt"))
+        full_response = _coerce_text(payload.get("response_text") or payload.get("full_response") or event_data.get("response_text") or event_data.get("full_response"))
+        reasoning_text = _coerce_text(payload.get("reasoning_text") or event_data.get("reasoning_text"))
+        system_prompt_val = _coerce_text(payload.get("system_prompt") or event_data.get("system_prompt"))
         finish_reason = payload.get("finish_reason")
         effective_step_id = step_id or f"step-runtime-{execution_id[:16]}"
         if not step_id:

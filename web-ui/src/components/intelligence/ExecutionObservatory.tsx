@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   Activity,
+  BarChart3,
   BookOpen,
   Bot,
   Braces,
@@ -18,7 +19,6 @@ import {
   GitCompare,
   Globe,
   Lightbulb,
-  Layers,
   LoaderCircle,
   Maximize2,
   Minimize2,
@@ -92,18 +92,20 @@ import { Highlight, type Language } from "prism-react-renderer";
 import { KubeSynapseTheme } from "@/components/docs/shared";
 
 import { CopyButton } from "../shared/CopyButton";
+import { AnalyticsView } from "../observatory/AnalyticsView";
+import { DetailDrawer, type DetailItem } from "../observatory/DetailDrawer";
 import { ExecutionBanner } from "../observatory/ExecutionBanner";
 import { ExecutionDiffView } from "../observatory/ExecutionDiffView";
 import { ExecutionTimeline } from "../observatory/ExecutionTimeline";
+import { ExecutionTimelineView } from "../observatory/ExecutionTimelineView";
 import { LLMCallViewer } from "../observatory/LLMCallViewer";
-import { ObservatoryOverview } from "../observatory/ObservatoryOverview";
 import { RunsRail } from "../observatory/RunsRail";
 import { LiveActivityStream, useWorkflowActivities } from "./LiveActivityStream";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 type LogFilterMode = "all" | "activity" | "errors" | "tooling";
-type ObservatoryTab = "overview" | "trace" | "optimise" | "logs" | "compare";
+type ObservatoryTab = "timeline" | "analytics" | "trace" | "optimise" | "logs" | "compare";
 type OptimisationScope = "current" | "last6" | "last20";
 type OptimisationRunPhaseKey = "prepare" | "study" | "agent" | "candidate" | "roi";
 type OptimisationRunPhaseStatus = "pending" | "running" | "success" | "error";
@@ -3305,9 +3307,10 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
   const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(externalSelectedId ?? null);
   const [detail, setDetail] = useState<ExecutionTrace | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<ObservatoryTab>("overview");
+  const [activeTab, setActiveTab] = useState<ObservatoryTab>("timeline");
   const [selectedLLM, setSelectedLLM] = useState<LLMCallRecord | null>(null);
   const [llmViewerOpen, setLlmViewerOpen] = useState(false);
+  const [selectedDetailItem, setSelectedDetailItem] = useState<DetailItem | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [selectedLogStep, setSelectedLogStep] = useState<string>("all");
   const [logSearch, setLogSearch] = useState("");
@@ -3396,7 +3399,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
       return;
     }
     setSelectedRunId(null); setSelectedExecutionId(null); setDetail(null);
-    setRunTrace(null); setRunTraceError(""); setActiveTab("overview");
+    setRunTrace(null); setRunTraceError(""); setActiveTab("timeline");
     void loadRuns(); void loadExecutions();
   }, [loadExecutions, loadRuns, selectedWorkflowName]);
 
@@ -3408,7 +3411,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
       return;
     }
     if (observatoryFocus.runId) setSelectedRunId(observatoryFocus.runId);
-    setActiveTab("overview");
+    setActiveTab("timeline");
     clearObservatoryFocus();
   }, [clearObservatoryFocus, navigateToResource, observatoryFocus, selectedWorkflowName]);
 
@@ -3595,6 +3598,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
     setSelectedEventId(null); setSelectedLogStep("all");
     setLogSearch(""); setLogFilterMode("activity");
     setSelectedStepId(null);
+    setSelectedDetailItem(null);
     setOptimiseResult(null); setOptimiseError("");
     setOptimiseStudy(null); setOptimiseCandidate(null); setOptimiseRoi(null); setOptimiseComparison(null); setOptimiseStudyError("");
     setOptimiseActionLoading(null); setOptimiseApplyPreview(null); setOptimiseDatasetPreview(null);
@@ -4040,7 +4044,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
           <RunsRail
             runs={runs}
             selectedRunId={selectedRunId}
-            onSelectRun={(id) => { setSelectedRunId(id); setActiveTab("overview"); }}
+            onSelectRun={(id) => { setSelectedRunId(id); setActiveTab("timeline"); }}
             loading={runLoading}
             workflowName={selectedWorkflowName}
           />
@@ -4073,9 +4077,13 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
             <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as ObservatoryTab)} className="flex min-h-0 flex-1 flex-col overflow-hidden">
               <div className="shrink-0 border-b border-border/40 px-3">
                 <TabsList className="h-9 gap-0 rounded-none border-0 bg-transparent p-0">
-                  <TabsTrigger value="overview" className="relative h-9 rounded-none border-b-2 border-transparent px-3 text-xs font-medium transition-colors data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none">
-                    <Layers className="mr-1.5 h-3.5 w-3.5" />
-                    Overview
+                  <TabsTrigger value="timeline" className="relative h-9 rounded-none border-b-2 border-transparent px-3 text-xs font-medium transition-colors data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none">
+                    <Activity className="mr-1.5 h-3.5 w-3.5" />
+                    Timeline
+                  </TabsTrigger>
+                  <TabsTrigger value="analytics" className="relative h-9 rounded-none border-b-2 border-transparent px-3 text-xs font-medium transition-colors data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none">
+                    <BarChart3 className="mr-1.5 h-3.5 w-3.5" />
+                    Analytics
                   </TabsTrigger>
                   <TabsTrigger value="trace" className="relative h-9 rounded-none border-b-2 border-transparent px-3 text-xs font-medium transition-colors data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none">
                     <BrainCircuit className="mr-1.5 h-3.5 w-3.5" />
@@ -4098,15 +4106,51 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                 </TabsList>
               </div>
 
-              {/* ═══════ OVERVIEW TAB ═══════ */}
-              <TabsContent value="overview" className="mt-0 min-h-0 flex-1 overflow-y-auto">
-                <ObservatoryOverview
+              {/* ═══════ TIMELINE TAB ═══════ */}
+              <TabsContent value="timeline" className="mt-0 min-h-0 flex-1 overflow-hidden">
+                <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_minmax(320px,0.34fr)] overflow-hidden">
+                  <ExecutionTimelineView
+                    detail={detail}
+                    selectedItemId={selectedDetailItem?.item.id ?? selectedStepId}
+                    onStepClick={(step) => {
+                      setSelectedStepId(step.id);
+                      setSelectedDetailItem({ type: "step", item: step });
+                    }}
+                    onLLMClick={(call) => {
+                      setSelectedLLM(call);
+                      setSelectedDetailItem({ type: "llm", item: call });
+                    }}
+                    onToolClick={(call) => {
+                      setSelectedDetailItem({ type: "tool", item: call });
+                    }}
+                  />
+                  {selectedDetailItem ? (
+                    <DetailDrawer detail={selectedDetailItem} onClose={() => setSelectedDetailItem(null)} />
+                  ) : (
+                    <div className="flex min-h-0 flex-col border-l border-border/40 bg-muted/10">
+                      <div className="border-b border-border/40 px-5 py-4">
+                        <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Inspector</div>
+                        <div className="mt-0.5 text-base font-semibold text-foreground">Select an execution item</div>
+                      </div>
+                      <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">
+                        Pick a step, LLM call, or tool call in the timeline to inspect reasoning, prompts, outputs, and timing.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </TabsContent>
+
+              {/* ═══════ ANALYTICS TAB ═══════ */}
+              <TabsContent value="analytics" className="mt-0 min-h-0 flex-1 overflow-y-auto">
+                <AnalyticsView
                   detail={detail}
                   run={selectedRun}
                   previousRuns={runs}
-                  onStepClick={(step) => { setSelectedStepId(step.id); setActiveTab("trace"); }}
-                  onJumpToErrors={() => { setLogFilterMode("errors"); setActiveTab("logs"); }}
-                  onViewLogs={() => setActiveTab("logs")}
+                  onStepClick={(step) => {
+                    setSelectedStepId(step.id);
+                    setSelectedDetailItem({ type: "step", item: step });
+                    setActiveTab("timeline");
+                  }}
                 />
               </TabsContent>
 

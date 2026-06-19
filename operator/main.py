@@ -134,8 +134,8 @@ class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
 
 
 def _start_health_check_server() -> threading.Thread:
-    """Start health check HTTP server on port 8080."""
-    port = int(os.getenv("OPERATOR_HEALTH_PORT", "8080"))
+    """Start health check HTTP server on a dedicated port (8081)."""
+    port = int(os.getenv("OPERATOR_HEALTH_PORT", "8081"))
     server = socketserver.TCPServer(("0.0.0.0", port), HealthCheckHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -145,8 +145,6 @@ def _start_health_check_server() -> threading.Thread:
 
 def _handle_shutdown_signal(signum: int, frame: Any) -> None:  # type: ignore[no-untyped-def]
     """Handle SIGTERM/SIGINT gracefully."""
-    global _shutting_down
-    _shutting_down = True
     OPERATOR_STATE["shutdown_requested"] = True
     logger.info("Shutdown signal received (sig=%d)", signum)
 
@@ -155,21 +153,23 @@ def _handle_shutdown_signal(signum: int, frame: Any) -> None:  # type: ignore[no
 # Startup / shutdown hooks
 # ---------------------------------------------------------------------------
 
-
-def _register_shutdown_handlers() -> None:
-    """Install signal handlers only from the interpreter main thread."""
-    if threading.current_thread() is not threading.main_thread():
-        logger.debug("Skipping signal handler registration outside the main thread.")
-        return
-    signal.signal(signal.SIGTERM, _handle_shutdown_signal)
-    signal.signal(signal.SIGINT, _handle_shutdown_signal)
-
 @kopf.on.startup()
 def configure(settings: kopf.OperatorSettings, **_) -> None:
     """Ensure K8s client is authenticated when the operator starts."""
     logger.info("Operator startup: version=%s", os.getenv("OPERATOR_VERSION", "unknown"))
 
-    _register_shutdown_handlers()
+    # Graceful shutdown handlers (only available on main thread)
+    try:
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGTERM, _handle_shutdown_signal)
+            signal.signal(signal.SIGINT, _handle_shutdown_signal)
+        else:
+            logger.info("Skipping signal handlers: not on main thread")
+    except ValueError as exc:
+        logger.warning("Skipping signal handlers: %s", exc)
+
+    # Health check server
+    _start_health_check_server()
 
     # Kopf configuration
     settings.persistence.finalizer = "kubesynapse.ai/finalizer"
@@ -240,7 +240,9 @@ async def cleanup(logger: logging.Logger, **_kwargs: object) -> None:
 
 def _sigterm_handler(signum: int, _frame: object) -> None:
     """Mark operator as shutting down on SIGTERM."""
-    _handle_shutdown_signal(signum, _frame)
+    global _shutting_down
+    _shutting_down = True
+    logger.info("Received signal %s — graceful shutdown initiated.", signum)
 
 
-_register_shutdown_handlers()
+signal.signal(signal.SIGTERM, _sigterm_handler)

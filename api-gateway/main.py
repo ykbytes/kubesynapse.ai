@@ -13,7 +13,6 @@ import logging
 
 # Import shared infrastructure needed by the app factory
 from _core import (
-    _Instrumentator,
     cors_origins,
     lifespan,
 )

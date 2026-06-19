@@ -807,12 +807,13 @@ def invoke_agent_runtime(
         raise ValueError(f"Invalid namespace for runtime invocation: {namespace!r}")
     effective_timeout = timeout_seconds or AGENT_RUNTIME_TIMEOUT_SECONDS
     url = f"{runtime_url(agent_name, namespace)}/invoke"
+    headers = runtime_auth_headers()
     last_exc: Exception | None = None
     for attempt in range(3):
         # Create a fresh client per attempt so each gets the full timeout
         # budget instead of sharing a single countdown across retries.
         with httpx.Client(timeout=effective_timeout) as client:
-            response = client.post(url, json=payload, headers=runtime_auth_headers())
+            response = client.post(url, json=payload, headers=headers)
         if response.status_code < 500:
             if response.status_code >= 400:
                 raise httpx.HTTPStatusError(
@@ -851,11 +852,12 @@ def invoke_agent_runtime_stream(
         raise ValueError(f"Invalid namespace for runtime invocation: {namespace!r}")
     effective_timeout = timeout_seconds or AGENT_RUNTIME_TIMEOUT_SECONDS
     stream_url = f"{runtime_url(agent_name, namespace)}/invoke/stream"
+    headers = runtime_auth_headers()
     prefix = f"[opencode {step_name} iter={iteration}]" if step_name else f"[opencode {agent_name}]"
 
     try:
         with httpx.Client(timeout=effective_timeout) as client:  # noqa: SIM117 — nested with for clarity
-            with client.stream("POST", stream_url, json=payload, headers=runtime_auth_headers()) as resp:
+            with client.stream("POST", stream_url, json=payload, headers=headers) as resp:
                 if resp.status_code >= 400:
                     logger.warning(
                         "%s stream returned %d, falling back to /invoke: %s",
@@ -1017,8 +1019,9 @@ def cancel_agent_session(
     """
     try:
         url = f"{runtime_url(agent_name, namespace)}/cancel"
+        headers = runtime_auth_headers()
         with httpx.Client(timeout=timeout_seconds) as client:
-            response = client.post(url, params={"thread_id": thread_id}, headers=runtime_auth_headers())
+            response = client.post(url, params={"thread_id": thread_id}, headers=headers)
         return response.status_code == 200
     except Exception as exc:
         logger.debug("Agent session cancel failed for %s/%s: %s", agent_name, namespace, exc, exc_info=True)

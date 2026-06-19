@@ -769,11 +769,15 @@ def _send_prompt_async_with_session_recovery(
                 payload = dict(latest_payload)
                 payload["_session_recovered"] = recovered
                 payload["_live_streamed"] = bool(last_snapshots["text"] or last_snapshots["reasoning"])
+                if last_snapshots.get("reasoning"):
+                    payload["_reasoning_text"] = last_snapshots["reasoning"]
                 return session_id, payload
             if session_idle and _is_stuck_idle_payload(latest_payload):
                 payload = dict(latest_payload)
                 payload["_session_recovered"] = recovered
                 payload["_live_streamed"] = bool(last_snapshots["text"] or last_snapshots["reasoning"])
+                if last_snapshots.get("reasoning"):
+                    payload["_reasoning_text"] = last_snapshots["reasoning"]
                 logger.warning(
                     "Session %s idle with stuck payload (finish=unknown, no content) — "
                     "returning best-known payload to avoid infinite poll.",
@@ -829,6 +833,8 @@ def _send_prompt_async_with_session_recovery(
                 payload = dict(latest_payload)
                 payload["_session_recovered"] = recovered
                 payload["_live_streamed"] = bool(last_snapshots["text"] or last_snapshots["reasoning"])
+                if last_snapshots.get("reasoning"):
+                    payload["_reasoning_text"] = last_snapshots["reasoning"]
                 return session_id, payload
             raise HTTPException(status_code=504, detail="Timed out waiting for OpenCode response")
 
@@ -894,6 +900,11 @@ def _send_prompt_with_live_updates_and_recovery(
         )
         if isinstance(payload, dict):
             payload["_live_streamed"] = False
+            parts = payload.get("parts") or []
+            if isinstance(parts, list):
+                reasoning = extract_reasoning_from_parts(parts)
+                if reasoning:
+                    payload["_reasoning_text"] = reasoning
         return session_id, payload
 
     return _send_prompt_async_with_session_recovery(
@@ -1384,6 +1395,8 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
     collected_artifacts: list[dict[str, Any]] = []
     collected_todos: list[dict[str, Any]] = []
     authoritative_payload = dict(last_payload)
+    # Preserve reasoning text from streaming snapshots (may be lost during API refetches below)
+    preserved_reasoning = authoritative_payload.get("_reasoning_text", "")
     current_message_id = ""
     last_payload_info = last_payload.get("info") if isinstance(last_payload.get("info"), dict) else None
     if isinstance(last_payload_info, dict):
@@ -1428,6 +1441,36 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
     response_metadata = _build_response_metadata(authoritative_payload)
     if response_metadata is None:
         response_metadata = {}
+
+    # Capture reasoning text from multiple sources
+    stream_reasoning = preserved_reasoning
+    if not stream_reasoning:
+        stream_reasoning = authoritative_payload.get("_reasoning_text", "") or ""
+    if not stream_reasoning:
+        parts = authoritative_payload.get("parts") or []
+        if isinstance(parts, list):
+            stream_reasoning = extract_reasoning_from_parts(parts) or ""
+        if not stream_reasoning:
+            for p in parts:
+                if isinstance(p, dict):
+                    text = p.get("reasoning") or p.get("thinking") or ""
+                    if isinstance(text, str) and text:
+                        stream_reasoning = text
+                        break
+        if not stream_reasoning:
+            info = authoritative_payload.get("info")
+            if isinstance(info, dict):
+                sr = info.get("reasoning") or info.get("thinking") or ""
+                if isinstance(sr, str) and sr:
+                    stream_reasoning = sr
+    if not stream_reasoning and response_metadata and response_metadata.get("tokens", {}).get("reasoning", 0) > 0:
+        logger.warning("Reasoning tokens=%d but no reasoning_text in payload keys=%s parts_types=%s",
+                       response_metadata["tokens"]["reasoning"],
+                       list(authoritative_payload.keys()),
+                       [p.get("type","?") for p in (authoritative_payload.get("parts") or []) if isinstance(p, dict)])
+    if stream_reasoning:
+        response_metadata["reasoning_text"] = stream_reasoning
+
     if collected_todos:
         response_metadata["todos"] = collected_todos
 

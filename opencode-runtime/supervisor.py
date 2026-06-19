@@ -100,14 +100,6 @@ def resolve_opencode_server_username() -> str:
     return os.getenv("OPENCODE_SERVER_USERNAME", "opencode").strip() or "opencode"
 
 
-def opencode_server_auth() -> tuple[str, str] | None:
-    """Return HTTP Basic Auth credentials for the local OpenCode server."""
-    password = resolve_opencode_server_password()
-    if not password:
-        return None
-    return resolve_opencode_server_username(), password
-
-
 _ENV_ALLOWLIST: frozenset[str] = frozenset({
     # NOTE: ``HOME``, ``OPENCODE_BIN``, ``OPENCODE_WORKDIR``,
     # ``XDG_CONFIG_HOME``, ``XDG_DATA_HOME`` and ``OPENCODE_CONFIG_DIR``
@@ -156,8 +148,6 @@ _ENV_ALLOWLIST: frozenset[str] = frozenset({
     "LITELLM_BASE_PATH",
     "OTEL_EXPORTER_OTLP_ENDPOINT",
     "OPENCODE_SELECTED_PROVIDER_JSON",
-    "OPENCODE_TRUSTED_LLM_HOSTS",
-    "OPENCODE_ALLOW_PRIVATE_MCP_URLS",
     "OPENCODE_RUNTIME_CONFIG_FILES_JSON",
     "OPENCODE_MCP_CONNECTIONS_JSON",
     "OPENCODE_MCP_SIDECARS_JSON",
@@ -332,6 +322,8 @@ def wait_for_server_ready(process: subprocess.Popen[str]) -> None:
     """Block until the OpenCode server responds healthy or timeout/exit."""
     deadline = time.time() + SERVER_STARTUP_TIMEOUT_SECONDS
     health_url = f"{server_base_url()}/global/health"
+    server_user = resolve_opencode_server_username()
+    server_pass = resolve_opencode_server_password()
     while time.time() < deadline:
         if process.poll() is not None:
             # Read from log files since we no longer use PIPE
@@ -356,7 +348,7 @@ def wait_for_server_ready(process: subprocess.Popen[str]) -> None:
             raise RuntimeError("OpenCode server exited before becoming ready")
         try:
             with httpx.Client(timeout=2.0, trust_env=False) as client:
-                response = client.get(health_url, auth=opencode_server_auth())
+                response = client.get(health_url, auth=(server_user, server_pass))
                 if response.status_code == 200 and response.json().get("healthy") is True:
                     return
         except httpx.HTTPError:

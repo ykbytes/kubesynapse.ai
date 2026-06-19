@@ -484,6 +484,8 @@ def emit_llm_call(
     payload: dict[str, Any] = {"model": model}
     if provider:
         payload["provider"] = provider
+    if reasoning_text:
+        payload["reasoning_text"] = reasoning_text
     if finish_reason:
         payload["finish_reason"] = finish_reason
 
