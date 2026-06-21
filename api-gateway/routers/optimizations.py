@@ -2438,6 +2438,34 @@ def create_study(body: CreateStudyRequest, user: dict[str, Any] = Depends(verify
     return _expose_optimizer_intelligence(study)
 
 
+@router.get("/studies")
+def list_studies(
+    namespace: str | None = None,
+    workflow_name: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+    user: dict[str, Any] = Depends(verify_token),
+) -> dict[str, Any]:
+    safe_limit = max(1, min(limit, 100))
+    safe_offset = max(0, offset)
+    if namespace:
+        ensure_namespace_access(user, namespace)
+    studies = optimization_store.list_studies(
+        namespace=namespace.strip() if namespace else None,
+        workflow_name=workflow_name.strip() if workflow_name else None,
+        limit=safe_limit,
+        offset=safe_offset,
+    )
+    visible: list[dict[str, Any]] = []
+    for study in studies:
+        ensure_namespace_access(user, str(study["namespace"]))
+        _sync_candidate_trial_results(study)
+        study["candidates"] = optimization_store.list_candidates(str(study["id"]))
+        study["trials"] = optimization_store.list_trials(str(study["id"]))
+        visible.append(_expose_optimizer_intelligence(study))
+    return {"items": visible, "limit": safe_limit, "offset": safe_offset}
+
+
 @router.get("/studies/{study_id}")
 def get_study(study_id: str, user: dict[str, Any] = Depends(verify_token)) -> dict[str, Any]:
     study = optimization_store.get_study(study_id)

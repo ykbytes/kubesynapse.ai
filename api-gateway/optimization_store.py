@@ -238,6 +238,29 @@ def get_study(study_id: str) -> dict[str, Any] | None:
         return row.to_dict() if row else None
 
 
+def list_studies(
+    *,
+    namespace: str | None = None,
+    workflow_name: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    ensure_optimization_database()
+    with db_session() as session:
+        query = session.query(OptimizationStudyRow)
+        if namespace:
+            query = query.filter_by(namespace=namespace)
+        if workflow_name:
+            query = query.filter_by(workflow_name=workflow_name)
+        rows = (
+            query.order_by(OptimizationStudyRow.created_at.desc())
+            .offset(max(offset, 0))
+            .limit(max(1, min(limit, 100)))
+            .all()
+        )
+        return [row.to_dict() for row in rows]
+
+
 def create_candidate(
     *,
     study_id: str,

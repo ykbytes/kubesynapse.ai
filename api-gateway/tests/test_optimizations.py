@@ -582,6 +582,51 @@ spec:
     assert any("name" in warning.lower() for warning in candidate["validation_results"]["warnings"])
 
 
+def test_list_studies_returns_recent_workflow_studies_with_candidates(client, auth_headers) -> None:
+    older_baseline_id = _seed_execution(execution_id="exec-opt-list-older")
+    newer_baseline_id = _seed_execution(execution_id="exec-opt-list-newer")
+
+    with _optimization_api_context(manifests=True):
+        older = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={
+                "namespace": "default",
+                "workflow_name": "daily-standup",
+                "baseline_execution_ids": [older_baseline_id],
+                "objective": "Older study",
+            },
+        ).json()
+        newer = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={
+                "namespace": "default",
+                "workflow_name": "daily-standup",
+                "baseline_execution_ids": [newer_baseline_id],
+                "objective": "Newer study",
+            },
+        ).json()
+
+    with _optimization_api_context():
+        candidate_response = client.post(
+            f"/api/v1/optimizations/studies/{newer['id']}/candidates/generate",
+            headers=auth_headers,
+            json={"optimizer_output": "trim repeated context and batch deterministic reads", "suffix": "opt-listed"},
+        )
+        response = client.get(
+            "/api/v1/optimizations/studies?namespace=default&workflow_name=daily-standup&limit=10",
+            headers=auth_headers,
+        )
+
+    assert candidate_response.status_code == 201
+    assert response.status_code == 200
+    studies = response.json()["items"]
+    assert [study["id"] for study in studies[:2]] == [newer["id"], older["id"]]
+    assert studies[0]["candidates"][0]["candidate_workflow_name"] == "daily-standup-opt-listed"
+    assert studies[0]["trials"] == []
+
+
 def test_candidate_lifecycle_approval_trials_and_verified_roi(client, auth_headers) -> None:
     baseline_id = _seed_execution(execution_id="exec-opt-roi-base", duration_ms=100_000, tokens=2_000, cost_usd=0.08, tool_calls=8)
     candidate_execution_ids = [

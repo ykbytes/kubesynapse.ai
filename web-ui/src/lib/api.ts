@@ -3484,6 +3484,31 @@ export async function createOptimizationStudy(token: string, payload: CreateOpti
   return parseJsonResponse(response, parseOptimizationStudy);
 }
 
+export async function fetchOptimizationStudies(
+  token: string,
+  options: {
+    namespace?: string;
+    workflowName?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+): Promise<OptimizationStudy[]> {
+  const url = new URL(buildUrl("/api/optimizations/studies"), API_BASE_URL || window.location.origin);
+  if (options.namespace) url.searchParams.set("namespace", options.namespace);
+  if (options.workflowName) url.searchParams.set("workflow_name", options.workflowName);
+  url.searchParams.set("limit", String(options.limit ?? 10));
+  if (typeof options.offset === "number" && options.offset > 0) {
+    url.searchParams.set("offset", String(options.offset));
+  }
+  const target = API_BASE_URL ? url.toString() : `${url.pathname}${url.search}`;
+  const response = await fetchAuthenticated(target, token);
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "OptimizationStudyListResponse");
+    return readRecordArray(record, "items", "OptimizationStudyListResponse")
+      .map((item, index) => parseOptimizationStudy(item, `OptimizationStudyListResponse.items[${index}]`));
+  });
+}
+
 export async function fetchOptimizationStudy(token: string, studyId: string): Promise<OptimizationStudy> {
   const response = await fetchAuthenticated(buildUrl(`/api/optimizations/studies/${studyId}`), token);
   return parseJsonResponse(response, parseOptimizationStudy);

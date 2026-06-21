@@ -60,6 +60,7 @@ import {
   fetchOptimizationComparison,
   fetchOptimizationRoi,
   fetchOptimizationStudy,
+  fetchOptimizationStudies,
   fetchWorkflowManifest,
   fetchWorkflowRunTrace,
   generateOptimizationCandidate,
@@ -988,6 +989,49 @@ function statusTextClasses(status: string): string {
 
 function createOptimiseRunPhases(): OptimisationRunPhase[] {
   return OPTIMISE_RUN_PHASE_BLUEPRINT.map((phase) => ({ ...phase, status: "pending" }));
+}
+
+function createOptimiseRunPhasesFromStudy(
+  study: OptimizationStudy | null,
+  candidate: OptimizationCandidate | null,
+  roi: OptimizationRoi | null,
+): OptimisationRunPhase[] {
+  const phases = createOptimiseRunPhases();
+  if (!study) return phases;
+  const proofGate = roi?.proof_gate ?? study.proof_gate ?? {};
+  const safeTrialTarget = typeof proofGate.minimum_safe_trials === "number" ? proofGate.minimum_safe_trials : 5;
+  return phases.map((phase) => {
+    if (phase.key === "prepare") {
+      return {
+        ...phase,
+        status: "success",
+        detail: `${study.baseline_execution_ids.length} persisted baseline trace${study.baseline_execution_ids.length === 1 ? "" : "s"} restored from the ROI study.`,
+      };
+    }
+    if (phase.key === "study") {
+      return {
+        ...phase,
+        status: "success",
+        detail: `${study.opportunities.length} ranked lever${study.opportunities.length === 1 ? "" : "s"} and ${study.candidates?.length ?? 0} candidate${(study.candidates?.length ?? 0) === 1 ? "" : "s"} loaded.`,
+      };
+    }
+    if (phase.key === "agent") {
+      return candidate?.optimizer_output
+        ? { ...phase, status: "success", detail: "Optimizer analysis and candidate hypothesis are persisted for audit." }
+        : { ...phase, detail: "No candidate analysis is attached yet." };
+    }
+    if (phase.key === "candidate") {
+      return candidate
+        ? { ...phase, status: "success", detail: `${candidate.candidate_workflow_name} is available in candidate history with ${candidate.manifest_bundle.length} copied resource${candidate.manifest_bundle.length === 1 ? "" : "s"}.` }
+        : { ...phase, detail: "Run the optimizer to create a copied candidate manifest bundle." };
+    }
+    if (phase.key === "roi") {
+      return roi
+        ? { ...phase, status: "success", detail: `${roi.proof_status.replace(/_/g, " ")} · ${roi.passing_trial_count}/${safeTrialTarget} safe trials.` }
+        : { ...phase, detail: "ROI comparison appears once a candidate exists." };
+    }
+    return phase;
+  });
 }
 
 type OptimisationPacket = {
@@ -2117,6 +2161,7 @@ function OptimisePanel({
   runPhases,
   result,
   error,
+  studies,
   study,
   candidate,
   roi,
@@ -2127,6 +2172,8 @@ function OptimisePanel({
   applyPreview,
   datasetPreview,
   onRun,
+  onSelectStudy,
+  onSelectCandidate,
   onApproveCandidate,
   onDryRunApply,
   onRunCandidate,
@@ -2151,6 +2198,7 @@ function OptimisePanel({
   runPhases: OptimisationRunPhase[];
   result: InvokeResponse | null;
   error: string;
+  studies: OptimizationStudy[];
   study: OptimizationStudy | null;
   candidate: OptimizationCandidate | null;
   roi: OptimizationRoi | null;
@@ -2161,6 +2209,8 @@ function OptimisePanel({
   applyPreview: Record<string, unknown> | null;
   datasetPreview: Record<string, unknown> | null;
   onRun: () => void;
+  onSelectStudy: (studyId: string) => void;
+  onSelectCandidate: (candidateId: string) => void;
   onApproveCandidate: () => void;
   onDryRunApply: () => void;
   onRunCandidate: () => void;
@@ -2302,6 +2352,32 @@ function OptimisePanel({
   const actualComparisonMetrics = comparisonScorecard?.metrics?.length ? comparisonScorecard.metrics : fallbackComparisonMetrics;
   const hasActualComparison = Boolean(comparisonScorecard && comparisonScorecard.metric_source === "paired_trials");
   const comparisonMetricSource = comparisonMetricSourceLabel(comparisonScorecard?.metric_source);
+  const timestampValue = (value?: string | null) => {
+    const parsed = Date.parse(value ?? "");
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  const candidateHistory = [...(study?.candidates ?? [])].sort((a, b) => timestampValue(b.created_at) - timestampValue(a.created_at));
+  const studyHistory = [...studies].sort((a, b) => timestampValue(b.created_at) - timestampValue(a.created_at));
+  const expectedGainItems = (item: OptimizationCandidate | null) => {
+    const expected = item?.expected_savings ?? {};
+    const metricPairs: Array<[string, string]> = [
+      ["Time", "duration_saved_percent"],
+      ["Tokens", "tokens_saved_percent"],
+      ["Tools", "tool_calls_saved_percent"],
+      ["Cost", "cost_saved_percent"],
+    ];
+    return metricPairs.flatMap(([label, key]) => {
+      const value = expected[key];
+      return typeof value === "number" && Number.isFinite(value)
+        ? [{ label, value }]
+        : [];
+    });
+  };
+  const expectedGainSummary = (item: OptimizationCandidate | null) => {
+    const gains = expectedGainItems(item);
+    if (gains.length === 0) return "Expected gain pending";
+    return gains.slice(0, 3).map((entry) => `${entry.label} ${entry.value.toFixed(0)}%`).join(" · ");
+  };
   const stepRegressions = comparisonSteps.filter((step) => (step.deltas.duration_saved_percent ?? 0) < 0 || (step.deltas.tokens_saved_percent ?? 0) < 0 || (step.deltas.tool_calls_saved_percent ?? 0) < 0);
   const stageItems = [
     { key: "baseline", label: "Baseline", icon: Database, done: Boolean(study), hint: `${baselineMetrics?.sample_count ?? 0} traces` },
@@ -2456,23 +2532,70 @@ function OptimisePanel({
 
               <section className="rounded-lg border border-border/50 bg-card/45 p-2">
                 <div className="flex items-center justify-between px-1 pb-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Candidates</span>
-                  <Badge variant="outline" className="h-5 text-[10px]">{study?.candidates?.length ?? (activeCandidate ? 1 : 0)}</Badge>
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Candidate history</span>
+                  <Badge variant="outline" className="h-5 text-[10px]">{candidateHistory.length}</Badge>
                 </div>
-                {activeCandidate ? (
-                  <div className="rounded-md border border-primary/30 bg-primary/8 p-2">
-                    <div className="truncate text-xs font-semibold text-foreground">{activeCandidate.candidate_workflow_name}</div>
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      <Badge variant="outline" className="h-5 text-[9px]">{activeCandidate.status}</Badge>
-                      <Badge variant="outline" className={cn("h-5 text-[9px]", activeCandidate.approval_status === "approved" && "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300")}>
-                        {activeCandidate.approval_status}
-                      </Badge>
-                    </div>
+                {candidateHistory.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {candidateHistory.slice(0, 5).map((item) => {
+                      const selected = activeCandidate?.id === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => onSelectCandidate(item.id)}
+                          className={cn(
+                            "w-full rounded-md border p-2 text-left transition-colors",
+                            selected ? "border-primary/45 bg-primary/10" : "border-border/40 bg-background/60 hover:border-primary/25",
+                          )}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">{item.candidate_workflow_name}</span>
+                            {selected && <CheckCircle2 className="h-3.5 w-3.5 text-primary" />}
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            <Badge variant="outline" className="h-5 text-[9px]">{item.status}</Badge>
+                            <Badge variant="outline" className={cn("h-5 text-[9px]", item.approval_status === "approved" && "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300")}>
+                              {item.approval_status}
+                            </Badge>
+                          </div>
+                          <div className="mt-1 text-[10px] font-medium text-foreground">Expected gain</div>
+                          <div className="line-clamp-2 text-[10px] text-muted-foreground">{expectedGainSummary(item)}</div>
+                          <div className="mt-1 text-[9px] text-muted-foreground">{formatCompactDate(item.created_at)}</div>
+                        </button>
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="rounded-md border border-dashed border-border/50 p-4 text-center text-[11px] text-muted-foreground">
                     Run a study to create a copied candidate.
                   </div>
+                )}
+                {studyHistory.length > 1 && (
+                  <details className="mt-2 rounded-md border border-border/40 bg-background/55 p-2">
+                    <summary className="cursor-pointer list-none text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      Study history
+                    </summary>
+                    <div className="mt-2 space-y-1">
+                      {studyHistory.slice(0, 6).map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => onSelectStudy(item.id)}
+                          className={cn(
+                            "w-full rounded border px-2 py-1.5 text-left text-[10px]",
+                            item.id === study?.id ? "border-primary/35 bg-primary/8 text-foreground" : "border-border/35 bg-background/55 text-muted-foreground hover:text-foreground",
+                          )}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate font-medium">{formatCompactDate(item.created_at)}</span>
+                            <span>{item.candidates?.length ?? 0} cand.</span>
+                          </div>
+                          <div className="truncate">{item.status.replace(/_/g, " ")} · {item.baseline_execution_ids.length} traces</div>
+                        </button>
+                      ))}
+                    </div>
+                  </details>
                 )}
                 <div className="mt-2 grid gap-1.5">
                   <Button type="button" size="sm" variant="outline" className="h-7 justify-start gap-1.5 text-[10px]" disabled={!canApprove || actionLoading === "approve"} onClick={onApproveCandidate}>
@@ -3369,6 +3492,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
   const [optimiseResult, setOptimiseResult] = useState<InvokeResponse | null>(null);
   const [optimiseError, setOptimiseError] = useState("");
   const [optimiseStudy, setOptimiseStudy] = useState<OptimizationStudy | null>(null);
+  const [optimiseStudies, setOptimiseStudies] = useState<OptimizationStudy[]>([]);
   const [optimiseCandidate, setOptimiseCandidate] = useState<OptimizationCandidate | null>(null);
   const [optimiseRoi, setOptimiseRoi] = useState<OptimizationRoi | null>(null);
   const [optimiseComparison, setOptimiseComparison] = useState<OptimizationComparison | null>(null);
@@ -3630,10 +3754,9 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
     setSelectedStepId(null);
     setSelectedDetailItem(null);
     setOptimiseResult(null); setOptimiseError("");
-    setOptimiseStudy(null); setOptimiseCandidate(null); setOptimiseRoi(null); setOptimiseComparison(null); setOptimiseStudyError("");
+    setOptimiseStudyError("");
     setOptimiseActionLoading(null); setOptimiseApplyPreview(null); setOptimiseDatasetPreview(null);
     setOptimiseWorkflowManifest(null); setOptimiseAgentManifests({}); setOptimiseManifestError("");
-    setOptimiseRunPhases(createOptimiseRunPhases());
   }, [detail?.id, runTrace?.run_id]);
 
   // ── Computed Values ────────────────────────────────────────────────────────
@@ -3719,6 +3842,27 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
     } catch (error) { toast.error(error instanceof Error ? error.message : "Export failed"); }
   };
 
+  const applyOptimisationStudySnapshot = useCallback(async (
+    nextStudy: OptimizationStudy,
+    candidateId?: string | null,
+  ) => {
+    const nextCandidate =
+      nextStudy.candidates?.find((item) => item.id === candidateId) ??
+      nextStudy.candidates?.[nextStudy.candidates.length - 1] ??
+      null;
+    const nextComparison = nextCandidate
+      ? await fetchOptimizationComparison(token, nextStudy.id, nextCandidate.id)
+      : null;
+    const nextRoi = nextComparison?.roi ?? await fetchOptimizationRoi(token, nextStudy.id, nextCandidate?.id);
+    setOptimiseStudy(nextStudy);
+    setOptimiseStudies((items) => [nextStudy, ...items.filter((item) => item.id !== nextStudy.id)]);
+    setOptimiseCandidate(nextCandidate);
+    setOptimiseRoi(nextRoi);
+    setOptimiseComparison(nextComparison?.comparison ?? null);
+    setOptimiseRunPhases(createOptimiseRunPhasesFromStudy(nextStudy, nextCandidate, nextRoi));
+    return { study: nextStudy, candidate: nextCandidate, roi: nextRoi, comparison: nextComparison?.comparison ?? null };
+  }, [token]);
+
   const refreshOptimisationStudy = useCallback(async (studyId?: string | null, candidateId?: string | null) => {
     const targetStudyId = studyId ?? optimiseStudy?.id;
     if (!targetStudyId) return;
@@ -3726,18 +3870,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
     setOptimiseStudyError("");
     try {
       const nextStudy = await fetchOptimizationStudy(token, targetStudyId);
-      const nextCandidate =
-        nextStudy.candidates?.find((item) => item.id === (candidateId ?? optimiseCandidate?.id)) ??
-        nextStudy.candidates?.[nextStudy.candidates.length - 1] ??
-        optimiseCandidate;
-      const nextComparison = nextCandidate
-        ? await fetchOptimizationComparison(token, targetStudyId, nextCandidate.id)
-        : null;
-      const nextRoi = nextComparison?.roi ?? await fetchOptimizationRoi(token, targetStudyId, nextCandidate?.id);
-      setOptimiseStudy(nextStudy);
-      setOptimiseCandidate(nextCandidate ?? null);
-      setOptimiseRoi(nextRoi);
-      setOptimiseComparison(nextComparison?.comparison ?? null);
+      await applyOptimisationStudySnapshot(nextStudy, candidateId ?? optimiseCandidate?.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to refresh optimization study";
       setOptimiseStudyError(message);
@@ -3745,7 +3878,75 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
     } finally {
       setOptimiseStudyLoading(false);
     }
-  }, [optimiseCandidate, optimiseStudy?.id, token]);
+  }, [applyOptimisationStudySnapshot, optimiseCandidate?.id, optimiseStudy?.id, token]);
+
+  const loadPersistedOptimisationStudy = useCallback(async () => {
+    if (!selectedWorkflowName) {
+      setOptimiseStudies([]);
+      setOptimiseStudy(null);
+      setOptimiseCandidate(null);
+      setOptimiseRoi(null);
+      setOptimiseComparison(null);
+      setOptimiseRunPhases(createOptimiseRunPhases());
+      return;
+    }
+    setOptimiseStudyLoading(true);
+    setOptimiseStudyError("");
+    try {
+      const studies = await fetchOptimizationStudies(token, { namespace, workflowName: selectedWorkflowName, limit: 10 });
+      setOptimiseStudies(studies);
+      const latestStudy = studies[0] ?? null;
+      if (!latestStudy) {
+        setOptimiseStudy(null);
+        setOptimiseCandidate(null);
+        setOptimiseRoi(null);
+        setOptimiseComparison(null);
+        setOptimiseRunPhases(createOptimiseRunPhases());
+        return;
+      }
+      await applyOptimisationStudySnapshot(latestStudy, latestStudy.candidates?.[latestStudy.candidates.length - 1]?.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load optimization studies";
+      setOptimiseStudyError(message);
+    } finally {
+      setOptimiseStudyLoading(false);
+    }
+  }, [applyOptimisationStudySnapshot, namespace, selectedWorkflowName, token]);
+
+  const handleSelectOptimisationStudy = useCallback(async (studyId: string) => {
+    setOptimiseStudyLoading(true);
+    setOptimiseStudyError("");
+    try {
+      const nextStudy = await fetchOptimizationStudy(token, studyId);
+      await applyOptimisationStudySnapshot(nextStudy, nextStudy.candidates?.[nextStudy.candidates.length - 1]?.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load optimization study";
+      setOptimiseStudyError(message);
+      toast.error(message);
+    } finally {
+      setOptimiseStudyLoading(false);
+    }
+  }, [applyOptimisationStudySnapshot, token]);
+
+  const handleSelectOptimisationCandidate = useCallback(async (candidateId: string) => {
+    if (!optimiseStudy) return;
+    setOptimiseStudyLoading(true);
+    setOptimiseStudyError("");
+    try {
+      await applyOptimisationStudySnapshot(optimiseStudy, candidateId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load optimization candidate";
+      setOptimiseStudyError(message);
+      toast.error(message);
+    } finally {
+      setOptimiseStudyLoading(false);
+    }
+  }, [applyOptimisationStudySnapshot, optimiseStudy]);
+
+  useEffect(() => {
+    if (activeTab !== "optimise") return;
+    void loadPersistedOptimisationStudy();
+  }, [activeTab, loadPersistedOptimisationStudy]);
 
   const updateOptimiseRunPhase = useCallback((
     key: OptimisationRunPhaseKey,
@@ -3829,6 +4030,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
         return;
       }
       setOptimiseStudy(study);
+      setOptimiseStudies((items) => [study, ...items.filter((item) => item.id !== study.id)]);
       updateOptimiseRunPhase("study", "success", `${study.baseline_execution_ids.length} traces persisted; ${study.opportunities.length} server-ranked levers.`);
 
       let result: InvokeResponse;
@@ -3873,6 +4075,12 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
         return;
       }
       setOptimiseCandidate(candidate);
+      const studyWithCandidate = {
+        ...study,
+        candidates: [...(study.candidates ?? []), candidate],
+      };
+      setOptimiseStudy(studyWithCandidate);
+      setOptimiseStudies((items) => [studyWithCandidate, ...items.filter((item) => item.id !== study.id)]);
       updateOptimiseRunPhase("candidate", "success", `${candidate.candidate_workflow_name} created as a copied candidate; ${candidate.manifest_bundle.length} resources passed validation.`);
       updateOptimiseRunPhase("roi", "running", "Refreshing ROI proof state and trial economics.");
       const roi = await fetchOptimizationRoi(token, study.id, candidate.id);
@@ -4208,17 +4416,15 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                   onSelectedAgentChange={(agentName) => {
                     setOptimiseAgentName(agentName);
                     setOptimiseResult(null); setOptimiseError("");
-                    setOptimiseStudy(null); setOptimiseCandidate(null); setOptimiseRoi(null); setOptimiseComparison(null); setOptimiseStudyError("");
+                    setOptimiseStudyError("");
                     setOptimiseApplyPreview(null); setOptimiseDatasetPreview(null);
-                    setOptimiseRunPhases(createOptimiseRunPhases());
                   }}
                   scope={optimiseScope}
                   onScopeChange={(scopeValue) => {
                     setOptimiseScope(scopeValue);
                     setOptimiseResult(null); setOptimiseError("");
-                    setOptimiseStudy(null); setOptimiseCandidate(null); setOptimiseRoi(null); setOptimiseComparison(null); setOptimiseStudyError("");
+                    setOptimiseStudyError("");
                     setOptimiseApplyPreview(null); setOptimiseDatasetPreview(null);
-                    setOptimiseRunPhases(createOptimiseRunPhases());
                   }}
                   packet={optimisePacket}
                   prompt={optimisePrompt}
@@ -4229,6 +4435,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                   runPhases={optimiseRunPhases}
                   result={optimiseResult}
                   error={optimiseError}
+                  studies={optimiseStudies}
                   study={optimiseStudy}
                   candidate={optimiseCandidate}
                   roi={optimiseRoi}
@@ -4239,6 +4446,8 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                   applyPreview={optimiseApplyPreview}
                   datasetPreview={optimiseDatasetPreview}
                   onRun={() => { void handleRunOptimisation(); }}
+                  onSelectStudy={(studyId) => { void handleSelectOptimisationStudy(studyId); }}
+                  onSelectCandidate={(candidateId) => { void handleSelectOptimisationCandidate(candidateId); }}
                   onApproveCandidate={() => { void handleApproveOptimisationCandidate(); }}
                   onDryRunApply={() => { void handleDryRunOptimisationApply(); }}
                   onRunCandidate={() => { void handleRunOptimisationCandidate(); }}

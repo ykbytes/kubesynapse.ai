@@ -70,6 +70,16 @@ const checks = [
       source.includes("Candidate vs baseline"),
   },
   {
+    name: "optimizer tab hydrates persisted studies and selectable candidate history",
+    pass:
+      apiSource.includes("fetchOptimizationStudies") &&
+      apiSource.includes("/api/optimizations/studies") &&
+      source.includes("loadPersistedOptimisationStudy") &&
+      source.includes("handleSelectOptimisationCandidate") &&
+      source.includes("Candidate history") &&
+      source.includes("Expected gain"),
+  },
+  {
     name: "optimizer comparison renders trial, step, tool, and manifest evidence",
     pass:
       source.includes("Trial evidence") &&
