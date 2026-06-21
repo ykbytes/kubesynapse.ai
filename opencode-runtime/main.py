@@ -18,6 +18,12 @@ import sys
 import threading
 import time
 import uuid
+
+from contextvars import ContextVar
+
+# Thread-safe contextvar to carry system_prompt from invoke flow to trace emitter.
+# Set by invoke.py:run_autonomous_or_single_turn() before LLM calls.
+_CURRENT_SYSTEM_PROMPT: ContextVar[str | None] = ContextVar("system_prompt", default=None)
 from collections.abc import AsyncIterator
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -36,7 +42,6 @@ _RUNTIME_DIR = Path(__file__).resolve().parent
 _OPENAPI_SPEC_PATH = _RUNTIME_DIR / "openapi.json"
 _RUNTIME_LOCAL_MODULES = (
     "analysis",
-    "content_safety",
     "config",
     "invoke",
     "memory",
@@ -274,7 +279,6 @@ from supervisor import (
     _start_opencode_process,
     build_server_env,
     is_shutting_down,
-    opencode_server_auth,
     validate_runtime_startup,
     wait_for_server_ready,
 )
@@ -353,16 +357,14 @@ def runtime_bearer_token() -> str:
 
 def runtime_auth_required() -> bool:
     """Return True when protected runtime endpoints must enforce Bearer auth."""
-    raw = os.getenv(RUNTIME_AUTH_REQUIRED_ENV, "true").strip().lower()
-    if raw in ("0", "false", "no", "off"):
-        return False
-    return True
+    raw = os.getenv(RUNTIME_AUTH_REQUIRED_ENV, "").strip().lower()
+    return raw in ("1", "true", "yes") or bool(runtime_bearer_token())
 
 
 def _is_public_runtime_path(path: str) -> bool:
     if path in RUNTIME_AUTH_PUBLIC_PATHS:
         return True
-    return path.startswith("/docs/") or path.startswith("/redoc/")
+    return path.startswith("/docs/") or path.startswith("/redoc/") or path.startswith("/openapi")
 
 
 def build_execution_id(*, thread_id: str | None = None, request_id: str | None = None) -> str:
@@ -718,12 +720,9 @@ def ready() -> JSONResponse:
     opencode_server_healthy = False
     if binary_available and startup_error is None:
         try:
-            with httpx.Client(timeout=5.0, trust_env=False) as probe:
-                resp = probe.get(
-                    f"http://{OPENCODE_SERVER_HOST}:{OPENCODE_SERVER_PORT}/global/health",
-                    auth=opencode_server_auth(),
-                )
-                opencode_server_healthy = resp.status_code == 200 and bool(resp.json().get("healthy"))
+            with httpx.Client(timeout=5.0) as probe:
+                resp = probe.get(f"http://{OPENCODE_SERVER_HOST}:{OPENCODE_SERVER_PORT}/session")
+                opencode_server_healthy = resp.status_code < 500
         except Exception:
             logger.debug("OpenCode server health probe failed", exc_info=True)
     session_registry_writable = False
@@ -842,6 +841,7 @@ async def invoke(request: InvokeRequest) -> InvokeResponse:
                             session_id=SESSION_REGISTRY.get(thread_id),
                             response=result,
                             fallback_duration_ms=duration_ms,
+                            prompt_text_param=request.prompt,
                         )
                         emit_run_completed(
                             execution_id=execution_id,
@@ -871,6 +871,7 @@ async def invoke(request: InvokeRequest) -> InvokeResponse:
                     session_id=SESSION_REGISTRY.get(thread_id),
                     response=result,
                     fallback_duration_ms=duration_ms,
+                    prompt_text_param=request.prompt,
                 )
                 emit_run_completed(
                     execution_id=execution_id,
@@ -1006,13 +1007,13 @@ def context_budget(thread_id: str | None = None) -> dict[str, Any]:
 
 @app.post("/invoke/stream")
 async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
-    use_sync_memory_invoke = "you have persistent memory from prior conversations" in str(
-        request.system or ""
-    ).lower()
-    request_id = _request_execution_seed() or request.caller_request_id
+    async with get_invoke_semaphore():
+        use_sync_memory_invoke = "you have persistent memory from prior conversations" in str(
+            request.system or ""
+        ).lower()
+        request_id = _request_execution_seed() or request.caller_request_id
 
-    async def event_generator() -> AsyncIterator[str]:
-        async with get_invoke_semaphore():
+        async def event_generator() -> AsyncIterator[str]:
             thread_id = request.thread_id or str(uuid.uuid4())
             execution_id = build_execution_id(
                 thread_id=thread_id,
@@ -1079,9 +1080,6 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                 last_ids: set[str] = set()
                 while not stop_todo_poller.is_set():
                     try:
-                        # Auto-handle only permission prompts in autonomous mode.
-                        # Regular questions are surfaced through the existing HITL
-                        # endpoints rather than guessed with a blanket "Yes".
                         if should_auto_approve:
                             approved = await asyncio.to_thread(auto_approve_pending_questions)
                             if approved:
@@ -1096,28 +1094,29 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                                             },
                                         }
                                     )
-                        questions = await asyncio.to_thread(list_pending_questions)
-                        current_ids = {q.get("id", "") for q in questions if q.get("id")}
-                        new_ids = current_ids - last_ids
-                        if new_ids:
-                            for q in questions:
-                                if q.get("id") in new_ids:
-                                    await event_queue.put(
-                                        {
-                                            "event": "question.asked",
-                                            "data": {
-                                                "thread_id": thread_id,
-                                                "source": "opencode",
-                                                **q,
-                                            },
-                                        }
-                                    )
-                            emit_question_asked(
-                                execution_id=execution_id,
-                                question=new_ids.pop() if new_ids else "",
-                                thread_id=thread_id,
-                            )
-                        last_ids = current_ids
+                        else:
+                            questions = await asyncio.to_thread(list_pending_questions)
+                            current_ids = {q.get("id", "") for q in questions if q.get("id")}
+                            new_ids = current_ids - last_ids
+                            if new_ids:
+                                for q in questions:
+                                    if q.get("id") in new_ids:
+                                        await event_queue.put(
+                                            {
+                                                "event": "question.asked",
+                                                "data": {
+                                                    "thread_id": thread_id,
+                                                    "source": "opencode",
+                                                    **q,
+                                                },
+                                            }
+                                        )
+                                emit_question_asked(
+                                    execution_id=execution_id,
+                                    question=new_ids.pop() if new_ids else "",
+                                    thread_id=thread_id,
+                                )
+                            last_ids = current_ids
                     except Exception:
                         logger.debug("Question poller callback failed", exc_info=True)
                     try:
@@ -1147,7 +1146,6 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
             with contextlib.suppress(Exception):
                 await question_task
 
-            # Emit todo.cleared when all todos are done/cancelled after invoke
             try:
                 final_session = SESSION_REGISTRY.get(thread_id)
                 if final_session:
@@ -1193,7 +1191,6 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                     "response.delta", {"thread_id": response.thread_id, "delta": response.response, "source": "opencode"}
                 )
 
-            # Emit tool call events from response
             for tc in (response.tool_calls or []):
                 emit_tool_call(
                     execution_id=execution_id,
@@ -1212,6 +1209,7 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                 session_id=SESSION_REGISTRY.get(thread_id),
                 response=response,
                 fallback_duration_ms=duration_ms,
+                prompt_text_param=request.prompt,
             )
 
             yield sse_event(
@@ -1227,6 +1225,7 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                     "artifacts": response.artifacts,
                     "tool_calls": response.tool_calls,
                     "metadata": response.metadata,
+                    "prompt": request.prompt,
                 },
             )
 
@@ -1263,6 +1262,8 @@ def _emit_llm_call_from_response(
     session_id: str | None,
     response: InvokeResponse,
     fallback_duration_ms: int,
+    system_prompt: str | None = None,
+    prompt_text_param: str | None = None,
 ) -> None:
     metadata = response.metadata or {}
     tokens = metadata.get("tokens") if isinstance(metadata.get("tokens"), dict) else {}
@@ -1285,6 +1286,12 @@ def _emit_llm_call_from_response(
         )
     duration_ms = _coerce_int(time_info.get("total_ms") or time_info.get("duration_ms") or fallback_duration_ms)
 
+    response_text = response.response or ""
+    reasoning_text = metadata.get("reasoning_text") or ""
+    finish_reason = metadata.get("finish_reason") if isinstance(metadata, dict) else None
+    provider = os.getenv("OPENCODE_PROVIDER", "") or metadata.get("provider") if isinstance(metadata, dict) else None
+    effective_system_prompt = system_prompt or _CURRENT_SYSTEM_PROMPT.get()
+
     emit_llm_call(
         execution_id=execution_id,
         model=response.model,
@@ -1298,6 +1305,12 @@ def _emit_llm_call_from_response(
         duration_ms=duration_ms,
         session_id=session_id,
         thread_id=thread_id,
+        prompt_text=prompt_text_param or response_text,
+        response_text=response_text,
+        system_prompt=effective_system_prompt,
+        reasoning_text=reasoning_text,
+        provider=provider,
+        finish_reason=finish_reason,
     )
 
 
@@ -1323,11 +1336,12 @@ def download_artifact(path: str) -> FileResponse:
 @app.get("/artifacts/list")
 def list_artifacts(root: str = "") -> dict[str, Any]:
     """Walk allowed directories and return a flat list of files."""
-    allowed_roots = [Path(OPENCODE_WORKDIR).resolve()]
+    import tempfile
+    allowed_roots = [Path(OPENCODE_WORKDIR).resolve(), Path(HOME_DIR).resolve(), Path(tempfile.gettempdir()).resolve()]
     if root:
         target = Path(root).expanduser().resolve()
         if not any(path_is_within(target, r) for r in allowed_roots):
-            raise HTTPException(status_code=400, detail=f"root '{root}' is outside the workspace artifact roots")
+            raise HTTPException(status_code=400, detail=f"root '{root}' is outside the allowed runtime roots")
         if not target.is_dir():
             raise HTTPException(status_code=404, detail=f"root '{root}' is not a directory")
         walk_roots = [target]

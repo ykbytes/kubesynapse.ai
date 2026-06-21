@@ -97,7 +97,7 @@ opencodeRuntime:
   admin:
     OPENCODE_DISABLE_DEFAULT_PLUGINS: "true"
     # Uncomment to enforce a global model allowlist at runtime:
-    # OPENCODE_ADMIN_MODEL_OVERRIDE_JSON: '["gpt-4o", "gpt-4o-mini", "claude-sonnet-4-20250514"]'
+    # OPENCODE_ADMIN_MODEL_OVERRIDE_JSON: '["opencode-go/deepseek-v4-flash"]'
     # Uncomment to force all provider traffic through LiteLLM proxy:
     # OPENCODE_ADMIN_PROVIDER_OVERRIDE_JSON: '{"litellm": {"options": {"baseURL": "http://litellm:4000/v1"}}}'
     # Uncomment to allowlist specific admin-vetted plugins:
@@ -823,7 +823,7 @@ systemAgents:
   enabled: true
   namespace: "kubesynapse-system"
   # Default model used by all system agents unless overridden per-agent
-  defaultModel: "gpt-4"
+  defaultModel: "opencode-go/deepseek-v4-flash"
   defaultRuntime: "opencode"
 
   # ks-run-inspector — invoked when workflow steps fail or error rates spike

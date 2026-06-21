@@ -10,8 +10,80 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import contextmanager
+from pathlib import Path
+
+from sqlalchemy import inspect, text
 
 logger = logging.getLogger("api-gateway.migrations")
+
+_POSTGRES_MIGRATION_LOCK_ID = 4281906117
+
+
+def _alembic_config(db_url: str):
+    from alembic.config import Config
+
+    migrations_dir = Path(__file__).resolve().parent / "migrations"
+    alembic_cfg = Config()
+    alembic_cfg.set_main_option("script_location", str(migrations_dir))
+    alembic_cfg.set_main_option("sqlalchemy.url", db_url)
+    return alembic_cfg
+
+
+@contextmanager
+def _migration_lock(engine):
+    """Serialize startup migrations across multiple API worker processes."""
+    if getattr(engine.dialect, "name", "") != "postgresql":
+        yield
+        return
+
+    with engine.connect() as connection:
+        connection.execute(
+            text("SELECT pg_advisory_lock(:lock_id)"),
+            {"lock_id": _POSTGRES_MIGRATION_LOCK_ID},
+        )
+        try:
+            yield
+        finally:
+            connection.execute(
+                text("SELECT pg_advisory_unlock(:lock_id)"),
+                {"lock_id": _POSTGRES_MIGRATION_LOCK_ID},
+            )
+
+
+def _database_has_existing_schema(base, engine) -> bool:
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    if not existing_tables:
+        return False
+    expected_tables = {table.name for table in base.metadata.sorted_tables}
+    expected_tables.discard("alembic_version")
+    return bool(existing_tables & expected_tables)
+
+
+def _alembic_version_is_empty(engine) -> bool:
+    inspector = inspect(engine)
+    if not inspector.has_table("alembic_version"):
+        return True
+    with engine.connect() as connection:
+        rows = connection.execute(text("SELECT version_num FROM alembic_version LIMIT 1")).all()
+    return not rows
+
+
+def _stamp_existing_schema_if_needed(base, engine, alembic_cfg) -> bool:
+    if not _alembic_version_is_empty(engine):
+        return False
+    if not _database_has_existing_schema(base, engine):
+        return False
+
+    from alembic import command
+
+    logger.warning(
+        "Existing gateway schema without Alembic version detected; "
+        "stamping current schema at head before startup."
+    )
+    command.stamp(alembic_cfg, "head")
+    return True
 
 
 def run_migrations(base=None, engine=None) -> None:
@@ -47,14 +119,11 @@ def run_migrations(base=None, engine=None) -> None:
     if db_url.startswith("sqlite") and not db_url.startswith("sqlite:///:memory:"):
         logger.info("Running Alembic migrations against SQLite file.")
         try:
-            from alembic.config import Config
             from alembic import command
-            from pathlib import Path
-            migrations_dir = Path(__file__).resolve().parent / "migrations"
-            alembic_cfg = Config()
-            alembic_cfg.set_main_option("script_location", str(migrations_dir))
-            alembic_cfg.set_main_option("sqlalchemy.url", db_url)
-            command.upgrade(alembic_cfg, "head")
+            alembic_cfg = _alembic_config(db_url)
+            with _migration_lock(engine):
+                _stamp_existing_schema_if_needed(base, engine, alembic_cfg)
+                command.upgrade(alembic_cfg, "head")
             logger.info("Alembic migrations complete (SQLite).")
             return
         except Exception:
@@ -65,14 +134,11 @@ def run_migrations(base=None, engine=None) -> None:
     # --- PostgreSQL: run Alembic (production path) ---
     try:
         from auth_store import DATABASE_URL
-        from alembic.config import Config
         from alembic import command
-        from pathlib import Path
-        migrations_dir = Path(__file__).resolve().parent / "migrations"
-        alembic_cfg = Config()
-        alembic_cfg.set_main_option("script_location", str(migrations_dir))
-        alembic_cfg.set_main_option("sqlalchemy.url", db_url or DATABASE_URL)
-        command.upgrade(alembic_cfg, "head")
+        alembic_cfg = _alembic_config(db_url or DATABASE_URL)
+        with _migration_lock(engine):
+            _stamp_existing_schema_if_needed(base, engine, alembic_cfg)
+            command.upgrade(alembic_cfg, "head")
         logger.info("Alembic migrations applied successfully.")
     except ImportError:
         logger.warning(

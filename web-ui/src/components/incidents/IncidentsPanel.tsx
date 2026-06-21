@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import { useWorkspace } from "../../contexts/WorkspaceContext";
 import { IncidentDashboard } from "./IncidentDashboard";
 import { IncidentDetail } from "./IncidentDetail";
 import {
@@ -17,6 +18,7 @@ interface IncidentsPanelProps {
 
 export function IncidentsPanel({ token, namespace }: IncidentsPanelProps) {
   const [selectedIncident, setSelectedIncident] = useState<string | null>(null);
+  const { openObservatoryForWorkflowRun } = useWorkspace();
 
   const getToken = useCallback(() => token, [token]);
   const getNamespace = useCallback(() => namespace, [namespace]);
@@ -24,7 +26,6 @@ export function IncidentsPanel({ token, namespace }: IncidentsPanelProps) {
   const fireExampleAlert = useCallback(async () => {
     const fingerprint = `demo-${Date.now().toString(36)}`;
     const alertname = "DemoHighLatency";
-    const now = new Date().toISOString();
     await createIncident(token, namespace, {
       name: `alert-${alertname}-${fingerprint.slice(-12)}`,
       title: "Demo: Checkout API p95 latency above 3s",
@@ -49,7 +50,6 @@ export function IncidentsPanel({ token, namespace }: IncidentsPanelProps) {
       escalation_timeout_minutes: 15,
       auto_acknowledge: true,
     });
-    void now;
   }, [token, namespace]);
 
   if (selectedIncident) {
@@ -59,6 +59,7 @@ export function IncidentsPanel({ token, namespace }: IncidentsPanelProps) {
         onBack={() => setSelectedIncident(null)}
         getToken={getToken}
         getNamespace={getNamespace}
+        onOpenWorkflowRun={openObservatoryForWorkflowRun}
         api={{
           getIncident,
           updateIncidentStatus,
@@ -74,6 +75,7 @@ export function IncidentsPanel({ token, namespace }: IncidentsPanelProps) {
       setSelectedIncident={setSelectedIncident}
       getToken={getToken}
       getNamespace={getNamespace}
+      onOpenWorkflowRun={openObservatoryForWorkflowRun}
       onFireExampleAlert={fireExampleAlert}
       api={{
         listIncidents,

@@ -243,6 +243,14 @@ func (p *Proxy) validateMiddleware(next http.Handler, route Route) http.Handler 
 			return
 		}
 
+		// Health and readiness probes must not require auth, otherwise
+		// Kubernetes probes and workflow ready-pollers cannot reach the
+		// runtime through the proxy.
+		if r.URL.Path == "/health" || r.URL.Path == "/ready" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		auth := r.Header.Get("Authorization")
 		expected := "Bearer " + secret
 		// D5 — timing-safe comparison. Plain ``!=`` leaks the position

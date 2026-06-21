@@ -423,7 +423,11 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, hand
     if revision_changed:
         _record_agent_event(namespace, name, "Normal", "RevisionChanged", f"Spec revision changed to {revision_hash}, rolling restart will occur", action="revision")
 
-    # Pre-flight dependency validation
+    ensure_runtime_access(namespace)
+    ensure_runtime_namespace_secret(namespace, name, handler_logger)
+
+    # Validate dependencies after runtime bootstrap so we catch only
+    # genuinely missing operator-scoped inputs or quota blockers.
     missing_deps = _validate_agent_dependencies(namespace, name, spec)
     if missing_deps:
         error_msg = "Missing dependencies: " + "; ".join(missing_deps)
@@ -435,8 +439,6 @@ def create_agent_resources(spec: dict[str, Any], name: str, namespace: str, hand
         _record_agent_event(namespace, name, "Warning", "DependenciesMissing", error_msg, action="validate")
         raise kopf.PermanentError(error_msg)
 
-    ensure_runtime_access(namespace)
-    ensure_runtime_namespace_secret(namespace, name, handler_logger)
     policy_name, policy_spec = resolve_agent_policy(namespace, spec.get("policyRef"))
     tenant_spec = resolve_tenant_for_namespace(namespace)
     validate_agent_cross_namespace_targets(spec, policy_spec, namespace)

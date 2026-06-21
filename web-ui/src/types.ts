@@ -240,6 +240,13 @@ export interface AgentInfo {
   namespace: string;
   status: string;
   runtime_kind?: RuntimeKind;
+  cluster_access?: {
+    level?: string;
+    deployment_capable?: boolean;
+    scope?: string;
+    guard?: string;
+    allowed_actions?: string[];
+  } | null;
 }
 
 export type WorkspaceView = "agents" | "chat" | "workflows" | "catalog" | "composer" | "policies" | "intelligence" | "settings" | "admin" | "docs" | "webhooks" | "incidents";
@@ -1190,6 +1197,8 @@ export interface LLMCallRecord {
   cache_read_tokens?: number | null;
   cache_write_tokens?: number | null;
   reasoning_tokens?: number | null;
+  reasoning_text?: string | null;
+  finish_reason?: string | null;
   total_tokens: number;
   cost_usd?: number | null;
   estimated_cost_usd?: number | null;
@@ -1302,6 +1311,305 @@ export interface ExecutionListResponse {
   total: number;
   limit: number;
   offset: number;
+}
+
+/* ── Workflow Optimization ROI Lab types ── */
+
+export interface OptimizationMetrics {
+  sample_count: number;
+  successful_count?: number;
+  success_rate: number;
+  avg_duration_ms: number;
+  avg_tokens: number;
+  avg_cost_usd: number;
+  avg_llm_calls?: number;
+  avg_tool_calls?: number;
+  avg_cache_read_tokens?: number;
+  avg_cache_write_tokens?: number;
+  cost_per_successful_run?: number;
+  tokens_per_successful_run?: number;
+  duration_per_successful_run_ms?: number;
+}
+
+export interface OptimizationOpportunity {
+  kind: string;
+  lever?: string | null;
+  severity: string;
+  title: string;
+  impact_score?: number | null;
+  confidence?: string | null;
+  metric?: string | null;
+  baseline_value?: unknown;
+  affected_steps?: string[];
+  estimated_savings?: Record<string, unknown>;
+  evidence: Record<string, unknown>;
+  recommendation: string;
+  dataset_use?: string | null;
+  safe_scope?: string | null;
+}
+
+export interface OptimizationStepRollup {
+  step_name: string;
+  step_type?: string | null;
+  agent_name?: string | null;
+  run_count?: number;
+  avg_duration_ms?: number;
+  avg_tokens?: number;
+  avg_cost_usd?: number;
+  avg_llm_calls?: number;
+  avg_tool_calls?: number;
+  dominant_model?: string | null;
+  top_tool?: string | null;
+  tool_names?: string[];
+  repeated_tool_arg_groups?: number;
+}
+
+export interface OptimizationModelRollup {
+  model: string;
+  provider?: string | null;
+  calls?: number;
+  tokens?: number;
+  cost_usd?: number;
+  avg_latency_ms?: number;
+  affected_steps?: string[];
+}
+
+export interface OptimizationToolRollup {
+  tool_name: string;
+  calls?: number;
+  avg_duration_ms?: number;
+  repeated_arg_groups?: number;
+  affected_steps?: string[];
+}
+
+export interface OptimizationTrajectoryDiagnostic {
+  id: string;
+  severity: string;
+  title: string;
+  evidence: Record<string, unknown>;
+  affected_steps?: string[];
+  optimizer_hint?: string | null;
+}
+
+export interface OptimizationDatasetReadiness {
+  state: string;
+  baseline_examples?: number;
+  successful_examples?: number;
+  llm_examples?: number;
+  tool_examples?: number;
+  step_examples?: number;
+  manifest_snapshots?: number;
+  workflow_steps?: number;
+  redaction_required?: boolean;
+  labels?: string[];
+  splits?: Record<string, number>;
+  local_model_path?: Record<string, unknown>;
+}
+
+export interface OptimizationIntelligence {
+  scorecard?: Record<string, unknown>;
+  ranked_levers?: OptimizationOpportunity[];
+  step_rollups?: OptimizationStepRollup[];
+  model_rollups?: OptimizationModelRollup[];
+  tool_rollups?: OptimizationToolRollup[];
+  trajectory_diagnostics?: OptimizationTrajectoryDiagnostic[];
+  dataset_readiness?: OptimizationDatasetReadiness;
+}
+
+export interface OptimizationStudy {
+  id: string;
+  namespace: string;
+  workflow_name: string;
+  optimizer_agent_name?: string | null;
+  status: string;
+  objective?: string | null;
+  baseline_execution_ids: string[];
+  baseline_metrics: OptimizationMetrics;
+  opportunities: OptimizationOpportunity[];
+  optimizer_intelligence?: OptimizationIntelligence | null;
+  source_manifests: Record<string, unknown>;
+  proof_gate?: Record<string, unknown>;
+  dataset_redaction_state?: string | null;
+  created_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  candidates?: OptimizationCandidate[];
+  trials?: OptimizationTrial[];
+}
+
+export interface OptimizationCandidate {
+  id: string;
+  study_id: string;
+  namespace: string;
+  name: string;
+  candidate_workflow_name: string;
+  status: string;
+  approval_status: string;
+  manifest_bundle: Array<Record<string, unknown>>;
+  manifest_diff: Record<string, unknown>;
+  optimizer_output?: string | null;
+  validation_results: Record<string, unknown>;
+  expected_savings?: Record<string, unknown>;
+  created_by?: string | null;
+  approved_by?: string | null;
+  approval_reason?: string | null;
+  approved_at?: string | null;
+  applied_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface OptimizationTrial {
+  id: string;
+  study_id: string;
+  candidate_id: string;
+  baseline_execution_id: string;
+  result_execution_id?: string | null;
+  status: string;
+  quality_status: string;
+  metrics_delta: Record<string, unknown>;
+  notes?: string | null;
+  created_by?: string | null;
+  created_at?: string | null;
+}
+
+export interface OptimizationCandidateRunResult {
+  candidate_id: string;
+  candidate: OptimizationCandidate;
+  candidate_run: Record<string, unknown>;
+  apply_results: Array<Record<string, unknown>>;
+  trial: OptimizationTrial;
+}
+
+export interface OptimizationRoi {
+  study_id: string;
+  candidate_id?: string | null;
+  proof_status: string;
+  verified: boolean;
+  proof_gate: Record<string, unknown>;
+  baseline_metrics: OptimizationMetrics;
+  candidate_metrics: OptimizationMetrics;
+  deltas: Record<string, number>;
+  trial_count: number;
+  passing_trial_count: number;
+  projected_savings: Record<string, number>;
+}
+
+export interface OptimizationTraceMetricSnapshot {
+  execution_id?: string | null;
+  workflow_name?: string | null;
+  run_id?: string | null;
+  status?: string | null;
+  duration_ms?: number;
+  tokens?: number;
+  cost_usd?: number;
+  llm_calls?: number;
+  tool_calls?: number;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface OptimizationComparisonHeadline {
+  summary: string;
+  primary_saving_key: string;
+  primary_saving_label: string;
+  primary_saving_percent: number;
+  regression_count: number;
+  safe_trials_remaining: number;
+  metric_source?: string;
+}
+
+export interface OptimizationComparisonMetric {
+  key: string;
+  label: string;
+  unit: string;
+  baseline_value: number;
+  candidate_value: number;
+  actual_delta_percent: number;
+  estimated_delta_percent?: number | null;
+  value_kind: string;
+  source: string;
+}
+
+export interface OptimizationComparisonScorecard {
+  summary: string;
+  metric_source: string;
+  proof_status: string;
+  verified: boolean;
+  trial_count: number;
+  safe_trial_count: number;
+  safe_trials_remaining: number;
+  next_action: string;
+  metrics: OptimizationComparisonMetric[];
+}
+
+export interface OptimizationTrialComparison {
+  id: string;
+  status?: string | null;
+  quality_status?: string | null;
+  notes?: string | null;
+  created_at?: string | null;
+  baseline?: OptimizationTraceMetricSnapshot | null;
+  candidate?: OptimizationTraceMetricSnapshot | null;
+  candidate_run?: Record<string, unknown>;
+  deltas: Record<string, number>;
+}
+
+export interface OptimizationStepComparison {
+  step_name: string;
+  baseline?: OptimizationStepRollup | null;
+  candidate?: OptimizationStepRollup | null;
+  deltas: Record<string, number>;
+}
+
+export interface OptimizationToolComparison {
+  tool_name: string;
+  baseline?: OptimizationToolRollup & { calls_per_run?: number } | null;
+  candidate?: OptimizationToolRollup & { calls_per_run?: number } | null;
+  deltas: Record<string, number>;
+}
+
+export interface OptimizationManifestDiffSection {
+  id: string;
+  title: string;
+  kind: string;
+  source_name: string;
+  candidate_name: string;
+  changed: boolean;
+  change_count: number;
+  changed_paths: string[];
+  highlights: string[];
+  source_yaml: string;
+  candidate_yaml: string;
+  diff_rows: Array<{
+    type: string;
+    source_line_no?: number | null;
+    candidate_line_no?: number | null;
+    source: string;
+    candidate: string;
+  }>;
+}
+
+export interface OptimizationManifestComparison {
+  topology_preserved: boolean;
+  resource_count: Record<string, number>;
+  sections: OptimizationManifestDiffSection[];
+}
+
+export interface OptimizationComparison {
+  headline: OptimizationComparisonHeadline;
+  scorecard?: OptimizationComparisonScorecard;
+  trials: OptimizationTrialComparison[];
+  steps: OptimizationStepComparison[];
+  tools: OptimizationToolComparison[];
+  manifest_diff: OptimizationManifestComparison;
+}
+
+export interface OptimizationComparisonResponse {
+  study_id: string;
+  candidate_id?: string | null;
+  roi: OptimizationRoi;
+  comparison: OptimizationComparison;
 }
 
 /* ── Webhook & Trigger types ── */

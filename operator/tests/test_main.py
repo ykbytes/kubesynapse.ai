@@ -663,6 +663,42 @@ class OperatorManifestTests(unittest.TestCase):
         self.assertEqual(manifest["stringData"]["LITELLM_MASTER_KEY"], "litellm-secret")
         self.assertEqual(manifest["stringData"]["API_GATEWAY_SHARED_TOKEN"], "gateway-secret")
 
+    def test_runtime_namespace_secret_copies_runtime_auth_and_opencode_keys_from_source_secret(self) -> None:
+        logger = Mock()
+        core_api = Mock()
+        not_found_exc = _services_k8s.kubernetes.client.rest.ApiException()
+        not_found_exc.status = 404
+        not_found_exc.reason = "Not Found"
+        core_api.read_namespaced_secret.side_effect = [
+            {
+                "data": {
+                    "RUNTIME_BEARER_TOKEN": base64.b64encode(b"runtime-bearer").decode("ascii"),
+                    "OPENCODE_GO_API_KEY": base64.b64encode(b"opencode-go-key").decode("ascii"),
+                    "OPENCODE_API_KEY": base64.b64encode(b"opencode-key").decode("ascii"),
+                    "OPENCODE_SERVER_PASSWORD": base64.b64encode(b"server-pass").decode("ascii"),
+                }
+            },
+            not_found_exc,
+        ]
+
+        with (
+            patch.object(_services_k8s, "SECRET_PROVISIONING_MODE", "native"),
+            patch.object(_services_k8s, "DEFAULT_LITELLM_MASTER_KEY", "litellm-secret"),
+            patch.object(_services_k8s, "DEFAULT_API_GATEWAY_SHARED_TOKEN", "gateway-secret"),
+            patch.object(_services_k8s, "OPERATOR_NAMESPACE", "kubesynapse"),
+            patch.object(_services_k8s, "OPENCODE_IMMUTABLE_CONFIG", False),
+            patch.object(_services_k8s, "PI_IMMUTABLE_CONFIG", False),
+            patch.object(_services_k8s, "ensure_secret") as ensure_secret,
+            patch.object(_services_k8s.kubernetes.client, "CoreV1Api", return_value=core_api, create=True),
+        ):
+            _services_k8s.ensure_runtime_namespace_secret("tenant-a", "workspace-assistant", logger)
+
+        manifest = ensure_secret.call_args.args[1]
+        self.assertEqual(manifest["stringData"]["RUNTIME_BEARER_TOKEN"], "runtime-bearer")
+        self.assertEqual(manifest["stringData"]["OPENCODE_GO_API_KEY"], "opencode-go-key")
+        self.assertEqual(manifest["stringData"]["OPENCODE_API_KEY"], "opencode-key")
+        self.assertEqual(manifest["stringData"]["OPENCODE_SERVER_PASSWORD"], "server-pass")
+
     def test_runtime_namespace_secret_provisions_immutable_runtime_config_maps(self) -> None:
         logger = Mock()
         source_opencode_config = {
@@ -1072,6 +1108,77 @@ class OrphanPruningTests(unittest.TestCase):
 
 
 class AgentControllerTests(unittest.TestCase):
+    def test_create_agent_resources_provisions_runtime_prerequisites_before_validation(self) -> None:
+        logger = Mock()
+        call_order: list[str] = []
+
+        def _record_runtime_access(namespace: str) -> None:
+            self.assertEqual(namespace, "default")
+            call_order.append("runtime-access")
+
+        def _record_runtime_secret(namespace: str, owner_name: str, handler_logger: Mock) -> None:
+            self.assertEqual((namespace, owner_name, handler_logger), ("default", "workspace-assistant", logger))
+            call_order.append("runtime-secret")
+
+        def _record_validation(namespace: str, name: str, spec: dict[str, object]) -> list[str]:
+            self.assertEqual((namespace, name), ("default", "workspace-assistant"))
+            self.assertEqual(call_order, ["runtime-access", "runtime-secret"])
+            call_order.append("validation")
+            return []
+
+        with (
+            patch.object(_agent_ctrl, "ensure_runtime_access", side_effect=_record_runtime_access),
+            patch.object(
+                _agent_ctrl,
+                "ensure_runtime_namespace_secret",
+                side_effect=_record_runtime_secret,
+            ),
+            patch.object(_agent_ctrl, "_validate_agent_dependencies", side_effect=_record_validation),
+            patch.object(_agent_ctrl, "resolve_agent_policy", return_value=(None, {})),
+            patch.object(_agent_ctrl, "resolve_tenant_for_namespace", return_value=None),
+            patch.object(_agent_ctrl, "validate_agent_cross_namespace_targets"),
+            patch.object(_agent_ctrl, "validate_agent_model"),
+            patch.object(_agent_ctrl, "translate_agent", return_value=Mock(
+                policy_name=None,
+                allowed_mcp_servers=[],
+                has_tenant=False,
+                runtime_kind="opencode",
+                mcp_auth_secret=None,
+                provider_bootstrap_secret=None,
+                service={"metadata": {"name": "workspace-assistant-sandbox"}},
+                statefulset={"metadata": {"name": "workspace-assistant-sandbox"}},
+                mcp_network_policy={"metadata": {"name": "workspace-assistant-sandbox-mcp-egress"}},
+                a2a_egress_network_policy={"metadata": {"name": "workspace-assistant-sandbox-a2a-egress"}},
+                a2a_ingress_network_policy={"metadata": {"name": "workspace-assistant-sandbox-a2a-ingress"}},
+            )),
+            patch.object(_agent_ctrl.kopf, "adopt"),
+            patch.object(_agent_ctrl, "ensure_service"),
+            patch.object(_agent_ctrl, "ensure_statefulset"),
+            patch.object(_agent_ctrl, "ensure_network_policy"),
+            patch.object(_agent_ctrl, "prune_orphaned_resources", return_value=[]),
+            patch.object(_agent_ctrl, "log_operator_event"),
+            patch.object(_agent_ctrl, "_record_agent_event"),
+            patch.object(_agent_ctrl, "_patch_agent_status"),
+            patch.object(_agent_ctrl, "_check_revision_change", return_value=False),
+            patch.object(_agent_ctrl, "_verify_reconcile_idempotency"),
+        ):
+            outputs = _agent_ctrl.translate_agent.return_value
+            outputs.owned_manifests.return_value = [outputs.service, outputs.statefulset]
+            outputs.desired_resource_names.return_value = {
+                "workspace-assistant-sandbox",
+                "workspace-assistant-sandbox-mcp-egress",
+                "workspace-assistant-sandbox-a2a-egress",
+                "workspace-assistant-sandbox-a2a-ingress",
+            }
+            _agent_ctrl.create_agent_resources(
+                {"model": "opencode-go/deepseek-v4-flash", "runtime": {"kind": "opencode"}},
+                "workspace-assistant",
+                "default",
+                logger,
+            )
+
+        self.assertEqual(call_order, ["runtime-access", "runtime-secret", "validation"])
+
     def test_create_agent_resources_prunes_after_reconcile(self) -> None:
         logger = Mock()
         outputs = Mock()
@@ -1814,6 +1921,34 @@ class AllowedNamespacesTests(unittest.TestCase):
         labels = manifest["metadata"]["labels"]
         self.assertEqual(labels["kubesynapse.ai/resource-uid"], "uid-label-test")
 
+    def test_worker_job_manifest_injects_runtime_bearer_token_from_secret(self) -> None:
+        manifest = _builders_manifests.create_worker_job_manifest(
+            "workflow",
+            "default",
+            "standup",
+            1,
+            "pvc-1",
+            "/artifacts/run.json",
+            run_id="run-1",
+        )
+
+        env_refs = {
+            item["name"]: item["valueFrom"]
+            for item in manifest["spec"]["template"]["spec"]["containers"][0]["env"]
+            if "valueFrom" in item
+        }
+
+        self.assertEqual(
+            env_refs["RUNTIME_BEARER_TOKEN"],
+            {
+                "secretKeyRef": {
+                    "name": _config.SECRET_NAME,
+                    "key": "RUNTIME_BEARER_TOKEN",
+                    "optional": False,
+                }
+            },
+        )
+
     def test_credential_proxy_enabled_injects_sidecar_container(self) -> None:
         """When CREDENTIAL_PROXY_ENABLED=true, a credential-proxy sidecar must be added."""
         with patch.object(_builders_manifests, "CREDENTIAL_PROXY_ENABLED", True):
@@ -1941,6 +2076,26 @@ class AllowedNamespacesTests(unittest.TestCase):
         agent_container = manifest["spec"]["template"]["spec"]["containers"][0]
         agent_ports = [p["containerPort"] for p in agent_container["ports"]]
         self.assertIn(8081, agent_ports)
+
+    def test_credential_proxy_disables_runtime_bearer_validation_in_agent_container(self) -> None:
+        """The proxy validates inbound auth, so the inner runtime must not require it again."""
+        with patch.object(_builders_manifests, "CREDENTIAL_PROXY_ENABLED", True):
+            manifest = _builders_manifests.create_agent_statefulset_manifest(
+                "test-agent",
+                "default",
+                {
+                    "model": "litellm/gpt-4",
+                    "runtime": {"kind": "opencode"},
+                    "storage": {"size": "1Gi"},
+                    "systemPrompt": "Test.",
+                },
+                None,
+                {},
+            )
+
+        agent_container = manifest["spec"]["template"]["spec"]["containers"][0]
+        env_map = {entry["name"]: entry.get("value") for entry in agent_container["env"]}
+        self.assertEqual(env_map.get("RUNTIME_AUTH_REQUIRED"), "false")
 
 
 if __name__ == "__main__":

@@ -17,30 +17,32 @@ interface CatalogPanelProps {
 
 export function CatalogPanel({ token, namespace, onAttachSkill, activeTab, onTabChange }: CatalogPanelProps) {
   return (
-    <Tabs value={activeTab} onValueChange={(value) => onTabChange(value as CatalogTab)} className="flex flex-col gap-4">
-      <TabsList className="h-auto w-fit gap-1 rounded-2xl border border-border/60 bg-background/80 p-1">
-        <TabsTrigger
-          value="mcp"
-          className="gap-2 rounded-xl px-3 py-2 text-sm data-[state=active]:bg-primary/10 data-[state=active]:text-foreground data-[state=active]:shadow-none"
-        >
-          <Plug className="h-4 w-4" />
-          MCP
-        </TabsTrigger>
-        <TabsTrigger
-          value="skills"
-          className="gap-2 rounded-xl px-3 py-2 text-sm data-[state=active]:bg-primary/10 data-[state=active]:text-foreground data-[state=active]:shadow-none"
-        >
-          <Package className="h-4 w-4" />
-          Skills
-        </TabsTrigger>
-      </TabsList>
+    <Tabs value={activeTab} onValueChange={(value) => onTabChange(value as CatalogTab)} className="flex h-full flex-col">
+      <div className="flex shrink-0 items-center gap-3 border-b border-border/30 px-4 py-2">
+        <TabsList className="h-8 gap-0.5 rounded-lg border border-border/40 bg-muted/20 p-0.5">
+          <TabsTrigger
+            value="mcp"
+            className="h-7 gap-1.5 rounded-md px-3 text-xs data-[state=active]:bg-primary/10"
+          >
+            <Plug className="size-3.5" />
+            MCP
+          </TabsTrigger>
+          <TabsTrigger
+            value="skills"
+            className="h-7 gap-1.5 rounded-md px-3 text-xs data-[state=active]:bg-primary/10"
+          >
+            <Package className="size-3.5" />
+            Skills
+          </TabsTrigger>
+        </TabsList>
+      </div>
 
-      <TabsContent value="mcp" className="mt-0">
+      <TabsContent value="mcp" className="mt-0 min-h-0 flex-1 overflow-hidden">
         <McpManagementPanel token={token} namespace={namespace} />
       </TabsContent>
 
-      <TabsContent value="skills" className="mt-0">
-        <SkillsCatalogPanel token={token} onAttachSkill={onAttachSkill} />
+      <TabsContent value="skills" className="mt-0 min-h-0 flex-1 overflow-hidden">
+        <SkillsCatalogPanel token={token} namespace={namespace} onAttachSkill={onAttachSkill} />
       </TabsContent>
     </Tabs>
   );

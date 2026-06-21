@@ -128,6 +128,7 @@ def worker_passthrough_env() -> list[dict[str, str]]:
         "DATABASE_PASSWORD",
         "DATABASE_DRIVER",
         "DATABASE_SQLITE_PATH",
+        "RUNTIME_BEARER_TOKEN",
         "API_GATEWAY_SHARED_TOKEN",
         "DEFAULT_API_GATEWAY_SHARED_TOKEN",
         "GATEWAY_URL",

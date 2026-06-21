@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 import sys
 import types
 import unittest
@@ -1087,6 +1088,43 @@ class DetectIterationSignalsTests(unittest.TestCase):
 
 class InvokeAgentRuntimeTimeoutTests(unittest.TestCase):
     """Bug 7: each retry gets fresh timeout budget."""
+
+    @patch.object(operator_utils.httpx, "Client")
+    def test_invoke_sends_runtime_bearer_token_header(
+        self, mock_client_cls: MagicMock
+    ) -> None:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"response": "ok"}
+        mock_client = MagicMock()
+        mock_client.post.return_value = mock_response
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client_cls.return_value = mock_client
+
+        with patch.dict(os.environ, {"RUNTIME_BEARER_TOKEN": "runtime-bearer"}):
+            operator_utils.invoke_agent_runtime("agent-1", "ns", {"prompt": "hi"}, timeout_seconds=120.0)
+
+        _url, kwargs = mock_client.post.call_args
+        self.assertEqual(kwargs["headers"], {"Authorization": "Bearer runtime-bearer"})
+
+    @patch.object(operator_utils.httpx, "Client")
+    def test_cancel_sends_runtime_bearer_token_header(
+        self, mock_client_cls: MagicMock
+    ) -> None:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client = MagicMock()
+        mock_client.post.return_value = mock_response
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client_cls.return_value = mock_client
+
+        with patch.dict(os.environ, {"RUNTIME_BEARER_TOKEN": "runtime-bearer"}):
+            self.assertTrue(operator_utils.cancel_agent_session("agent-1", "ns", "thread-1"))
+
+        _url, kwargs = mock_client.post.call_args
+        self.assertEqual(kwargs["headers"], {"Authorization": "Bearer runtime-bearer"})
 
     @patch.object(operator_utils.httpx, "Client")
     def test_creates_new_client_per_attempt(

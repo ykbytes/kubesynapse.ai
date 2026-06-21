@@ -12,7 +12,7 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import JSON, Column, DateTime, ForeignKey, String, inspect
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, String, inspect, text
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import declarative_base
 
@@ -34,6 +34,10 @@ def _json_clone(value: Any) -> Any:
     if value is None:
         return None
     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+
+
+def _compile_type_sql(column_type: Any, dialect: Any) -> str:
+    return str(column_type.compile(dialect=dialect))
 
 
 class OptimizationStudyRow(Base):
@@ -155,6 +159,7 @@ class OptimizationTrialRow(Base):
 
 def init_optimization_database() -> None:
     Base.metadata.create_all(bind=_AUTH_ENGINE)
+    _ensure_optimization_schema()
     logger.info("Optimization database initialized")
 
 
@@ -166,8 +171,29 @@ def ensure_optimization_database() -> None:
         logger.exception("Failed to inspect optimization database state")
         raise
     if set(_OPTIMIZATION_TABLES).issubset(existing):
+        _ensure_optimization_schema()
         return
     init_optimization_database()
+
+
+def _ensure_optimization_schema() -> None:
+    """Apply lightweight additive migrations for existing gateway databases."""
+    with _AUTH_ENGINE.begin() as connection:
+        inspector = inspect(connection)
+        if "optimization_studies" not in inspector.get_table_names():
+            return
+
+        columns = {str(column.get("name") or "") for column in inspector.get_columns("optimization_studies")}
+        if "proof_gate" in columns:
+            return
+
+        proof_gate_type = _compile_type_sql(JSON(), connection.dialect)
+        connection.execute(text(f"ALTER TABLE optimization_studies ADD COLUMN proof_gate {proof_gate_type}"))
+        connection.execute(
+            text("UPDATE optimization_studies SET proof_gate = :proof_gate WHERE proof_gate IS NULL"),
+            {"proof_gate": json.dumps({"mode": "hybrid", "requires_approval": True})},
+        )
+        logger.info("Added optimization_studies.proof_gate column")
 
 
 def create_study(
@@ -181,6 +207,7 @@ def create_study(
     opportunities: list[dict[str, Any]],
     source_manifests: dict[str, Any],
     created_by: str | None,
+    proof_gate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ensure_optimization_database()
     row = OptimizationStudyRow(
@@ -194,7 +221,7 @@ def create_study(
         baseline_metrics=baseline_metrics,
         opportunities=opportunities,
         source_manifests=source_manifests,
-        proof_gate={"mode": "hybrid", "requires_approval": True},
+        proof_gate=proof_gate or {"mode": "hybrid", "requires_approval": True},
         dataset_redaction_state="redacted",
         created_by=created_by,
     )
@@ -298,6 +325,35 @@ def mark_candidate_applied(candidate_id: str) -> dict[str, Any] | None:
         return row.to_dict()
 
 
+def promote_candidate(
+    *,
+    candidate_id: str,
+    promoted_by: str | None,
+    reason: str | None,
+    roi: dict[str, Any],
+) -> dict[str, Any] | None:
+    ensure_optimization_database()
+    with db_session() as session:
+        candidate = session.query(OptimizationCandidateRow).filter_by(id=candidate_id).one_or_none()
+        if candidate is None:
+            return None
+        study = session.query(OptimizationStudyRow).filter_by(id=candidate.study_id).one_or_none()
+        if study is None:
+            return None
+        expected_savings = _json_clone(candidate.expected_savings) or {}
+        expected_savings["promotion"] = {
+            "promoted_by": promoted_by,
+            "reason": reason,
+            "roi": _json_clone(roi),
+            "promoted_at": utc_now().isoformat(),
+        }
+        candidate.expected_savings = expected_savings
+        candidate.status = "promoted"
+        study.status = "promoted"
+        session.flush()
+        return {"candidate": candidate.to_dict(), "study": study.to_dict(), "promotion": expected_savings["promotion"]}
+
+
 def create_trial(
     *,
     study_id: str,
@@ -324,6 +380,29 @@ def create_trial(
     )
     with db_session() as session:
         session.add(row)
+        session.flush()
+        return row.to_dict()
+
+
+def update_trial_result(
+    *,
+    trial_id: str,
+    result_execution_id: str | None,
+    quality_status: str,
+    metrics_delta: dict[str, Any],
+    notes: str | None = None,
+) -> dict[str, Any] | None:
+    ensure_optimization_database()
+    with db_session() as session:
+        row = session.query(OptimizationTrialRow).filter_by(id=trial_id).one_or_none()
+        if row is None:
+            return None
+        row.result_execution_id = result_execution_id
+        row.quality_status = quality_status
+        row.metrics_delta = _json_clone(metrics_delta) or {}
+        if notes is not None:
+            row.notes = notes
+        row.status = "recorded" if result_execution_id else row.status
         session.flush()
         return row.to_dict()
 

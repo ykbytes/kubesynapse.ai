@@ -494,6 +494,13 @@ def _coerce_int(value: Any) -> int:
         return 0
 
 
+def _coerce_text(value: Any) -> str:
+    """Best-effort string coercion that treats None as empty string."""
+    if value is None:
+        return ""
+    return str(value)
+
+
 def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
     """Update DB records from a single trace event."""
     event_type = event_data.get("event_type", "custom")
@@ -571,6 +578,11 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
         cache_read_tokens = _coerce_int(payload.get("cache_read_tokens"))
         cache_write_tokens = _coerce_int(payload.get("cache_write_tokens"))
         reasoning_tokens = _coerce_int(payload.get("reasoning_tokens"))
+        full_prompt = _coerce_text(payload.get("prompt_text") or payload.get("full_prompt"))
+        full_response = _coerce_text(payload.get("response_text") or payload.get("full_response"))
+        reasoning_text = _coerce_text(payload.get("reasoning_text"))
+        system_prompt_val = _coerce_text(payload.get("system_prompt"))
+        finish_reason = payload.get("finish_reason")
         record = trace_store.LLMCallRecord(
             id=f"llm-{uuid.uuid4().hex[:12]}",
             execution_id=execution_id,
@@ -594,8 +606,28 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
             started_at=_event_timestamp_to_utc(event_data.get("timestamp")) or trace_store.utc_now(),
             prompt_preview=payload.get("prompt_preview", "")[:1024],
             response_preview=payload.get("response_preview", "")[:2048],
+            prompt_chars=len(full_prompt),
+            response_chars=len(full_response),
+            reasoning_text=reasoning_text if len(reasoning_text) <= trace_store._TRACE_CONTENT_INLINE_THRESHOLD else None,
+            reasoning_chars=len(reasoning_text),
+            full_prompt=full_prompt if len(full_prompt) <= trace_store._TRACE_CONTENT_INLINE_THRESHOLD else None,
+            full_response=full_response if len(full_response) <= trace_store._TRACE_CONTENT_INLINE_THRESHOLD else None,
+            system_prompt=system_prompt_val if len(system_prompt_val) <= trace_store._TRACE_CONTENT_INLINE_THRESHOLD else None,
+            system_prompt_chars=len(system_prompt_val),
+            finish_reason=finish_reason,
+            prompt_chars_full=len(full_prompt),
+            response_chars_full=len(full_response),
         )
         session.add(record)
+        content_ref = trace_store._store_llm_content(
+            llm_call_id=record.id,
+            prompt=full_prompt,
+            response=full_response,
+            reasoning_text=reasoning_text,
+            system_prompt=system_prompt_val,
+        )
+        if content_ref:
+            record.content_ref = content_ref
         step = (
             session.query(trace_store.StepExecution)
             .filter_by(id=step_id)
@@ -607,6 +639,9 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
             step.cache_read_tokens = (step.cache_read_tokens or 0) + cache_read_tokens
             step.cache_write_tokens = (step.cache_write_tokens or 0) + cache_write_tokens
             step.reasoning_tokens = (step.reasoning_tokens or 0) + reasoning_tokens
+            step.total_reasoning_chars = (step.total_reasoning_chars or 0) + len(reasoning_text)
+            step.total_prompt_chars = (step.total_prompt_chars or 0) + len(full_prompt)
+            step.total_response_chars = (step.total_response_chars or 0) + len(full_response)
             if record.cost_usd:
                 step.cost_usd = (step.cost_usd or 0.0) + record.cost_usd
         return
@@ -623,8 +658,12 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
             total_tokens = prompt_tokens + completion_tokens + cache_read_tokens + cache_write_tokens + reasoning_tokens
         if total_tokens == 0:
             return  # Skip zero-token LLM call events (nothing to record)
+        full_prompt = _coerce_text(payload.get("prompt_text") or payload.get("full_prompt") or event_data.get("prompt_text") or event_data.get("full_prompt"))
+        full_response = _coerce_text(payload.get("response_text") or payload.get("full_response") or event_data.get("response_text") or event_data.get("full_response"))
+        reasoning_text = _coerce_text(payload.get("reasoning_text") or event_data.get("reasoning_text"))
+        system_prompt_val = _coerce_text(payload.get("system_prompt") or event_data.get("system_prompt"))
+        finish_reason = payload.get("finish_reason")
         effective_step_id = step_id or f"step-runtime-{execution_id[:16]}"
-        # Ensure the step exists (create a synthetic one if needed)
         if not step_id:
             existing_step = (
                 session.query(trace_store.StepExecution)
@@ -632,6 +671,7 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
                 .one_or_none()
             )
             if not existing_step:
+                _get_or_create_execution(session, execution_id, {"_event_timestamp": event_data.get("timestamp")})
                 _get_or_create_step(session, execution_id, effective_step_id, {
                     "step_name": "runtime-invoke",
                     "step_type": "llm",
@@ -651,9 +691,30 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
             cost_usd=event_data.get("cost_usd"),
             latency_ms=event_data.get("duration_ms"),
             started_at=_event_timestamp_to_utc(event_data.get("timestamp")) or trace_store.utc_now(),
+            prompt_preview=full_prompt[:1024] if full_prompt else None,
+            response_preview=full_response[:2048] if full_response else None,
+            prompt_chars=len(full_prompt),
+            response_chars=len(full_response),
+            reasoning_text=reasoning_text if len(reasoning_text) <= trace_store._TRACE_CONTENT_INLINE_THRESHOLD else None,
+            reasoning_chars=len(reasoning_text),
+            full_prompt=full_prompt if len(full_prompt) <= trace_store._TRACE_CONTENT_INLINE_THRESHOLD else None,
+            full_response=full_response if len(full_response) <= trace_store._TRACE_CONTENT_INLINE_THRESHOLD else None,
+            system_prompt=system_prompt_val if len(system_prompt_val) <= trace_store._TRACE_CONTENT_INLINE_THRESHOLD else None,
+            system_prompt_chars=len(system_prompt_val),
+            finish_reason=finish_reason,
+            prompt_chars_full=len(full_prompt),
+            response_chars_full=len(full_response),
         )
         session.add(record)
-        # Update step aggregates
+        content_ref = trace_store._store_llm_content(
+            llm_call_id=record.id,
+            prompt=full_prompt,
+            response=full_response,
+            reasoning_text=reasoning_text,
+            system_prompt=system_prompt_val,
+        )
+        if content_ref:
+            record.content_ref = content_ref
         step_obj = (
             session.query(trace_store.StepExecution)
             .filter_by(id=effective_step_id)
@@ -665,6 +726,9 @@ def _upsert_from_event(session: Any, event_data: dict[str, Any]) -> None:
             step_obj.cache_read_tokens = (step_obj.cache_read_tokens or 0) + cache_read_tokens
             step_obj.cache_write_tokens = (step_obj.cache_write_tokens or 0) + cache_write_tokens
             step_obj.reasoning_tokens = (step_obj.reasoning_tokens or 0) + reasoning_tokens
+            step_obj.total_reasoning_chars = (step_obj.total_reasoning_chars or 0) + len(reasoning_text)
+            step_obj.total_prompt_chars = (step_obj.total_prompt_chars or 0) + len(full_prompt)
+            step_obj.total_response_chars = (step_obj.total_response_chars or 0) + len(full_response)
             if record.cost_usd:
                 step_obj.cost_usd = (step_obj.cost_usd or 0.0) + record.cost_usd
         # Refresh execution-level aggregates so cache/reasoning totals propagate
@@ -1140,3 +1204,125 @@ async def get_trace_detail_alias(
 
     _set_trace_alias_headers(response, request, f"/api/v1/traces/executions/{execution_id}")
     return await get_execution_detail(execution_id=execution_id, user=user)
+
+
+# ---------------------------------------------------------------------------
+# LLM Call detail endpoints
+# ---------------------------------------------------------------------------
+
+
+class LLMCallListResponse(BaseModel):
+    """Paginated list of LLM call records."""
+
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    total: int = 0
+    limit: int = 50
+    offset: int = 0
+
+
+class LLMCallDetailResponse(BaseModel):
+    """Full LLM call detail with optional decompressed content."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    execution_id: str
+    step_id: str
+    model: str
+    provider: str | None = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
+    total_tokens: int = 0
+    cost_usd: float | None = None
+    latency_ms: float | None = None
+    started_at: str | None = None
+    prompt_preview: str | None = None
+    response_preview: str | None = None
+    reasoning_chars: int = 0
+    prompt_chars_full: int = 0
+    response_chars_full: int = 0
+    system_prompt_chars: int = 0
+    finish_reason: str | None = None
+    content_ref: str | None = None
+    full_prompt: str | None = None
+    full_response: str | None = None
+    system_prompt: str | None = None
+    reasoning_text: str | None = None
+
+
+@router.get("/executions/{execution_id}/llm-calls", response_model=LLMCallListResponse)
+@_catch_errors
+async def list_llm_calls(
+    execution_id: str,
+    step_id: str | None = None,
+    model: str | None = None,
+    provider: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    user: dict[str, Any] = Depends(verify_token),
+) -> LLMCallListResponse:
+    """List LLM call records for an execution with optional filters."""
+    execution = trace_store.get_execution_summary(execution_id)
+    if not execution:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    ensure_namespace_access(user, execution["namespace"])
+
+    limit = min(max(limit, 0), 500)
+    offset = max(offset, 0)
+
+    with trace_store.db_session() as session:
+        query = session.query(trace_store.LLMCallRecord).filter(
+            trace_store.LLMCallRecord.execution_id == execution_id
+        )
+        if step_id:
+            query = query.filter(trace_store.LLMCallRecord.step_id == step_id)
+        if model:
+            query = query.filter(trace_store.LLMCallRecord.model == model)
+        if provider:
+            query = query.filter(trace_store.LLMCallRecord.provider == provider)
+
+        total = query.count()
+        rows = query.order_by(trace_store.LLMCallRecord.started_at.asc()).offset(offset).limit(limit).all()
+        items = [row.to_dict() for row in rows]
+
+    return LLMCallListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/llm-calls/{llm_call_id}", response_model=LLMCallDetailResponse)
+@_catch_errors
+async def get_llm_call_detail(
+    llm_call_id: str,
+    include_content: bool = False,
+    user: dict[str, Any] = Depends(verify_token),
+) -> LLMCallDetailResponse:
+    """Get full LLM call detail with optional content decompression."""
+    with trace_store.db_session() as session:
+        row = session.query(trace_store.LLMCallRecord).filter_by(id=llm_call_id).one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="LLM call not found")
+
+        execution = trace_store.get_execution_summary(row.execution_id)
+        if not execution:
+            raise HTTPException(status_code=404, detail="Execution not found")
+        ensure_namespace_access(user, execution["namespace"])
+
+        result = LLMCallDetailResponse.model_validate(row.to_dict())
+
+        if include_content:
+            content = None
+            if row.content_ref:
+                content = trace_store._get_llm_content(row.content_ref)
+            if content:
+                result.full_prompt = content.get("full_prompt")
+                result.full_response = content.get("full_response")
+                result.system_prompt = content.get("system_prompt")
+                result.reasoning_text = content.get("reasoning_text")
+            else:
+                result.full_prompt = row.full_prompt
+                result.full_response = row.full_response
+                result.system_prompt = row.system_prompt
+                result.reasoning_text = row.reasoning_text
+        return result

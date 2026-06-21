@@ -169,6 +169,10 @@ def _sync_emit(event: dict[str, Any]) -> None:
         "cache_read_tokens": event.get("cache_read_tokens"),
         "cache_write_tokens": event.get("cache_write_tokens"),
         "reasoning_tokens": event.get("reasoning_tokens"),
+        "prompt_text": event.get("prompt_text"),
+        "response_text": event.get("response_text"),
+        "system_prompt": event.get("system_prompt"),
+        "reasoning_text": event.get("reasoning_text"),
     }
 
     try:
@@ -309,6 +313,13 @@ class RuntimeEventEmitter:
             "completion_tokens": event.get("completion_tokens"),
             "total_tokens": event.get("total_tokens"),
             "cost_usd": event.get("cost_usd"),
+            "cache_read_tokens": event.get("cache_read_tokens"),
+            "cache_write_tokens": event.get("cache_write_tokens"),
+            "reasoning_tokens": event.get("reasoning_tokens"),
+            "prompt_text": event.get("prompt_text"),
+            "response_text": event.get("response_text"),
+            "system_prompt": event.get("system_prompt"),
+            "reasoning_text": event.get("reasoning_text"),
         }
 
         try:
@@ -463,14 +474,28 @@ def emit_llm_call(
     duration_ms: int | None = None,
     session_id: str | None = None,
     thread_id: str | None = None,
+    prompt_text: str | None = None,
+    response_text: str | None = None,
+    system_prompt: str | None = None,
+    reasoning_text: str | None = None,
+    provider: str | None = None,
+    finish_reason: str | None = None,
 ) -> None:
+    payload: dict[str, Any] = {"model": model}
+    if provider:
+        payload["provider"] = provider
+    if reasoning_text:
+        payload["reasoning_text"] = reasoning_text
+    if finish_reason:
+        payload["finish_reason"] = finish_reason
+
     _sync_emit({
         "event_type": "llm.call",
         "execution_id": execution_id,
         "session_id": session_id,
         "thread_id": thread_id,
         "severity": "info",
-        "payload": {"model": model},
+        "payload": payload,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "cache_read_tokens": cache_read_tokens,
@@ -479,6 +504,10 @@ def emit_llm_call(
         "total_tokens": total_tokens,
         "cost_usd": cost_usd,
         "duration_ms": duration_ms,
+        "prompt_text": prompt_text,
+        "response_text": response_text,
+        "system_prompt": system_prompt,
+        "reasoning_text": reasoning_text,
     })
 
 

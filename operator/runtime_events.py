@@ -172,6 +172,13 @@ def _emit(event: dict[str, Any]) -> None:
         "completion_tokens": event.get("completion_tokens"),
         "total_tokens": event.get("total_tokens"),
         "cost_usd": event.get("cost_usd"),
+        "cache_read_tokens": event.get("cache_read_tokens"),
+        "cache_write_tokens": event.get("cache_write_tokens"),
+        "reasoning_tokens": event.get("reasoning_tokens"),
+        "prompt_text": event.get("prompt_text"),
+        "response_text": event.get("response_text"),
+        "system_prompt": event.get("system_prompt"),
+        "reasoning_text": event.get("reasoning_text"),
     }
 
     try:
@@ -355,18 +362,33 @@ def emit_tool_call(execution_id: str, **kwargs: Any) -> None:
 
 
 def emit_llm_call(execution_id: str, **kwargs: Any) -> None:
+    provider_val = kwargs.get("provider")
+    finish_reason_val = kwargs.get("finish_reason")
+    payload: dict[str, Any] = {
+        "model": kwargs.get("model"),
+        "step_name": kwargs.get("step_name"),
+    }
+    if provider_val:
+        payload["provider"] = provider_val
+    if finish_reason_val:
+        payload["finish_reason"] = finish_reason_val
+
     _emit({
         "event_type": "llm.call",
         "execution_id": execution_id,
         "thread_id": kwargs.get("thread_id"),
         "severity": "info",
-        "payload": {
-            "model": kwargs.get("model"),
-            "step_name": kwargs.get("step_name"),
-        },
+        "payload": payload,
         "prompt_tokens": kwargs.get("prompt_tokens"),
         "completion_tokens": kwargs.get("completion_tokens"),
+        "cache_read_tokens": kwargs.get("cache_read_tokens"),
+        "cache_write_tokens": kwargs.get("cache_write_tokens"),
+        "reasoning_tokens": kwargs.get("reasoning_tokens"),
         "total_tokens": kwargs.get("total_tokens"),
         "cost_usd": kwargs.get("cost_usd"),
         "duration_ms": kwargs.get("duration_ms"),
+        "prompt_text": kwargs.get("prompt_text"),
+        "response_text": kwargs.get("response_text"),
+        "system_prompt": kwargs.get("system_prompt"),
+        "reasoning_text": kwargs.get("reasoning_text"),
     })

@@ -4,7 +4,7 @@ metadata:
   name: research-assistant
   namespace: default
 spec:
-  model: gpt-4
+  model: opencode-go/deepseek-v4-flash
   policyRef: strict-enterprise-policy
   runtime:
     kind: opencode

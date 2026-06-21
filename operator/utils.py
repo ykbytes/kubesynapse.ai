@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 from collections import deque
@@ -785,6 +786,13 @@ def _tool_call_input_preview(tool_input: Any) -> str:
     return summarize_tool_input(tool_input) or ""
 
 
+def runtime_auth_headers() -> dict[str, str]:
+    token = os.getenv("RUNTIME_BEARER_TOKEN", "").strip()
+    if not token:
+        return {}
+    return {"Authorization": f"Bearer {token}"}
+
+
 def invoke_agent_runtime(
     agent_name: str,
     namespace: str,
@@ -799,12 +807,13 @@ def invoke_agent_runtime(
         raise ValueError(f"Invalid namespace for runtime invocation: {namespace!r}")
     effective_timeout = timeout_seconds or AGENT_RUNTIME_TIMEOUT_SECONDS
     url = f"{runtime_url(agent_name, namespace)}/invoke"
+    headers = runtime_auth_headers()
     last_exc: Exception | None = None
     for attempt in range(3):
         # Create a fresh client per attempt so each gets the full timeout
         # budget instead of sharing a single countdown across retries.
         with httpx.Client(timeout=effective_timeout) as client:
-            response = client.post(url, json=payload)
+            response = client.post(url, json=payload, headers=headers)
         if response.status_code < 500:
             if response.status_code >= 400:
                 raise httpx.HTTPStatusError(
@@ -843,11 +852,12 @@ def invoke_agent_runtime_stream(
         raise ValueError(f"Invalid namespace for runtime invocation: {namespace!r}")
     effective_timeout = timeout_seconds or AGENT_RUNTIME_TIMEOUT_SECONDS
     stream_url = f"{runtime_url(agent_name, namespace)}/invoke/stream"
+    headers = runtime_auth_headers()
     prefix = f"[opencode {step_name} iter={iteration}]" if step_name else f"[opencode {agent_name}]"
 
     try:
         with httpx.Client(timeout=effective_timeout) as client:  # noqa: SIM117 — nested with for clarity
-            with client.stream("POST", stream_url, json=payload) as resp:
+            with client.stream("POST", stream_url, json=payload, headers=headers) as resp:
                 if resp.status_code >= 400:
                     logger.warning(
                         "%s stream returned %d, falling back to /invoke: %s",
@@ -858,6 +868,7 @@ def invoke_agent_runtime_stream(
                     return invoke_agent_runtime(agent_name, namespace, payload, timeout_seconds=timeout_seconds)
                 final_result: dict[str, Any] = {}
                 response_chunks: list[str] = []
+                reasoning_chunks: list[str] = []
                 streamed_tool_calls: list[dict[str, Any]] = []
                 turn_count = 0
                 current_event_type = ""
@@ -894,6 +905,18 @@ def invoke_agent_runtime_stream(
                         logger.info(
                             "%s turn %d completed — status=%s, response=%d chars", prefix, turn_count, status, resp_len
                         )
+                    elif etype == "response.reasoning":
+                        reasoning_text = str(data.get("reasoning") or "")
+                        if reasoning_text:
+                            reasoning_chunks.append(reasoning_text)
+                            preview = reasoning_text[:200].replace("\n", " ")
+                            logger.info(
+                                "%s turn %d reasoning: %s%s",
+                                prefix,
+                                turn_count,
+                                preview,
+                                "..." if len(reasoning_text) > 200 else "",
+                            )
                     elif etype == "response.delta":
                         delta_text = data.get("delta", "")
                         # Log first 200 chars of delta to show what opencode is doing
@@ -953,6 +976,9 @@ def invoke_agent_runtime_stream(
                             final_result["tool_calls"] = streamed_tool_calls
                         if final_result.get("metadata") is None:
                             final_result["metadata"] = {}
+                        reasoning_text = "".join(reasoning_chunks)
+                        if reasoning_text and not final_result.get("metadata", {}).get("reasoning_text"):
+                            final_result["metadata"]["reasoning_text"] = reasoning_text
                         last_response = str(final_result.get("response", ""))
                         logger.info(
                             "%s completed — turns: %d, response: %d chars", prefix, turn_count, len(last_response)
@@ -993,8 +1019,9 @@ def cancel_agent_session(
     """
     try:
         url = f"{runtime_url(agent_name, namespace)}/cancel"
+        headers = runtime_auth_headers()
         with httpx.Client(timeout=timeout_seconds) as client:
-            response = client.post(url, params={"thread_id": thread_id})
+            response = client.post(url, params={"thread_id": thread_id}, headers=headers)
         return response.status_code == 200
     except Exception as exc:
         logger.debug("Agent session cancel failed for %s/%s: %s", agent_name, namespace, exc, exc_info=True)

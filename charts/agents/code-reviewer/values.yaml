@@ -3,7 +3,7 @@ namespaceOverride: ""
 
 agent:
   name: code-reviewer
-  model: gpt-4
+  model: opencode-go/deepseek-v4-flash
   policyRef: ""
   systemPrompt: |
     You are a senior code reviewer. Review code changes for correctness,

@@ -11,7 +11,7 @@ spec:
         opencode.json:
           default_agent: build
           permission: allow
-  model: gpt-4
+  model: opencode-go/deepseek-v4-flash
   policyRef: strict-enterprise-policy
   systemPrompt: >
     You are an autonomous coding agent that creates, tests, and ships

@@ -14,6 +14,7 @@ spec:
     maxOutputTokens: 8192
   allowedModels:
     - opencode-go/deepseek-v4-flash
+    - opencode/deepseek-v4-flash-free
   allowedMcpServers: []
   mcpRequireHitl: false
   toolPolicy:

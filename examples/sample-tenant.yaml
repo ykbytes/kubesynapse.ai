@@ -10,9 +10,7 @@ spec:
     maxMemory: "32Gi"
     maxPods: 20
   allowedModels:
-    - gpt-4
-    - claude-3-sonnet
-    - gemini-pro
+    - opencode-go/deepseek-v4-flash
   adminUsers:
     - alice@enterprise.com
     - bob@enterprise.com

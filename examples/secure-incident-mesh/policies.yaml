@@ -13,7 +13,7 @@ spec:
     maskPII: true
     maxOutputTokens: 4000
   allowedModels:
-    - litellm/gpt-5-mini
+    - opencode-go/deepseek-v4-flash
   allowedMcpServers: []
   mcpRequireHitl: true
   toolPolicy:
@@ -47,7 +47,7 @@ spec:
     maskPII: true
     maxOutputTokens: 4000
   allowedModels:
-    - litellm/gpt-5-mini
+    - opencode-go/deepseek-v4-flash
   allowedMcpServers: []
   mcpRequireHitl: true
   toolPolicy:

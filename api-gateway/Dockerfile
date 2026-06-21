@@ -34,6 +34,7 @@ WORKDIR /app
 # Copy installed packages from build stage (no build tools)
 COPY --from=builder /root/.local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages/
 COPY --from=builder /root/.local/bin /usr/local/bin/
+RUN python -m compileall -q /usr/local/lib/python3.12
 
 # Copy application code
 COPY main.py _core.py constants.py auth_store.py enterprise_auth.py jwt_utils.py \
@@ -44,6 +45,10 @@ COPY routers/ ./routers/
 COPY services/ ./services/
 COPY migrations/ ./migrations/
 COPY alembic.ini .
+
+# Precompile Python bytecode at build time. Docker Desktop/kind can be slow at
+# cold source compilation, which otherwise risks startup probe failures.
+RUN python -m compileall -q /app
 
 # §1.1 — Proper file ownership and permissions
 RUN chown -R gatewayuser:gateway /app && \
@@ -69,6 +74,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 # §3.3 — Environment defaults
 ENV API_GATEWAY_LOG_LEVEL=INFO
 ENV JSON_LOGS=true
+ENV PYTHONDONTWRITEBYTECODE=1
 
-# Run with graceful shutdown timeout (SIGTERM → 30s grace period)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2"]
+# Run one worker per container. Scale replicas for concurrency; this avoids
+# duplicate cold-start imports and startup migrations inside each pod.
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]

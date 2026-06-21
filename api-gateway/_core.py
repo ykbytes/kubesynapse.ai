@@ -90,6 +90,8 @@ from constants import (
     JSONRPC_PARSE_ERROR,
     K8S_NAME_PATTERN,
     K8S_NAME_RE,
+    K8S_API_READ_TIMEOUT_SECONDS,
+    K8S_STATUS_READ_TIMEOUT_SECONDS,
     LITELLM_INTERNAL_URL,
     LITELLM_MASTER_KEY,
     LLM_SECRET_NAME,
@@ -800,6 +802,7 @@ class AgentInfo(BaseModel):
     namespace: str
     status: str
     runtime_kind: str = "unknown"
+    cluster_access: dict[str, Any] = Field(default_factory=dict)
 
 
 class PolicyInfo(BaseModel):
@@ -4519,6 +4522,7 @@ def list_custom_resources(plural: str, namespace: str) -> list[dict[str, Any]]:
             version=RESOURCE_VERSION,
             namespace=namespace,
             plural=plural,
+            _request_timeout=K8S_API_READ_TIMEOUT_SECONDS,
         )
         return result.get("items", [])
     except Exception as exc:
@@ -4538,6 +4542,7 @@ def read_custom_resource(plural: str, name: str, namespace: str, label: str) -> 
                 namespace=namespace,
                 plural=plural,
                 name=name,
+                _request_timeout=K8S_API_READ_TIMEOUT_SECONDS,
             ),
         )
     except Exception as exc:
@@ -4677,18 +4682,47 @@ def _extract_reconcile_error(agent: dict[str, Any]) -> str | None:
 def agent_info_from_resource(agent: dict[str, Any]) -> AgentInfo:
     metadata = agent.get("metadata", {})
     spec = agent.get("spec", {})
+    labels = metadata.get("labels") if isinstance(metadata.get("labels"), dict) else {}
+    annotations = metadata.get("annotations") if isinstance(metadata.get("annotations"), dict) else {}
     runtime_spec = spec.get("runtime") or {}
     runtime_kind = "unknown"
     if isinstance(runtime_spec, dict):
         runtime_kind = str(runtime_spec.get("kind") or "").strip().lower() or "unknown"
     namespace = metadata.get("namespace", "default")
     name = metadata.get("name", "")
+    access_marker = str(
+        labels.get("kubesynapse.ai/cluster-access")
+        or annotations.get("kubesynapse.ai/cluster-access")
+        or ""
+    ).strip().lower()
+    optimizer_marker = str(labels.get("kubesynapse.ai/optimizer") or annotations.get("kubesynapse.ai/optimizer") or "").strip().lower()
+    deployment_capable = bool(
+        access_marker in {"candidate-deployment", "deployment", "elevated"}
+        or optimizer_marker in {"true", "yes", "1"}
+        or "optimizer" in name.lower()
+        or "optimiser" in name.lower()
+    )
     return AgentInfo(
         name=name,
         model=spec.get("model", "unknown"),
         namespace=namespace,
         status=get_agent_status(name, namespace),
         runtime_kind=runtime_kind,
+        cluster_access={
+            "level": "elevated" if deployment_capable else "standard",
+            "deployment_capable": deployment_capable,
+            "scope": namespace,
+            "guard": "admin approval, copied candidate manifests only",
+            "allowed_actions": [
+                "analyze_runs",
+                "propose_candidate_manifest",
+                *(
+                    ["request_candidate_apply", "request_candidate_run"]
+                    if deployment_capable
+                    else []
+                ),
+            ],
+        },
     )
 
 
@@ -5198,6 +5232,7 @@ def get_agents(namespace: str = "default") -> list[dict[str, Any]]:
             version="v1alpha1",
             namespace=namespace,
             plural="aiagents",
+            _request_timeout=K8S_API_READ_TIMEOUT_SECONDS,
         )
         return result.get("items", [])
     except Exception as exc:
@@ -5214,6 +5249,7 @@ def get_policies(namespace: str = "default") -> list[dict[str, Any]]:
             version=RESOURCE_VERSION,
             namespace=namespace,
             plural="agentpolicies",
+            _request_timeout=K8S_API_READ_TIMEOUT_SECONDS,
         )
         return result.get("items", [])
     except Exception as exc:
@@ -5233,6 +5269,7 @@ def read_agent(agent_name: str, namespace: str) -> dict[str, Any]:
                 namespace=namespace,
                 plural="aiagents",
                 name=agent_name,
+                _request_timeout=K8S_API_READ_TIMEOUT_SECONDS,
             ),
         )
     except Exception as exc:
@@ -5398,6 +5435,7 @@ def read_approval(approval_name: str, namespace: str) -> dict[str, Any]:
                 namespace=namespace,
                 plural="agentapprovals",
                 name=approval_name,
+                _request_timeout=K8S_API_READ_TIMEOUT_SECONDS,
             ),
         )
     except Exception as exc:
@@ -5412,6 +5450,7 @@ def list_agent_pods(agent_name: str, namespace: str) -> list[Any]:
         pods = client.CoreV1Api().list_namespaced_pod(
             namespace=namespace,
             label_selector=f"app=ai-agent,agent-name={agent_name}",
+            _request_timeout=K8S_STATUS_READ_TIMEOUT_SECONDS,
         )
 
         def pod_sort_key(item: Any) -> float:
@@ -5437,6 +5476,7 @@ def list_job_pods(job_name: str, namespace: str) -> list[Any]:
         pods = client.CoreV1Api().list_namespaced_pod(
             namespace=namespace,
             label_selector=f"job-name={job_name}",
+            _request_timeout=K8S_STATUS_READ_TIMEOUT_SECONDS,
         )
 
         def pod_sort_key(item: Any) -> float:

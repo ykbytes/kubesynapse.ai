@@ -19,8 +19,7 @@ spec:
   # Distributed token, request, and cost budgets are reserved for a future
   # release and are rejected by the CRD and operator today.
   allowedModels:
-    - gpt-4
-    - gpt-3.5-turbo
+    - opencode-go/deepseek-v4-flash
   # MCP access control: only these server types are reachable by agents bound
   # to this policy.  The operator enforces this via a per-agent NetworkPolicy
   # that limits egress to the mcp-hub namespace to only matching pod types.

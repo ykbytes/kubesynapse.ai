@@ -16,6 +16,8 @@ Storage:
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import json
 import logging
 import os
@@ -34,8 +36,10 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
-    inspect,
+    LargeBinary,
     String,
+    Text,
+    inspect,
     text,
 )
 from sqlalchemy.exc import OperationalError, ProgrammingError
@@ -51,11 +55,15 @@ _TRACE_TABLES = (
     "workflow_executions",
     "step_executions",
     "llm_call_records",
+    "llm_call_content",
     "tool_call_records",
     "execution_trace_events",
     "runtime_run_events",
 )
 _WORKFLOW_EXECUTION_RUN_ID_LENGTH = 128
+_TRACE_CONTENT_ENABLED = os.getenv("TRACE_CONTENT_ENABLED", "true").strip().lower() not in ("false", "0", "no")
+_TRACE_CONTENT_MAX_BYTES = int(os.getenv("TRACE_CONTENT_MAX_BYTES", "262144"))  # 256KB per field
+_TRACE_CONTENT_INLINE_THRESHOLD = int(os.getenv("TRACE_CONTENT_INLINE_THRESHOLD", "10240"))  # 10KB inline
 
 Base = declarative_base()
 
@@ -207,6 +215,9 @@ class WorkflowExecution(Base):
     triggered_by = Column(String(128), nullable=True)
     error_message = Column(String(4096), nullable=True)
     trace_file_path = Column(String(512), nullable=True)
+    total_reasoning_chars = Column(Integer, nullable=False, default=0)
+    total_prompt_chars = Column(Integer, nullable=False, default=0)
+    total_response_chars = Column(Integer, nullable=False, default=0)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -236,6 +247,9 @@ class WorkflowExecution(Base):
             "triggered_by": self.triggered_by,
             "error_message": self.error_message,
             "trace_file_path": self.trace_file_path,
+            "total_reasoning_chars": self.total_reasoning_chars,
+            "total_prompt_chars": self.total_prompt_chars,
+            "total_response_chars": self.total_response_chars,
         }
 
 
@@ -263,6 +277,9 @@ class StepExecution(Base):
     reasoning_tokens = Column(Integer, nullable=False, default=0)
     cost_usd = Column(Float, nullable=True)
     checkpoint_ref = Column(String(256), nullable=True)
+    total_reasoning_chars = Column(Integer, nullable=False, default=0)
+    total_prompt_chars = Column(Integer, nullable=False, default=0)
+    total_response_chars = Column(Integer, nullable=False, default=0)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -286,6 +303,9 @@ class StepExecution(Base):
             "cache_write_tokens": self.cache_write_tokens,
             "reasoning_tokens": self.reasoning_tokens,
             "cost_usd": self.cost_usd,
+            "total_reasoning_chars": self.total_reasoning_chars,
+            "total_prompt_chars": self.total_prompt_chars,
+            "total_response_chars": self.total_response_chars,
         }
 
 
@@ -311,6 +331,16 @@ class LLMCallRecord(Base):
     prompt_preview = Column(String(1024), nullable=True)
     response_preview = Column(String(2048), nullable=True)
     trace_event_index = Column(Integer, nullable=True)
+    reasoning_text = Column(Text, nullable=True)
+    full_prompt = Column(Text, nullable=True)
+    full_response = Column(Text, nullable=True)
+    system_prompt = Column(Text, nullable=True)
+    finish_reason = Column(String(64), nullable=True)
+    reasoning_chars = Column(Integer, nullable=False, default=0)
+    prompt_chars_full = Column(Integer, nullable=False, default=0)
+    response_chars_full = Column(Integer, nullable=False, default=0)
+    system_prompt_chars = Column(Integer, nullable=False, default=0)
+    content_ref = Column(String(64), nullable=True, index=True)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -330,7 +360,59 @@ class LLMCallRecord(Base):
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "prompt_preview": self.prompt_preview,
             "response_preview": self.response_preview,
+            "reasoning_text": self.reasoning_text,
+            "full_prompt": self.full_prompt,
+            "full_response": self.full_response,
+            "system_prompt": self.system_prompt,
+            "reasoning_chars": self.reasoning_chars,
+            "prompt_chars_full": self.prompt_chars_full,
+            "response_chars_full": self.response_chars_full,
+            "system_prompt_chars": self.system_prompt_chars,
+            "finish_reason": self.finish_reason,
+            "content_ref": self.content_ref,
         }
+
+
+class LLMCallContent(Base):
+    """Compressed full-content store for LLM call traces.
+
+    Stores gzip-compressed prompt/response/reasoning/system_prompt data
+    for LLM calls where the content exceeds the inline threshold.
+    Content is deduplicated by SHA-256 hash of the concatenated fields.
+    """
+
+    __tablename__ = "llm_call_content"
+
+    id = Column(String(64), primary_key=True)
+    llm_call_id = Column(String(64), ForeignKey("llm_call_records.id", ondelete="SET NULL"), nullable=True, index=True)
+    content_hash = Column(String(64), unique=True, nullable=False, index=True)
+    full_prompt = Column(LargeBinary, nullable=True)
+    full_response = Column(LargeBinary, nullable=True)
+    system_prompt = Column(LargeBinary, nullable=True)
+    reasoning_text = Column(LargeBinary, nullable=True)
+    prompt_chars = Column(Integer, nullable=False, default=0)
+    response_chars = Column(Integer, nullable=False, default=0)
+    system_prompt_chars = Column(Integer, nullable=False, default=0)
+    reasoning_chars = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    def to_dict(self, decompress: bool = False) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "id": self.id,
+            "llm_call_id": self.llm_call_id,
+            "content_hash": self.content_hash,
+            "prompt_chars": self.prompt_chars,
+            "response_chars": self.response_chars,
+            "system_prompt_chars": self.system_prompt_chars,
+            "reasoning_chars": self.reasoning_chars,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+        if decompress:
+            result["full_prompt"] = _decompress_bytes(self.full_prompt) if self.full_prompt else None
+            result["full_response"] = _decompress_bytes(self.full_response) if self.full_response else None
+            result["system_prompt"] = _decompress_bytes(self.system_prompt) if self.system_prompt else None
+            result["reasoning_text"] = _decompress_bytes(self.reasoning_text) if self.reasoning_text else None
+        return result
 
 
 class ToolCallRecord(Base):
@@ -379,9 +461,116 @@ def refresh_execution_aggregates(session: Any, execution: WorkflowExecution) -> 
     execution.cache_write_tokens = sum((row.cache_write_tokens or 0) for row in llm_rows)
     execution.reasoning_tokens = sum((row.reasoning_tokens or 0) for row in llm_rows)
     execution.total_tokens = sum((row.total_tokens or 0) for row in llm_rows)
+    execution.total_reasoning_chars = sum((row.reasoning_chars or 0) for row in llm_rows)
+    execution.total_prompt_chars = sum((row.prompt_chars_full or 0) for row in llm_rows)
+    execution.total_response_chars = sum((row.response_chars_full or 0) for row in llm_rows)
 
     known_costs = [row.cost_usd for row in llm_rows if row.cost_usd is not None]
     execution.estimated_cost_usd = sum(known_costs) if known_costs else None
+
+
+# ---------------------------------------------------------------------------
+# Content compression and deduplication helpers
+# ---------------------------------------------------------------------------
+
+def _compress_bytes(value: str) -> bytes:
+    """Gzip-compress a string value to bytes."""
+    return gzip.compress(value.encode("utf-8", errors="replace"))
+
+
+def _decompress_bytes(value: bytes) -> str | None:
+    """Decompress gzip bytes back to a string."""
+    if value is None:
+        return None
+    try:
+        return gzip.decompress(value).decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+
+def _truncate_content(value: str | None) -> str:
+    """Truncate a content string to _TRACE_CONTENT_MAX_BYTES."""
+    if not value:
+        return ""
+    if len(value) <= _TRACE_CONTENT_MAX_BYTES:
+        return value
+    return value[:_TRACE_CONTENT_MAX_BYTES] + "...[content truncated]"
+
+
+def _compute_content_hash(prompt: str, response: str, reasoning: str, system_prompt: str) -> str:
+    """Compute a SHA-256 hash for content deduplication."""
+    combined = f"{prompt}|{response}|{reasoning}|{system_prompt}"
+    return hashlib.sha256(combined.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _store_llm_content(
+    llm_call_id: str,
+    prompt: str | None,
+    response: str | None,
+    reasoning_text: str | None,
+    system_prompt: str | None,
+) -> str | None:
+    """Store full-content for an LLM call in the llm_call_content table.
+
+    Returns the content_hash if content was stored, or None if content was
+    small enough to be stored inline on the LLMCallRecord row.
+    """
+    if not _TRACE_CONTENT_ENABLED:
+        return None
+
+    prompt_val = _truncate_content(prompt or "")
+    response_val = _truncate_content(response or "")
+    reasoning_val = _truncate_content(reasoning_text or "")
+    system_val = _truncate_content(system_prompt or "")
+
+    total_chars = len(prompt_val) + len(response_val) + len(reasoning_val) + len(system_val)
+    if total_chars <= _TRACE_CONTENT_INLINE_THRESHOLD:
+        return None
+
+    content_hash = _compute_content_hash(prompt_val, response_val, reasoning_val, system_val)
+
+    try:
+        with db_session() as session:
+            existing = session.query(LLMCallContent).filter(
+                LLMCallContent.content_hash == content_hash
+            ).one_or_none()
+            if existing is not None:
+                existing.llm_call_id = llm_call_id
+                return content_hash
+
+            record = LLMCallContent(
+                id=f"ct-{uuid.uuid4().hex[:16]}",
+                llm_call_id=llm_call_id,
+                content_hash=content_hash,
+                full_prompt=_compress_bytes(prompt_val) if prompt_val else None,
+                full_response=_compress_bytes(response_val) if response_val else None,
+                system_prompt=_compress_bytes(system_val) if system_val else None,
+                reasoning_text=_compress_bytes(reasoning_val) if reasoning_val else None,
+                prompt_chars=len(prompt_val),
+                response_chars=len(response_val),
+                system_prompt_chars=len(system_val),
+                reasoning_chars=len(reasoning_val),
+            )
+            session.add(record)
+            return content_hash
+    except Exception:
+        logger.debug("Failed to store LLM call content", exc_info=True)
+        return None
+
+
+def _get_llm_content(content_hash: str) -> dict[str, Any] | None:
+    """Retrieve decompressed content by its hash."""
+    try:
+        with db_session() as session:
+            row = session.query(LLMCallContent).filter(
+                LLMCallContent.content_hash == content_hash
+            ).one_or_none()
+            if row is None:
+                return None
+            return row.to_dict(decompress=True)
+    except Exception:
+        logger.debug("Failed to retrieve LLM call content", exc_info=True)
+        return None
 
 
 # ---------------------------------------------------------------------------
