@@ -4,7 +4,7 @@ metadata:
   name: securityresearcher
   namespace: default
 spec:
-  model: opencode-go/gpt-4o
+  model: opencode-go/deepseek-v4-flash
   runtime:
     kind: opencode
   systemPrompt: |

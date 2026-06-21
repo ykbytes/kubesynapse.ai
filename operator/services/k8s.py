@@ -7,6 +7,7 @@ and their private helpers from operator/main.py into operator/services/.
 
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import json
@@ -55,6 +56,17 @@ ApiTypeError = getattr(kubernetes.client, "ApiTypeError", TypeError)
 logger = logging.getLogger("operator.services")
 
 _RUNTIME_SECRET_MANUAL_OVERRIDE_ANNOTATION = "kubesynapse.ai/secret-manual-override"
+_RUNTIME_SECRET_MIRRORED_KEYS: tuple[str, ...] = (
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "MISTRAL_API_KEY",
+    "GITHUB_COPILOT_TOKEN",
+    "OPENCODE_API_KEY",
+    "OPENCODE_GO_API_KEY",
+    "OPENCODE_SERVER_PASSWORD",
+    "RUNTIME_BEARER_TOKEN",
+)
 
 
 def _generate_runtime_identity_hmac_secret() -> str:
@@ -109,6 +121,40 @@ def _record_runtime_secret_override_event(namespace: str, owner_name: str) -> No
         reporting_instance="kubesynapse-operator",
     )
     core_api.create_namespaced_event(namespace=namespace, body=event)
+
+
+def _decode_secret_data_value(raw_value: str | None) -> str:
+    """Decode a Kubernetes secret data field into plaintext."""
+    value = str(raw_value or "").strip()
+    if not value:
+        return ""
+    try:
+        return base64.b64decode(value).decode("utf-8").strip()
+    except Exception:
+        return value
+
+
+def _load_runtime_source_secret_data(core_api: kubernetes.client.CoreV1Api) -> dict[str, str]:
+    """Read the platform secret from the operator namespace for runtime mirroring."""
+    try:
+        source_secret = _sanitize_kube_resource(core_api.read_namespaced_secret(name=SECRET_NAME, namespace=OPERATOR_NAMESPACE))
+    except ApiException as exc:
+        if exc.status != 404:
+            logger.warning(
+                "Failed to read source runtime secret '%s/%s': %s",
+                OPERATOR_NAMESPACE,
+                SECRET_NAME,
+                describe_api_exception(exc),
+            )
+        return {}
+
+    raw_data = (source_secret.get("data") or {}) if isinstance(source_secret, dict) else {}
+    decoded: dict[str, str] = {}
+    for key in _RUNTIME_SECRET_MIRRORED_KEYS:
+        value = _decode_secret_data_value(raw_data.get(key))
+        if value:
+            decoded[key] = value
+    return decoded
 
 
 # ---------------------------------------------------------------------------
@@ -690,6 +736,26 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
                         "secretKey": "API_GATEWAY_SHARED_TOKEN",
                         "remoteRef": {"key": "kubesynapse/api-gateway-shared-token"},
                     },
+                    {
+                        "secretKey": "RUNTIME_BEARER_TOKEN",
+                        "remoteRef": {"key": "kubesynapse/runtime-bearer-token"},
+                    },
+                    {
+                        "secretKey": "GITHUB_COPILOT_TOKEN",
+                        "remoteRef": {"key": "kubesynapse/github-copilot-token"},
+                    },
+                    {
+                        "secretKey": "OPENCODE_API_KEY",
+                        "remoteRef": {"key": "kubesynapse/opencode-api-key"},
+                    },
+                    {
+                        "secretKey": "OPENCODE_GO_API_KEY",
+                        "remoteRef": {"key": "kubesynapse/opencode-go-api-key"},
+                    },
+                    {
+                        "secretKey": "OPENCODE_SERVER_PASSWORD",
+                        "remoteRef": {"key": "kubesynapse/opencode-server-password"},
+                    },
                 ],
             },
         }
@@ -727,6 +793,8 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
         _ensure_runtime_namespace_immutable_config_maps(namespace, logger)
         return
 
+    core_api = kubernetes.client.CoreV1Api()
+    source_secret_data = _load_runtime_source_secret_data(core_api)
     string_data: dict[str, str] = {}
     if DEFAULT_LITELLM_MASTER_KEY:
         string_data["LITELLM_MASTER_KEY"] = DEFAULT_LITELLM_MASTER_KEY
@@ -739,6 +807,12 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
     # environment (configured by the operator) to validate the
     # X-Runtime-Identity header.
     string_data["RUNTIME_IDENTITY_HMAC_SECRET"] = RUNTIME_IDENTITY_HMAC_SECRET or _generate_runtime_identity_hmac_secret()
+    for key in _RUNTIME_SECRET_MIRRORED_KEYS:
+        mirrored_value = source_secret_data.get(key, "")
+        if mirrored_value:
+            string_data[key] = mirrored_value
+    if not string_data.get("RUNTIME_BEARER_TOKEN") and DEFAULT_API_GATEWAY_SHARED_TOKEN:
+        string_data["RUNTIME_BEARER_TOKEN"] = DEFAULT_API_GATEWAY_SHARED_TOKEN
 
     if not string_data:
         logger.warning(
@@ -766,7 +840,6 @@ def ensure_runtime_namespace_secret(namespace: str, owner_name: str, logger: log
         "type": "Opaque",
         "stringData": string_data,
     }
-    core_api = kubernetes.client.CoreV1Api()
     try:
         existing_secret = _sanitize_kube_resource(core_api.read_namespaced_secret(name=SECRET_NAME, namespace=namespace))
     except ApiException as exc:

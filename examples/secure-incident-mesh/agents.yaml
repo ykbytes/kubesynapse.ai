@@ -6,7 +6,7 @@ metadata:
   labels:
     app.kubernetes.io/part-of: secure-incident-mesh
 spec:
-  model: litellm/gpt-5-mini
+  model: opencode-go/deepseek-v4-flash
   policyRef: secure-incident-commander-policy
   runtime:
     kind: opencode
@@ -33,7 +33,7 @@ metadata:
   labels:
     app.kubernetes.io/part-of: secure-incident-mesh
 spec:
-  model: litellm/gpt-5-mini
+  model: opencode-go/deepseek-v4-flash
   policyRef: secure-incident-worker-policy
   runtime:
     kind: opencode
@@ -65,7 +65,7 @@ metadata:
   labels:
     app.kubernetes.io/part-of: secure-incident-mesh
 spec:
-  model: litellm/gpt-5-mini
+  model: opencode-go/deepseek-v4-flash
   policyRef: secure-incident-worker-policy
   runtime:
     kind: opencode
@@ -98,7 +98,7 @@ metadata:
   labels:
     app.kubernetes.io/part-of: secure-incident-mesh
 spec:
-  model: litellm/gpt-5-mini
+  model: opencode-go/deepseek-v4-flash
   policyRef: secure-incident-worker-policy
   runtime:
     kind: opencode

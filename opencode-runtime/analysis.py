@@ -204,6 +204,11 @@ def _build_response_metadata(payload: dict[str, Any]) -> dict[str, Any] | None:
     structured = _extract_structured_output(payload)
     if structured is not None:
         metadata["structured_output"] = structured
+    parts = payload.get("parts")
+    if isinstance(parts, list):
+        reasoning_text = extract_reasoning_from_parts(parts)
+        if reasoning_text:
+            metadata["reasoning_text"] = reasoning_text
     return metadata or None
 
 

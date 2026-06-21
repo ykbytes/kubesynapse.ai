@@ -1,6 +1,7 @@
 """Regression tests for streaming runtime parsing helpers."""
 
 import importlib.util
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -33,6 +34,41 @@ finally:
 
 
 class InvokeAgentRuntimeStreamTests(unittest.TestCase):
+    def test_stream_sends_runtime_bearer_token_header(self) -> None:
+        stream_response = MagicMock()
+        stream_response.status_code = 200
+        stream_response.iter_lines.return_value = [
+            "event: response.completed",
+            'data: {"response": "hello", "status": "completed"}',
+            "",
+            "data: [DONE]",
+        ]
+        stream_response.__enter__ = MagicMock(return_value=stream_response)
+        stream_response.__exit__ = MagicMock(return_value=False)
+
+        client = MagicMock()
+        client.stream.return_value = stream_response
+        client.__enter__ = MagicMock(return_value=client)
+        client.__exit__ = MagicMock(return_value=False)
+
+        with (
+            patch.object(operator_utils.httpx, "Client", return_value=client),
+            patch.object(operator_utils, "invoke_agent_runtime") as mock_invoke,
+            patch.dict(os.environ, {"RUNTIME_BEARER_TOKEN": "runtime-bearer"}),
+        ):
+            result = operator_utils.invoke_agent_runtime_stream(
+                "agent-1",
+                "default",
+                {"prompt": "hello"},
+                step_name="draft-blueprint",
+                iteration=1,
+            )
+
+        self.assertEqual(result["response"], "hello")
+        _args, kwargs = client.stream.call_args
+        self.assertEqual(kwargs["headers"], {"Authorization": "Bearer runtime-bearer"})
+        mock_invoke.assert_not_called()
+
     def test_keepalive_comments_do_not_repeat_prior_event_type(self) -> None:
         stream_response = MagicMock()
         stream_response.status_code = 200
@@ -187,6 +223,79 @@ class InvokeAgentRuntimeStreamTests(unittest.TestCase):
 
         self.assertEqual(result["tool_calls"][0]["tool"], "write")
         self.assertEqual(result["tool_calls"][0]["status"], "completed")
+        mock_invoke.assert_not_called()
+
+    def test_completed_event_collects_streamed_reasoning(self) -> None:
+        stream_response = MagicMock()
+        stream_response.status_code = 200
+        stream_response.iter_lines.return_value = [
+            "event: response.reasoning",
+            'data: {"reasoning": "Let me think step by step."}',
+            "",
+            "event: response.reasoning",
+            'data: {"reasoning": " Then decide."}',
+            "",
+            "event: response.completed",
+            'data: {"status": "completed", "response": "done"}',
+            "",
+            "data: [DONE]",
+        ]
+        stream_response.__enter__ = MagicMock(return_value=stream_response)
+        stream_response.__exit__ = MagicMock(return_value=False)
+
+        client = MagicMock()
+        client.stream.return_value = stream_response
+        client.__enter__ = MagicMock(return_value=client)
+        client.__exit__ = MagicMock(return_value=False)
+
+        with (
+            patch.object(operator_utils.httpx, "Client", return_value=client),
+            patch.object(operator_utils, "invoke_agent_runtime") as mock_invoke,
+        ):
+            result = operator_utils.invoke_agent_runtime_stream(
+                "agent-1",
+                "default",
+                {"prompt": "hello"},
+                step_name="draft-blueprint",
+                iteration=1,
+            )
+
+        self.assertEqual(result["metadata"]["reasoning_text"], "Let me think step by step. Then decide.")
+        mock_invoke.assert_not_called()
+
+    def test_completed_event_preserves_existing_reasoning_in_metadata(self) -> None:
+        stream_response = MagicMock()
+        stream_response.status_code = 200
+        stream_response.iter_lines.return_value = [
+            "event: response.reasoning",
+            'data: {"reasoning": "from stream"}',
+            "",
+            "event: response.completed",
+            'data: {"status": "completed", "response": "done", "metadata": {"reasoning_text": "from payload"}}',
+            "",
+            "data: [DONE]",
+        ]
+        stream_response.__enter__ = MagicMock(return_value=stream_response)
+        stream_response.__exit__ = MagicMock(return_value=False)
+
+        client = MagicMock()
+        client.stream.return_value = stream_response
+        client.__enter__ = MagicMock(return_value=client)
+        client.__exit__ = MagicMock(return_value=False)
+
+        with (
+            patch.object(operator_utils.httpx, "Client", return_value=client),
+            patch.object(operator_utils, "invoke_agent_runtime") as mock_invoke,
+        ):
+            result = operator_utils.invoke_agent_runtime_stream(
+                "agent-1",
+                "default",
+                {"prompt": "hello"},
+                step_name="draft-blueprint",
+                iteration=1,
+            )
+
+        self.assertEqual(result["metadata"]["reasoning_text"], "from payload")
         mock_invoke.assert_not_called()
 
 

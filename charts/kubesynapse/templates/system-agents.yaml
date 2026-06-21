@@ -1,6 +1,6 @@
 {{- if .Values.systemAgents.enabled -}}
 {{- $ns := .Values.systemAgents.namespace | default "kubesynapse-system" -}}
-{{- $defaultModel := .Values.systemAgents.defaultModel | default "gpt-4" -}}
+{{- $defaultModel := .Values.systemAgents.defaultModel | default "opencode-go/deepseek-v4-flash" -}}
 {{- $defaultRuntime := .Values.systemAgents.defaultRuntime | default "opencode" -}}
 
 # ---------------------------------------------------------------------------

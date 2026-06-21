@@ -1,17 +1,16 @@
-import { ExternalLink, X } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-  SheetClose,
-} from "@/components/ui/sheet";
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { McpServerBadgeIcon } from "@/components/shared/McpServerBadgeIcon";
 import { formatContainerImageDisplay } from "@/lib/mcp";
 import type { McpRegistryServer } from "@/types";
@@ -51,38 +50,42 @@ export function McpServerDetail({ server, onClose, onCreateConnection }: McpServ
   const hasFullToolCatalog = server.tool_names.length >= server.tools_count;
 
   return (
-    <Sheet open={!!server} onOpenChange={(open) => !open && onClose()}>
-      <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
-        <SheetHeader className="space-y-4 pb-4">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <McpServerBadgeIcon
-                serverId={server.id}
-                serverName={server.name}
-                transport={server.transport}
-                iconName={server.icon}
-                size="md"
-              />
-              <div>
-                <SheetTitle className="text-base">{server.name}</SheetTitle>
-                <SheetDescription className="text-sm">{server.description}</SheetDescription>
+    <Dialog open={!!server} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[86vh] w-[min(92vw,960px)] max-w-none overflow-hidden p-0">
+        <ScrollArea className="max-h-[86vh]">
+          <div className="space-y-6 p-6">
+            <DialogHeader className="space-y-4 pr-8 text-left">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex items-center gap-3">
+                  <McpServerBadgeIcon
+                    serverId={server.id}
+                    serverName={server.name}
+                    transport={server.transport}
+                    iconName={server.icon}
+                    size="md"
+                  />
+                  <div>
+                    <DialogTitle className="text-base">{server.name}</DialogTitle>
+                    <DialogDescription className="text-sm">{server.description}</DialogDescription>
+                  </div>
+                </div>
+
+                {server.attachable && (
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      onCreateConnection(server.id);
+                      onClose();
+                    }}
+                    className="w-fit shrink-0"
+                  >
+                    Create saved connection
+                  </Button>
+                )}
               </div>
-            </div>
-            <SheetClose asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Close detail panel">
-                <X className="h-4 w-4" />
-              </Button>
-            </SheetClose>
-          </div>
+            </DialogHeader>
 
-          {server.attachable && (
-            <Button size="sm" onClick={() => onCreateConnection(server.id)} className="w-fit">
-              Create saved connection
-            </Button>
-          )}
-        </SheetHeader>
-
-        <div className="space-y-6">
+            <div className="space-y-6">
           {/* Metadata */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <div className="space-y-1">
@@ -302,8 +305,10 @@ export function McpServerDetail({ server, onClose, onCreateConnection }: McpServ
                   : "This server is modeled as a self-hosted remote MCP integration. Create a saved connection only if you operate your own deployment and can provide its MCP endpoint URL.")}
             </p>
           </div>
-        </div>
-      </SheetContent>
-    </Sheet>
+            </div>
+          </div>
+        </ScrollArea>
+      </DialogContent>
+    </Dialog>
   );
 }

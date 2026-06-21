@@ -2222,6 +2222,46 @@ class GatewayInvokeProxyTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(captured["func"], api_gateway_main.read_agent_cached)
 
+    async def test_invoke_agent_records_prompt_text_in_trace(self) -> None:
+        request = api_gateway_main.InvokeRequest(prompt="Optimize workflow ROI")
+        raw_request = types.SimpleNamespace(headers={"x-request-id": "req-opt-trace"})
+        response = httpx.Response(
+            200,
+            json={
+                "response": "done",
+                "thread_id": "thread-1",
+                "model": "gpt-4",
+                "status": "completed",
+            },
+        )
+
+        class FakeAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, *args, **kwargs):
+                return response
+
+        with (
+            patch.object(
+                api_gateway_main.asyncio,
+                "to_thread",
+                return_value={"spec": {"model": "gpt-4", "runtime": {"kind": "opencode"}}},
+            ),
+            patch.object(api_gateway_main.httpx, "AsyncClient", return_value=FakeAsyncClient()),
+            patch.object(api_gateway_main, "list_promoted_memory_records", return_value=[]),
+            patch.object(api_gateway_main, "record_usage"),
+            patch.object(api_gateway_main, "record_runtime_memory"),
+            patch.object(api_gateway_main, "_record_invoke_trace") as record_invoke_trace,
+        ):
+            await api_gateway_main.invoke_agent("demo", request, raw_request, "default", user={"sub": "alice"})
+
+        record_invoke_trace.assert_called_once()
+        self.assertEqual(record_invoke_trace.call_args.kwargs["prompt_text"], "Optimize workflow ROI")
+
     async def test_invoke_agent_returns_a2a_metadata(self) -> None:
         request = api_gateway_main.InvokeRequest(
             prompt="hello",

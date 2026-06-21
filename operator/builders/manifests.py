@@ -3152,6 +3152,16 @@ def create_worker_job_manifest(
                                 {"name": "ARTIFACT_JOURNAL_PATH", "value": artifact_journal_path},
                                 {"name": "ARTIFACT_PVC_NAME", "value": artifact_pvc_name},
                                 {"name": "AGENT_RUNTIME_TIMEOUT_SECONDS", "value": AGENT_RUNTIME_TIMEOUT_SECONDS},
+                                {
+                                    "name": "RUNTIME_BEARER_TOKEN",
+                                    "valueFrom": {
+                                        "secretKeyRef": {
+                                            "name": SECRET_NAME,
+                                            "key": "RUNTIME_BEARER_TOKEN",
+                                            "optional": False,
+                                        }
+                                    },
+                                },
                                 {"name": "WORKFLOW_RUN_ID", "value": run_id or ""},
                                 {"name": "TARGET_UID", "value": resource_uid or ""},
                                 {"name": "PYTHONDONTWRITEBYTECODE", "value": "1"},

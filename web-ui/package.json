@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build --configLoader runner",
     "verify:workflow": "node scripts/verify-workflow-workspace.mjs",
     "verify:intelligence": "node scripts/verify-intelligence-observatory.mjs",
+    "verify:optimise-roi": "node scripts/verify-optimise-roi-contract.mjs",
+    "verify:mcp-ui": "node scripts/verify-mcp-ui-contract.mjs",
     "verify:account-dialog": "node scripts/verify-account-dialog.mjs",
     "verify:resource-logs": "node scripts/verify-resource-logs.mjs",
     "verify:install": "node ../scripts/verify-install.mjs",

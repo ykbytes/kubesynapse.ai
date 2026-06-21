@@ -27,6 +27,8 @@ AGENT_RUNTIME_TIMEOUT_SECONDS = max(float(os.getenv("AGENT_RUNTIME_TIMEOUT_SECON
 STREAM_KEEPALIVE_SECONDS = max(float(os.getenv("API_GATEWAY_STREAM_KEEPALIVE_SECONDS", "15")), 5.0)
 AGENT_READ_CACHE_TTL_SECONDS = max(float(os.getenv("API_GATEWAY_AGENT_READ_CACHE_TTL_SECONDS", "2.0")), 0.0)
 AGENT_READ_CACHE_MAX_ENTRIES = max(int(os.getenv("API_GATEWAY_AGENT_READ_CACHE_MAX_ENTRIES", "256")), 1)
+K8S_API_READ_TIMEOUT_SECONDS = max(float(os.getenv("API_GATEWAY_K8S_READ_TIMEOUT_SECONDS", "3.0")), 0.5)
+K8S_STATUS_READ_TIMEOUT_SECONDS = max(float(os.getenv("API_GATEWAY_K8S_STATUS_TIMEOUT_SECONDS", "1.0")), 0.2)
 
 # ---------------------------------------------------------------------------
 # A2A protocol

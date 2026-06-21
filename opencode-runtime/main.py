@@ -18,6 +18,12 @@ import sys
 import threading
 import time
 import uuid
+
+from contextvars import ContextVar
+
+# Thread-safe contextvar to carry system_prompt from invoke flow to trace emitter.
+# Set by invoke.py:run_autonomous_or_single_turn() before LLM calls.
+_CURRENT_SYSTEM_PROMPT: ContextVar[str | None] = ContextVar("system_prompt", default=None)
 from collections.abc import AsyncIterator
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -842,6 +848,7 @@ async def invoke(request: InvokeRequest) -> InvokeResponse:
                             session_id=SESSION_REGISTRY.get(thread_id),
                             response=result,
                             fallback_duration_ms=duration_ms,
+                            prompt_text_param=request.prompt,
                         )
                         emit_run_completed(
                             execution_id=execution_id,
@@ -871,6 +878,7 @@ async def invoke(request: InvokeRequest) -> InvokeResponse:
                     session_id=SESSION_REGISTRY.get(thread_id),
                     response=result,
                     fallback_duration_ms=duration_ms,
+                    prompt_text_param=request.prompt,
                 )
                 emit_run_completed(
                     execution_id=execution_id,
@@ -1212,6 +1220,7 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                 session_id=SESSION_REGISTRY.get(thread_id),
                 response=response,
                 fallback_duration_ms=duration_ms,
+                prompt_text_param=request.prompt,
             )
 
             yield sse_event(
@@ -1227,6 +1236,7 @@ async def invoke_stream(request: InvokeRequest) -> StreamingResponse:
                     "artifacts": response.artifacts,
                     "tool_calls": response.tool_calls,
                     "metadata": response.metadata,
+                    "prompt": request.prompt,
                 },
             )
 
@@ -1263,6 +1273,8 @@ def _emit_llm_call_from_response(
     session_id: str | None,
     response: InvokeResponse,
     fallback_duration_ms: int,
+    system_prompt: str | None = None,
+    prompt_text_param: str | None = None,
 ) -> None:
     metadata = response.metadata or {}
     tokens = metadata.get("tokens") if isinstance(metadata.get("tokens"), dict) else {}
@@ -1285,6 +1297,12 @@ def _emit_llm_call_from_response(
         )
     duration_ms = _coerce_int(time_info.get("total_ms") or time_info.get("duration_ms") or fallback_duration_ms)
 
+    response_text = response.response or ""
+    reasoning_text = metadata.get("reasoning_text") or ""
+    finish_reason = metadata.get("finish_reason") if isinstance(metadata, dict) else None
+    provider = os.getenv("OPENCODE_PROVIDER", "") or metadata.get("provider") if isinstance(metadata, dict) else None
+    effective_system_prompt = system_prompt or _CURRENT_SYSTEM_PROMPT.get()
+
     emit_llm_call(
         execution_id=execution_id,
         model=response.model,
@@ -1298,6 +1316,12 @@ def _emit_llm_call_from_response(
         duration_ms=duration_ms,
         session_id=session_id,
         thread_id=thread_id,
+        prompt_text=prompt_text_param or response_text,
+        response_text=response_text,
+        system_prompt=effective_system_prompt,
+        reasoning_text=reasoning_text,
+        provider=provider,
+        finish_reason=finish_reason,
     )
 
 

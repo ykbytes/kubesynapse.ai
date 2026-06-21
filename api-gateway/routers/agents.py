@@ -68,6 +68,8 @@ def _record_invoke_trace(
     agent: dict[str, Any],
     data: dict[str, Any],
     request_id: str,
+    *,
+    prompt_text: str | None = None,
 ) -> None:
     """Record a WorkflowExecution with LLM/tool metadata from an invoke response.
 
@@ -78,10 +80,12 @@ def _record_invoke_trace(
     from datetime import UTC, datetime
 
     from trace_store import (
+        _TRACE_CONTENT_INLINE_THRESHOLD,
         ExecutionStatus,
         LLMCallRecord,
         ToolCallRecord,
         WorkflowExecution,
+        _store_llm_content,
         db_session,
         ensure_trace_database,
         utc_now,
@@ -100,7 +104,6 @@ def _record_invoke_trace(
     token_info = metadata.get("tokens") if isinstance(metadata.get("tokens"), dict) else {}
     if not token_info and isinstance(data.get("usage"), dict):
         token_info = data["usage"]
-    context_budget = metadata.get("context_budget", {}) if isinstance(metadata.get("context_budget"), dict) else {}
     time_info = metadata.get("time", {}) if isinstance(metadata.get("time"), dict) else {}
     cost_info = metadata.get("cost", 0)
     status = str(data.get("status", "completed") or "completed")
@@ -124,6 +127,14 @@ def _record_invoke_trace(
         duration_ms = int((completed_at - started_at).total_seconds() * 1000)
 
     step_id = f"step-{execution_id[:12]}"
+
+    full_prompt = str(prompt_text or data.get("prompt") or "").strip()
+    full_response = str(data.get("response", "") or "").strip()
+    reasoning_text = str(metadata.get("reasoning_text", "") or "").strip()
+    system_prompt_val = str(metadata.get("system_prompt", "") or "").strip()
+    prompt_chars_full = len(full_prompt)
+    response_chars_full = len(full_response)
+    reasoning_chars_full = len(reasoning_text)
 
     with db_session() as session:
         try:
@@ -177,8 +188,29 @@ def _record_invoke_trace(
                     cost_usd=float(cost_info) if cost_info else None,
                     latency_ms=duration_ms,
                     started_at=started_at,
+                    prompt_preview=full_prompt[:1024] if full_prompt else None,
+                    response_preview=full_response[:2048] if full_response else None,
+                    prompt_chars=len(full_prompt),
+                    response_chars=len(full_response),
+                    reasoning_text=reasoning_text if reasoning_chars_full <= _TRACE_CONTENT_INLINE_THRESHOLD else None,
+                    reasoning_chars=reasoning_chars_full,
+                    full_prompt=full_prompt if prompt_chars_full <= _TRACE_CONTENT_INLINE_THRESHOLD else None,
+                    full_response=full_response if response_chars_full <= _TRACE_CONTENT_INLINE_THRESHOLD else None,
+                    system_prompt=system_prompt_val if len(system_prompt_val) <= _TRACE_CONTENT_INLINE_THRESHOLD else None,
+                    system_prompt_chars=len(system_prompt_val),
+                    prompt_chars_full=prompt_chars_full,
+                    response_chars_full=response_chars_full,
                 )
                 session.add(llm_record)
+                content_ref = _store_llm_content(
+                    llm_call_id=llm_record.id,
+                    prompt=full_prompt,
+                    response=full_response,
+                    reasoning_text=reasoning_text,
+                    system_prompt=system_prompt_val,
+                )
+                if content_ref:
+                    llm_record.content_ref = content_ref
 
             for idx, tc in enumerate(tool_calls):
                 tc_id = f"tc-{execution_id[:12]}-{idx}"
@@ -257,6 +289,8 @@ def _record_invoke_response_side_effects(
     user: dict[str, Any],
     request_id: str,
     normalized_memory_policy: dict[str, Any],
+    *,
+    prompt_text: str | None = None,
 ) -> None:
     usage = data.get("usage") if isinstance(data.get("usage"), dict) else None
     agent_spec = agent.get("spec") if isinstance(agent.get("spec"), dict) else {}
@@ -292,6 +326,7 @@ def _record_invoke_response_side_effects(
         agent=agent,
         data=data,
         request_id=request_id,
+        prompt_text=prompt_text,
     )
 
 @router.get("/agents", response_model=list[AgentInfo])
@@ -759,6 +794,7 @@ async def invoke_agent(
             user,
             request_id,
             normalized_memory_policy,
+            prompt_text=str(request_payload.get("prompt") or ""),
         )
         return InvokeResponse(
             agent_name=agent_name,
@@ -888,6 +924,7 @@ async def invoke_agent_stream(
                             user,
                             request_id,
                             normalized_memory_policy,
+                            prompt_text=str(payload.get("prompt") or ""),
                         )
                         response_text = str(data.get("response") or "")
                         if response_text:
@@ -994,6 +1031,7 @@ async def invoke_agent_stream(
                                                 user,
                                                 request_id,
                                                 normalized_memory_policy,
+                                                prompt_text=str(payload.get("prompt") or ""),
                                             )
                                             record_model_success(model, (time.perf_counter() - invoke_started_at) * 1000)
                                             latency_ms = (time.perf_counter() - invoke_started_at) * 1000

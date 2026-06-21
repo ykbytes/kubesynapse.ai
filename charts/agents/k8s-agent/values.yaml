@@ -3,7 +3,7 @@ namespaceOverride: ""
 
 agent:
   name: k8s-agent
-  model: gpt-4
+  model: opencode-go/deepseek-v4-flash
   policyRef: ""
   systemPrompt: |
     You are a Kubernetes platform engineer with direct access to live cluster

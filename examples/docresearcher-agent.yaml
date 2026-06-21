@@ -45,7 +45,7 @@ spec:
   mcpServers:
   - context7
   mcpSidecars: []
-  model: github-copilot/gpt-5-mini
+  model: opencode-go/deepseek-v4-flash
   runtime:
     kind: opencode
   storage:

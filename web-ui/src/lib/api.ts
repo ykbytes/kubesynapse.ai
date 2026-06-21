@@ -66,6 +66,19 @@ import type {
   McpConnectionValidationStatus,
   McpStats,
   McpSupportLevel,
+  OptimizationCandidate,
+  OptimizationCandidateRunResult,
+  OptimizationComparisonResponse,
+  OptimizationIntelligence,
+  OptimizationManifestDiffSection,
+  OptimizationMetrics,
+  OptimizationOpportunity,
+  OptimizationRoi,
+  OptimizationStepRollup,
+  OptimizationStudy,
+  OptimizationToolRollup,
+  OptimizationTraceMetricSnapshot,
+  OptimizationTrial,
   PolicyInfo,
   ProviderCatalogModel,
   PolicyInputGuardrails,
@@ -989,12 +1002,22 @@ function parseAgentDiscoveryResponsePayload(payload: unknown): AgentDiscoveryRes
 
 function parseAgentInfoPayload(payload: unknown, label = "AgentInfo"): AgentInfo {
   const record = expectRecord(payload, label);
+  const clusterAccess = readOptionalRecord(record, "cluster_access", label);
   return {
     name: readString(record, "name", label),
     model: readString(record, "model", label),
     namespace: readString(record, "namespace", label),
     status: readString(record, "status", label),
     runtime_kind: record.runtime_kind === undefined ? undefined : readRuntimeKind(record, "runtime_kind", label),
+    cluster_access: clusterAccess
+      ? {
+          level: readOptionalString(clusterAccess, "level", `${label}.cluster_access`) ?? undefined,
+          deployment_capable: readOptionalBoolean(clusterAccess, "deployment_capable", `${label}.cluster_access`) ?? undefined,
+          scope: readOptionalString(clusterAccess, "scope", `${label}.cluster_access`) ?? undefined,
+          guard: readOptionalString(clusterAccess, "guard", `${label}.cluster_access`) ?? undefined,
+          allowed_actions: readStringArray(clusterAccess, "allowed_actions", `${label}.cluster_access`, []),
+        }
+      : null,
   };
 }
 
@@ -3028,6 +3051,565 @@ function parseExecutionTracePayload(payload: unknown, label = "ExecutionTrace"):
       ? rawEvents.map((item, index) => parseTraceEventPayload(item, `${label}.events[${index}]`))
       : [],
   };
+}
+
+function parseOptimizationMetrics(payload: unknown, label = "OptimizationMetrics"): OptimizationMetrics {
+  const record: JsonRecord = isRecord(payload) ? payload : {};
+  return {
+    sample_count: readOptionalNumber(record, "sample_count", label) ?? 0,
+    successful_count: readOptionalNumber(record, "successful_count", label) ?? 0,
+    success_rate: readOptionalNumber(record, "success_rate", label) ?? 0,
+    avg_duration_ms: readOptionalNumber(record, "avg_duration_ms", label) ?? 0,
+    avg_tokens: readOptionalNumber(record, "avg_tokens", label) ?? 0,
+    avg_cost_usd: readOptionalNumber(record, "avg_cost_usd", label) ?? 0,
+    avg_llm_calls: readOptionalNumber(record, "avg_llm_calls", label) ?? 0,
+    avg_tool_calls: readOptionalNumber(record, "avg_tool_calls", label) ?? 0,
+    avg_cache_read_tokens: readOptionalNumber(record, "avg_cache_read_tokens", label) ?? 0,
+    avg_cache_write_tokens: readOptionalNumber(record, "avg_cache_write_tokens", label) ?? 0,
+    cost_per_successful_run: readOptionalNumber(record, "cost_per_successful_run", label) ?? 0,
+    tokens_per_successful_run: readOptionalNumber(record, "tokens_per_successful_run", label) ?? 0,
+    duration_per_successful_run_ms: readOptionalNumber(record, "duration_per_successful_run_ms", label) ?? 0,
+  };
+}
+
+function parseOptimizationOpportunity(payload: unknown, label = "OptimizationOpportunity"): OptimizationOpportunity {
+  const record = expectRecord(payload, label);
+  return {
+    kind: readString(record, "kind", label, "unknown"),
+    lever: readOptionalString(record, "lever", label),
+    severity: readString(record, "severity", label, "medium"),
+    title: readString(record, "title", label, "Opportunity"),
+    impact_score: readOptionalNumber(record, "impact_score", label),
+    confidence: readOptionalString(record, "confidence", label),
+    metric: readOptionalString(record, "metric", label),
+    baseline_value: record.baseline_value,
+    affected_steps: readStringArray(record, "affected_steps", label, []),
+    estimated_savings: readOptionalRecord(record, "estimated_savings", label) ?? {},
+    evidence: readOptionalRecord(record, "evidence", label) ?? {},
+    recommendation: readString(record, "recommendation", label, ""),
+    dataset_use: readOptionalString(record, "dataset_use", label),
+    safe_scope: readOptionalString(record, "safe_scope", label),
+  };
+}
+
+function parseOptimizationIntelligence(payload: unknown, label = "OptimizationIntelligence"): OptimizationIntelligence | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const record = payload as JsonRecord;
+  const rankedLevers = record.ranked_levers;
+  const stepRollups = record.step_rollups;
+  const modelRollups = record.model_rollups;
+  const toolRollups = record.tool_rollups;
+  const diagnostics = record.trajectory_diagnostics;
+  const datasetReadiness = record.dataset_readiness && typeof record.dataset_readiness === "object" && !Array.isArray(record.dataset_readiness)
+    ? (record.dataset_readiness as JsonRecord)
+    : null;
+  return {
+    scorecard: readOptionalRecord(record, "scorecard", label) ?? {},
+    ranked_levers: Array.isArray(rankedLevers)
+      ? rankedLevers.map((item, index) => parseOptimizationOpportunity(item, `${label}.ranked_levers[${index}]`))
+      : [],
+    step_rollups: Array.isArray(stepRollups)
+      ? stepRollups.map((item, index) => {
+        const step = expectRecord(item, `${label}.step_rollups[${index}]`);
+        return {
+          step_name: readString(step, "step_name", `${label}.step_rollups[${index}]`, "step"),
+          step_type: readOptionalString(step, "step_type", `${label}.step_rollups[${index}]`),
+          agent_name: readOptionalString(step, "agent_name", `${label}.step_rollups[${index}]`),
+          run_count: readOptionalNumber(step, "run_count", `${label}.step_rollups[${index}]`) ?? 0,
+          avg_duration_ms: readOptionalNumber(step, "avg_duration_ms", `${label}.step_rollups[${index}]`) ?? 0,
+          avg_tokens: readOptionalNumber(step, "avg_tokens", `${label}.step_rollups[${index}]`) ?? 0,
+          avg_cost_usd: readOptionalNumber(step, "avg_cost_usd", `${label}.step_rollups[${index}]`) ?? 0,
+          avg_llm_calls: readOptionalNumber(step, "avg_llm_calls", `${label}.step_rollups[${index}]`) ?? 0,
+          avg_tool_calls: readOptionalNumber(step, "avg_tool_calls", `${label}.step_rollups[${index}]`) ?? 0,
+          dominant_model: readOptionalString(step, "dominant_model", `${label}.step_rollups[${index}]`),
+          top_tool: readOptionalString(step, "top_tool", `${label}.step_rollups[${index}]`),
+          tool_names: readStringArray(step, "tool_names", `${label}.step_rollups[${index}]`, []),
+          repeated_tool_arg_groups: readOptionalNumber(step, "repeated_tool_arg_groups", `${label}.step_rollups[${index}]`) ?? 0,
+        };
+      })
+      : [],
+    model_rollups: Array.isArray(modelRollups)
+      ? modelRollups.map((item, index) => {
+        const model = expectRecord(item, `${label}.model_rollups[${index}]`);
+        return {
+          model: readString(model, "model", `${label}.model_rollups[${index}]`, "unknown"),
+          provider: readOptionalString(model, "provider", `${label}.model_rollups[${index}]`),
+          calls: readOptionalNumber(model, "calls", `${label}.model_rollups[${index}]`) ?? 0,
+          tokens: readOptionalNumber(model, "tokens", `${label}.model_rollups[${index}]`) ?? 0,
+          cost_usd: readOptionalNumber(model, "cost_usd", `${label}.model_rollups[${index}]`) ?? 0,
+          avg_latency_ms: readOptionalNumber(model, "avg_latency_ms", `${label}.model_rollups[${index}]`) ?? 0,
+          affected_steps: readStringArray(model, "affected_steps", `${label}.model_rollups[${index}]`, []),
+        };
+      })
+      : [],
+    tool_rollups: Array.isArray(toolRollups)
+      ? toolRollups.map((item, index) => {
+        const tool = expectRecord(item, `${label}.tool_rollups[${index}]`);
+        return {
+          tool_name: readString(tool, "tool_name", `${label}.tool_rollups[${index}]`, "unknown"),
+          calls: readOptionalNumber(tool, "calls", `${label}.tool_rollups[${index}]`) ?? 0,
+          avg_duration_ms: readOptionalNumber(tool, "avg_duration_ms", `${label}.tool_rollups[${index}]`) ?? 0,
+          repeated_arg_groups: readOptionalNumber(tool, "repeated_arg_groups", `${label}.tool_rollups[${index}]`) ?? 0,
+          affected_steps: readStringArray(tool, "affected_steps", `${label}.tool_rollups[${index}]`, []),
+        };
+      })
+      : [],
+    trajectory_diagnostics: Array.isArray(diagnostics)
+      ? diagnostics.map((item, index) => {
+        const diagnostic = expectRecord(item, `${label}.trajectory_diagnostics[${index}]`);
+        return {
+          id: readString(diagnostic, "id", `${label}.trajectory_diagnostics[${index}]`, `diagnostic-${index}`),
+          severity: readString(diagnostic, "severity", `${label}.trajectory_diagnostics[${index}]`, "medium"),
+          title: readString(diagnostic, "title", `${label}.trajectory_diagnostics[${index}]`, "Diagnostic"),
+          evidence: readOptionalRecord(diagnostic, "evidence", `${label}.trajectory_diagnostics[${index}]`) ?? {},
+          affected_steps: readStringArray(diagnostic, "affected_steps", `${label}.trajectory_diagnostics[${index}]`, []),
+          optimizer_hint: readOptionalString(diagnostic, "optimizer_hint", `${label}.trajectory_diagnostics[${index}]`),
+        };
+      })
+      : [],
+    dataset_readiness: datasetReadiness
+      ? {
+        state: readString(datasetReadiness, "state", `${label}.dataset_readiness`, "needs_more_samples"),
+        baseline_examples: readOptionalNumber(datasetReadiness, "baseline_examples", `${label}.dataset_readiness`) ?? 0,
+        successful_examples: readOptionalNumber(datasetReadiness, "successful_examples", `${label}.dataset_readiness`) ?? 0,
+        llm_examples: readOptionalNumber(datasetReadiness, "llm_examples", `${label}.dataset_readiness`) ?? 0,
+        tool_examples: readOptionalNumber(datasetReadiness, "tool_examples", `${label}.dataset_readiness`) ?? 0,
+        step_examples: readOptionalNumber(datasetReadiness, "step_examples", `${label}.dataset_readiness`) ?? 0,
+        manifest_snapshots: readOptionalNumber(datasetReadiness, "manifest_snapshots", `${label}.dataset_readiness`) ?? 0,
+        workflow_steps: readOptionalNumber(datasetReadiness, "workflow_steps", `${label}.dataset_readiness`) ?? 0,
+        redaction_required: readOptionalBoolean(datasetReadiness, "redaction_required", `${label}.dataset_readiness`) ?? true,
+        labels: readStringArray(datasetReadiness, "labels", `${label}.dataset_readiness`, []),
+        splits: readOptionalRecord(datasetReadiness, "splits", `${label}.dataset_readiness`) as Record<string, number> | undefined,
+        local_model_path: readOptionalRecord(datasetReadiness, "local_model_path", `${label}.dataset_readiness`) ?? {},
+      }
+      : undefined,
+  };
+}
+
+function parseOptimizationCandidate(payload: unknown, label = "OptimizationCandidate"): OptimizationCandidate {
+  const record = expectRecord(payload, label);
+  const manifestBundle = record.manifest_bundle;
+  return {
+    id: readString(record, "id", label),
+    study_id: readString(record, "study_id", label),
+    namespace: readString(record, "namespace", label, "default"),
+    name: readString(record, "name", label, ""),
+    candidate_workflow_name: readString(record, "candidate_workflow_name", label, ""),
+    status: readString(record, "status", label, "draft"),
+    approval_status: readString(record, "approval_status", label, "pending"),
+    manifest_bundle: Array.isArray(manifestBundle)
+      ? manifestBundle.map((item, index) => expectRecord(item, `${label}.manifest_bundle[${index}]`))
+      : [],
+    manifest_diff: readOptionalRecord(record, "manifest_diff", label) ?? {},
+    optimizer_output: readOptionalString(record, "optimizer_output", label),
+    validation_results: readOptionalRecord(record, "validation_results", label) ?? {},
+    expected_savings: readOptionalRecord(record, "expected_savings", label) ?? {},
+    created_by: readOptionalString(record, "created_by", label),
+    approved_by: readOptionalString(record, "approved_by", label),
+    approval_reason: readOptionalString(record, "approval_reason", label),
+    approved_at: readOptionalString(record, "approved_at", label),
+    applied_at: readOptionalString(record, "applied_at", label),
+    created_at: readOptionalString(record, "created_at", label),
+    updated_at: readOptionalString(record, "updated_at", label),
+  };
+}
+
+function parseOptimizationTrial(payload: unknown, label = "OptimizationTrial"): OptimizationTrial {
+  const record = expectRecord(payload, label);
+  return {
+    id: readString(record, "id", label),
+    study_id: readString(record, "study_id", label),
+    candidate_id: readString(record, "candidate_id", label),
+    baseline_execution_id: readString(record, "baseline_execution_id", label),
+    result_execution_id: readOptionalString(record, "result_execution_id", label),
+    status: readString(record, "status", label, "recorded"),
+    quality_status: readString(record, "quality_status", label, "needs_review"),
+    metrics_delta: readOptionalRecord(record, "metrics_delta", label) ?? {},
+    notes: readOptionalString(record, "notes", label),
+    created_by: readOptionalString(record, "created_by", label),
+    created_at: readOptionalString(record, "created_at", label),
+  };
+}
+
+function parseNumberMap(payload: unknown): Record<string, number> {
+  const source = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : {};
+  return Object.fromEntries(
+    Object.entries(source).map(([key, value]) => [key, typeof value === "number" && Number.isFinite(value) ? value : 0]),
+  );
+}
+
+function parseOptimizationStudy(payload: unknown, label = "OptimizationStudy"): OptimizationStudy {
+  const record = expectRecord(payload, label);
+  const opportunities = record.opportunities;
+  const candidates = record.candidates;
+  const trials = record.trials;
+  const proofGate = readOptionalRecord(record, "proof_gate", label) ?? {};
+  const optimizerIntelligence = parseOptimizationIntelligence(
+    record.optimizer_intelligence ?? proofGate.optimizer_intelligence,
+    `${label}.optimizer_intelligence`,
+  );
+  return {
+    id: readString(record, "id", label),
+    namespace: readString(record, "namespace", label, "default"),
+    workflow_name: readString(record, "workflow_name", label, ""),
+    optimizer_agent_name: readOptionalString(record, "optimizer_agent_name", label),
+    status: readString(record, "status", label, "baseline_ready"),
+    objective: readOptionalString(record, "objective", label),
+    baseline_execution_ids: readStringArray(record, "baseline_execution_ids", label, []),
+    baseline_metrics: parseOptimizationMetrics(record.baseline_metrics, `${label}.baseline_metrics`),
+    opportunities: Array.isArray(opportunities)
+      ? opportunities.map((item, index) => parseOptimizationOpportunity(item, `${label}.opportunities[${index}]`))
+      : [],
+    optimizer_intelligence: optimizerIntelligence,
+    source_manifests: readOptionalRecord(record, "source_manifests", label) ?? {},
+    proof_gate: proofGate,
+    dataset_redaction_state: readOptionalString(record, "dataset_redaction_state", label),
+    created_by: readOptionalString(record, "created_by", label),
+    created_at: readOptionalString(record, "created_at", label),
+    updated_at: readOptionalString(record, "updated_at", label),
+    candidates: Array.isArray(candidates)
+      ? candidates.map((item, index) => parseOptimizationCandidate(item, `${label}.candidates[${index}]`))
+      : undefined,
+    trials: Array.isArray(trials)
+      ? trials.map((item, index) => parseOptimizationTrial(item, `${label}.trials[${index}]`))
+      : undefined,
+  };
+}
+
+function parseOptimizationRoi(payload: unknown, label = "OptimizationRoi"): OptimizationRoi {
+  const record = expectRecord(payload, label);
+  return {
+    study_id: readString(record, "study_id", label),
+    candidate_id: readOptionalString(record, "candidate_id", label),
+    proof_status: readString(record, "proof_status", label, "pending_trials"),
+    verified: readBoolean(record, "verified", label, false),
+    proof_gate: readOptionalRecord(record, "proof_gate", label) ?? {},
+    baseline_metrics: parseOptimizationMetrics(record.baseline_metrics, `${label}.baseline_metrics`),
+    candidate_metrics: parseOptimizationMetrics(record.candidate_metrics, `${label}.candidate_metrics`),
+    deltas: parseNumberMap(record.deltas),
+    trial_count: readOptionalNumber(record, "trial_count", label) ?? 0,
+    passing_trial_count: readOptionalNumber(record, "passing_trial_count", label) ?? 0,
+    projected_savings: parseNumberMap(record.projected_savings),
+  };
+}
+
+function parseOptimizationStepRollup(payload: unknown, label = "OptimizationStepRollup"): OptimizationStepRollup | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const record = payload as JsonRecord;
+  return {
+    step_name: readString(record, "step_name", label, "step"),
+    step_type: readOptionalString(record, "step_type", label),
+    agent_name: readOptionalString(record, "agent_name", label),
+    run_count: readOptionalNumber(record, "run_count", label) ?? 0,
+    avg_duration_ms: readOptionalNumber(record, "avg_duration_ms", label) ?? 0,
+    avg_tokens: readOptionalNumber(record, "avg_tokens", label) ?? 0,
+    avg_cost_usd: readOptionalNumber(record, "avg_cost_usd", label) ?? 0,
+    avg_llm_calls: readOptionalNumber(record, "avg_llm_calls", label) ?? 0,
+    avg_tool_calls: readOptionalNumber(record, "avg_tool_calls", label) ?? 0,
+    dominant_model: readOptionalString(record, "dominant_model", label),
+    top_tool: readOptionalString(record, "top_tool", label),
+    tool_names: readStringArray(record, "tool_names", label, []),
+    repeated_tool_arg_groups: readOptionalNumber(record, "repeated_tool_arg_groups", label) ?? 0,
+  };
+}
+
+function parseOptimizationToolRollup(payload: unknown, label = "OptimizationToolRollup"): (OptimizationToolRollup & { calls_per_run?: number }) | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const record = payload as JsonRecord;
+  return {
+    tool_name: readString(record, "tool_name", label, "unknown"),
+    calls: readOptionalNumber(record, "calls", label) ?? 0,
+    avg_duration_ms: readOptionalNumber(record, "avg_duration_ms", label) ?? 0,
+    repeated_arg_groups: readOptionalNumber(record, "repeated_arg_groups", label) ?? 0,
+    affected_steps: readStringArray(record, "affected_steps", label, []),
+    calls_per_run: readOptionalNumber(record, "calls_per_run", label) ?? 0,
+  };
+}
+
+function parseOptimizationMetricSnapshot(payload: unknown, label = "OptimizationTraceMetricSnapshot"): OptimizationTraceMetricSnapshot | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const record = payload as JsonRecord;
+  return {
+    execution_id: readOptionalString(record, "execution_id", label),
+    workflow_name: readOptionalString(record, "workflow_name", label),
+    run_id: readOptionalString(record, "run_id", label),
+    status: readOptionalString(record, "status", label),
+    duration_ms: readOptionalNumber(record, "duration_ms", label) ?? 0,
+    tokens: readOptionalNumber(record, "tokens", label) ?? 0,
+    cost_usd: readOptionalNumber(record, "cost_usd", label) ?? 0,
+    llm_calls: readOptionalNumber(record, "llm_calls", label) ?? 0,
+    tool_calls: readOptionalNumber(record, "tool_calls", label) ?? 0,
+    started_at: readOptionalString(record, "started_at", label),
+    completed_at: readOptionalString(record, "completed_at", label),
+  };
+}
+
+function parseOptimizationManifestSection(payload: unknown, label = "OptimizationManifestDiffSection"): OptimizationManifestDiffSection {
+  const record = expectRecord(payload, label);
+  return {
+    id: readString(record, "id", label),
+    title: readString(record, "title", label, "Manifest"),
+    kind: readString(record, "kind", label, "Resource"),
+    source_name: readString(record, "source_name", label, ""),
+    candidate_name: readString(record, "candidate_name", label, ""),
+    changed: readBoolean(record, "changed", label, false),
+    change_count: readOptionalNumber(record, "change_count", label) ?? 0,
+    changed_paths: readStringArray(record, "changed_paths", label, []),
+    highlights: readStringArray(record, "highlights", label, []),
+    source_yaml: readString(record, "source_yaml", label, ""),
+    candidate_yaml: readString(record, "candidate_yaml", label, ""),
+    diff_rows: readRecordArray(record, "diff_rows", label).map((item, index) => ({
+      type: readString(item, "type", `${label}.diff_rows[${index}]`, "equal"),
+      source_line_no: readOptionalNumber(item, "source_line_no", `${label}.diff_rows[${index}]`),
+      candidate_line_no: readOptionalNumber(item, "candidate_line_no", `${label}.diff_rows[${index}]`),
+      source: readString(item, "source", `${label}.diff_rows[${index}]`, ""),
+      candidate: readString(item, "candidate", `${label}.diff_rows[${index}]`, ""),
+    })),
+  };
+}
+
+function parseOptimizationComparisonResponse(payload: unknown): OptimizationComparisonResponse {
+  const record = expectRecord(payload, "OptimizationComparisonResponse");
+  const comparison = expectRecord(record.comparison, "OptimizationComparisonResponse.comparison");
+  const headline = expectRecord(comparison.headline, "OptimizationComparisonResponse.comparison.headline");
+  const scorecard = readOptionalRecord(comparison, "scorecard", "OptimizationComparisonResponse.comparison");
+  const manifest = expectRecord(comparison.manifest_diff, "OptimizationComparisonResponse.comparison.manifest_diff");
+  return {
+    study_id: readString(record, "study_id", "OptimizationComparisonResponse"),
+    candidate_id: readOptionalString(record, "candidate_id", "OptimizationComparisonResponse"),
+    roi: parseOptimizationRoi(record.roi, "OptimizationComparisonResponse.roi"),
+    comparison: {
+      headline: {
+        summary: readString(headline, "summary", "OptimizationComparisonResponse.comparison.headline", ""),
+        primary_saving_key: readString(headline, "primary_saving_key", "OptimizationComparisonResponse.comparison.headline", "duration_saved_percent"),
+        primary_saving_label: readString(headline, "primary_saving_label", "OptimizationComparisonResponse.comparison.headline", "time"),
+        primary_saving_percent: readOptionalNumber(headline, "primary_saving_percent", "OptimizationComparisonResponse.comparison.headline") ?? 0,
+        regression_count: readOptionalNumber(headline, "regression_count", "OptimizationComparisonResponse.comparison.headline") ?? 0,
+        safe_trials_remaining: readOptionalNumber(headline, "safe_trials_remaining", "OptimizationComparisonResponse.comparison.headline") ?? 0,
+        metric_source: readOptionalString(headline, "metric_source", "OptimizationComparisonResponse.comparison.headline") ?? undefined,
+      },
+      scorecard: scorecard ? {
+        summary: readString(scorecard, "summary", "OptimizationComparisonResponse.comparison.scorecard", ""),
+        metric_source: readString(scorecard, "metric_source", "OptimizationComparisonResponse.comparison.scorecard", "study_rollup"),
+        proof_status: readString(scorecard, "proof_status", "OptimizationComparisonResponse.comparison.scorecard", "pending_trials"),
+        verified: readBoolean(scorecard, "verified", "OptimizationComparisonResponse.comparison.scorecard", false),
+        trial_count: readOptionalNumber(scorecard, "trial_count", "OptimizationComparisonResponse.comparison.scorecard") ?? 0,
+        safe_trial_count: readOptionalNumber(scorecard, "safe_trial_count", "OptimizationComparisonResponse.comparison.scorecard") ?? 0,
+        safe_trials_remaining: readOptionalNumber(scorecard, "safe_trials_remaining", "OptimizationComparisonResponse.comparison.scorecard") ?? 0,
+        next_action: readString(scorecard, "next_action", "OptimizationComparisonResponse.comparison.scorecard", "run_candidate"),
+        metrics: readRecordArray(scorecard, "metrics", "OptimizationComparisonResponse.comparison.scorecard").map((item, index) => ({
+          key: readString(item, "key", `OptimizationComparisonResponse.comparison.scorecard.metrics[${index}]`),
+          label: readString(item, "label", `OptimizationComparisonResponse.comparison.scorecard.metrics[${index}]`, "Metric"),
+          unit: readString(item, "unit", `OptimizationComparisonResponse.comparison.scorecard.metrics[${index}]`, ""),
+          baseline_value: readOptionalNumber(item, "baseline_value", `OptimizationComparisonResponse.comparison.scorecard.metrics[${index}]`) ?? 0,
+          candidate_value: readOptionalNumber(item, "candidate_value", `OptimizationComparisonResponse.comparison.scorecard.metrics[${index}]`) ?? 0,
+          actual_delta_percent: readOptionalNumber(item, "actual_delta_percent", `OptimizationComparisonResponse.comparison.scorecard.metrics[${index}]`) ?? 0,
+          estimated_delta_percent: readOptionalNumber(item, "estimated_delta_percent", `OptimizationComparisonResponse.comparison.scorecard.metrics[${index}]`),
+          value_kind: readString(item, "value_kind", `OptimizationComparisonResponse.comparison.scorecard.metrics[${index}]`, "number"),
+          source: readString(item, "source", `OptimizationComparisonResponse.comparison.scorecard.metrics[${index}]`, "study_rollup"),
+        })),
+      } : undefined,
+      trials: readRecordArray(comparison, "trials", "OptimizationComparisonResponse.comparison").map((item, index) => ({
+        id: readString(item, "id", `OptimizationComparisonResponse.comparison.trials[${index}]`),
+        status: readOptionalString(item, "status", `OptimizationComparisonResponse.comparison.trials[${index}]`),
+        quality_status: readOptionalString(item, "quality_status", `OptimizationComparisonResponse.comparison.trials[${index}]`),
+        notes: readOptionalString(item, "notes", `OptimizationComparisonResponse.comparison.trials[${index}]`),
+        created_at: readOptionalString(item, "created_at", `OptimizationComparisonResponse.comparison.trials[${index}]`),
+        baseline: parseOptimizationMetricSnapshot(item.baseline, `OptimizationComparisonResponse.comparison.trials[${index}].baseline`),
+        candidate: parseOptimizationMetricSnapshot(item.candidate, `OptimizationComparisonResponse.comparison.trials[${index}].candidate`),
+        candidate_run: readOptionalRecord(item, "candidate_run", `OptimizationComparisonResponse.comparison.trials[${index}]`) ?? {},
+        deltas: parseNumberMap(item.deltas),
+      })),
+      steps: readRecordArray(comparison, "steps", "OptimizationComparisonResponse.comparison").map((item, index) => ({
+        step_name: readString(item, "step_name", `OptimizationComparisonResponse.comparison.steps[${index}]`, "step"),
+        baseline: parseOptimizationStepRollup(item.baseline, `OptimizationComparisonResponse.comparison.steps[${index}].baseline`),
+        candidate: parseOptimizationStepRollup(item.candidate, `OptimizationComparisonResponse.comparison.steps[${index}].candidate`),
+        deltas: parseNumberMap(item.deltas),
+      })),
+      tools: readRecordArray(comparison, "tools", "OptimizationComparisonResponse.comparison").map((item, index) => ({
+        tool_name: readString(item, "tool_name", `OptimizationComparisonResponse.comparison.tools[${index}]`, "tool"),
+        baseline: parseOptimizationToolRollup(item.baseline, `OptimizationComparisonResponse.comparison.tools[${index}].baseline`),
+        candidate: parseOptimizationToolRollup(item.candidate, `OptimizationComparisonResponse.comparison.tools[${index}].candidate`),
+        deltas: parseNumberMap(item.deltas),
+      })),
+      manifest_diff: {
+        topology_preserved: readBoolean(manifest, "topology_preserved", "OptimizationComparisonResponse.comparison.manifest_diff", false),
+        resource_count: parseNumberMap(manifest.resource_count),
+        sections: readRecordArray(manifest, "sections", "OptimizationComparisonResponse.comparison.manifest_diff").map((item, index) =>
+          parseOptimizationManifestSection(item, `OptimizationComparisonResponse.comparison.manifest_diff.sections[${index}]`),
+        ),
+      },
+    },
+  };
+}
+
+export interface CreateOptimizationStudyPayload {
+  namespace: string;
+  workflow_name: string;
+  optimizer_agent_name?: string | null;
+  baseline_execution_ids: string[];
+  objective?: string | null;
+  source_manifests?: Record<string, unknown> | null;
+}
+
+export interface GenerateOptimizationCandidatePayload {
+  optimizer_output?: string | null;
+  suffix?: string | null;
+  expected_savings?: Record<string, unknown>;
+}
+
+export interface CreateOptimizationTrialPayload {
+  baseline_execution_id: string;
+  result_execution_id?: string | null;
+  quality_status?: string;
+  notes?: string | null;
+}
+
+export interface RunOptimizationCandidatePayload {
+  baseline_execution_id?: string | null;
+  input?: string | null;
+  notes?: string | null;
+}
+
+export async function createOptimizationStudy(token: string, payload: CreateOptimizationStudyPayload): Promise<OptimizationStudy> {
+  const response = await fetchAuthenticated(buildUrl("/api/optimizations/studies"), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, parseOptimizationStudy);
+}
+
+export async function fetchOptimizationStudy(token: string, studyId: string): Promise<OptimizationStudy> {
+  const response = await fetchAuthenticated(buildUrl(`/api/optimizations/studies/${studyId}`), token);
+  return parseJsonResponse(response, parseOptimizationStudy);
+}
+
+export async function generateOptimizationCandidate(
+  token: string,
+  studyId: string,
+  payload: GenerateOptimizationCandidatePayload,
+): Promise<OptimizationCandidate> {
+  const response = await fetchAuthenticated(buildUrl(`/api/optimizations/studies/${studyId}/candidates/generate`), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, parseOptimizationCandidate);
+}
+
+export async function approveOptimizationCandidate(
+  token: string,
+  candidateId: string,
+  decision: "approved" | "denied",
+  reason?: string,
+): Promise<OptimizationCandidate> {
+  const response = await fetchAuthenticated(buildUrl(`/api/optimizations/candidates/${candidateId}/approval`), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ decision, reason }),
+  });
+  return parseJsonResponse(response, parseOptimizationCandidate);
+}
+
+export async function applyOptimizationCandidate(
+  token: string,
+  candidateId: string,
+  dryRun = true,
+): Promise<Record<string, unknown>> {
+  const response = await fetchAuthenticated(buildUrl(`/api/optimizations/candidates/${candidateId}/apply`), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dry_run: dryRun }),
+  });
+  return parseJsonResponse(response, (payload) => expectRecord(payload, "OptimizationApplyResult"));
+}
+
+function parseOptimizationCandidateRunResult(payload: unknown): OptimizationCandidateRunResult {
+  const record = expectRecord(payload, "OptimizationCandidateRunResult");
+  const applyResults = record.apply_results;
+  return {
+    candidate_id: readString(record, "candidate_id", "OptimizationCandidateRunResult"),
+    candidate: parseOptimizationCandidate(record.candidate, "OptimizationCandidateRunResult.candidate"),
+    candidate_run: readRecord(record, "candidate_run", "OptimizationCandidateRunResult"),
+    apply_results: Array.isArray(applyResults)
+      ? applyResults.map((item, index) => expectRecord(item, `OptimizationCandidateRunResult.apply_results[${index}]`))
+      : [],
+    trial: parseOptimizationTrial(record.trial, "OptimizationCandidateRunResult.trial"),
+  };
+}
+
+export async function runOptimizationCandidate(
+  token: string,
+  candidateId: string,
+  payload: RunOptimizationCandidatePayload,
+): Promise<OptimizationCandidateRunResult> {
+  const response = await fetchAuthenticated(buildUrl(`/api/optimizations/candidates/${candidateId}/run`), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, parseOptimizationCandidateRunResult);
+}
+
+export async function promoteOptimizationCandidate(
+  token: string,
+  candidateId: string,
+  reason?: string,
+): Promise<Record<string, unknown>> {
+  const response = await fetchAuthenticated(buildUrl(`/api/optimizations/candidates/${candidateId}/promotion`), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+  return parseJsonResponse(response, (payload) => expectRecord(payload, "OptimizationPromotionResult"));
+}
+
+export async function createOptimizationTrial(
+  token: string,
+  candidateId: string,
+  payload: CreateOptimizationTrialPayload,
+): Promise<OptimizationTrial> {
+  const response = await fetchAuthenticated(buildUrl(`/api/optimizations/candidates/${candidateId}/trials`), token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJsonResponse(response, parseOptimizationTrial);
+}
+
+export async function fetchOptimizationRoi(
+  token: string,
+  studyId: string,
+  candidateId?: string | null,
+): Promise<OptimizationRoi> {
+  const url = new URL(buildUrl(`/api/optimizations/studies/${studyId}/roi`), API_BASE_URL || window.location.origin);
+  if (candidateId) url.searchParams.set("candidate_id", candidateId);
+  const target = API_BASE_URL ? url.toString() : `${url.pathname}${url.search}`;
+  const response = await fetchAuthenticated(target, token);
+  return parseJsonResponse(response, parseOptimizationRoi);
+}
+
+export async function fetchOptimizationComparison(
+  token: string,
+  studyId: string,
+  candidateId?: string | null,
+): Promise<OptimizationComparisonResponse> {
+  const url = new URL(buildUrl(`/api/optimizations/studies/${studyId}/comparison`), API_BASE_URL || window.location.origin);
+  if (candidateId) url.searchParams.set("candidate_id", candidateId);
+  const target = API_BASE_URL ? url.toString() : `${url.pathname}${url.search}`;
+  const response = await fetchAuthenticated(target, token);
+  return parseJsonResponse(response, parseOptimizationComparisonResponse);
+}
+
+export async function exportOptimizationDataset(token: string, studyId: string, redacted = true): Promise<Record<string, unknown>> {
+  const url = new URL(buildUrl(`/api/optimizations/studies/${studyId}/dataset`), API_BASE_URL || window.location.origin);
+  url.searchParams.set("redacted", String(redacted));
+  const target = API_BASE_URL ? url.toString() : `${url.pathname}${url.search}`;
+  const response = await fetchAuthenticated(target, token);
+  return parseJsonResponse(response, (payload) => expectRecord(payload, "OptimizationDataset"));
 }
 
 export async function fetchWorkflowNextAction(

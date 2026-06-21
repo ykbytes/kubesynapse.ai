@@ -1026,6 +1026,8 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
         build_format_system_prompt(request.output_format),
         format_team_context_system_prompt(request.team_context),
     )
+    import main as _main
+    _main._CURRENT_SYSTEM_PROMPT.set(system_prompt)
     prompt_format = build_prompt_format(request)
     max_retries = request.max_retries if request.max_retries is not None else AUTONOMOUS_MAX_RETRIES
     effective_max_turns = request.max_turns if request.max_turns is not None else AUTONOMOUS_MAX_TURNS

@@ -171,7 +171,7 @@ export function McpRegistryTab({ registry, categories, onCreateConnection }: Mcp
         </div>
       )}
 
-      {/* Detail Sheet */}
+      {/* Detail modal */}
       <McpServerDetail
         server={selectedServer}
         onClose={() => setSelectedServer(null)}

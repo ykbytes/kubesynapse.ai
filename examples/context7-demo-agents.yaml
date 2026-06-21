@@ -86,7 +86,7 @@ spec:
     maskPII: true
     maxOutputTokens: 6000
   allowedModels:
-    - litellm/gpt-5-mini
+    - opencode-go/deepseek-v4-flash
   allowedMcpServers: []
   mcpRequireHitl: false
   toolPolicy:
@@ -103,7 +103,7 @@ metadata:
   labels:
     app.kubernetes.io/part-of: context7-demo
 spec:
-  model: litellm/gpt-5-mini
+  model: opencode-go/deepseek-v4-flash
   policyRef: context7-demo-policy
   runtime:
     kind: opencode

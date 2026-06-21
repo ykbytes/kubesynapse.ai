@@ -1253,6 +1253,9 @@ def _emit_traces_from_result(result: dict[str, Any]) -> None:
         ) or None
         model = str(result.get("model") or metadata.get("model") or "")
         response_text = str(result.get("response") or "")
+        reasoning_text = metadata.get("reasoning_text") or result.get("reasoning_text") or ""
+        system_prompt_val = metadata.get("system_prompt") or result.get("system_prompt") or ""
+        finish_reason = metadata.get("finish_reason") or result.get("finish_reason")
         if response_text:
             trace_client.record_llm_call(
                 execution_id=execution_id,
@@ -1268,6 +1271,9 @@ def _emit_traces_from_result(result: dict[str, Any]) -> None:
                 cost_usd=cost_usd,
                 latency_ms=latency_ms,
                 provider=str(metadata.get("provider") or result.get("provider") or "") or None,
+                reasoning_text=reasoning_text or None,
+                system_prompt=system_prompt_val or None,
+                finish_reason=finish_reason,
             )
     except Exception:
         logger.debug("Trace emission failed", exc_info=True)
