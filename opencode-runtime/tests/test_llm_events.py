@@ -72,4 +72,10 @@ class OpenCodeLlmEventTests(unittest.TestCase):
             duration_ms=321,
             session_id="session-1",
             thread_id="thread-1",
+            prompt_text="done",
+            response_text="done",
+            system_prompt=None,
+            reasoning_text="",
+            provider=None,
+            finish_reason=None,
         )
