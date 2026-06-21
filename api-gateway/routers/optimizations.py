@@ -998,6 +998,10 @@ def _find_optimizer_document(
     return None
 
 
+def _documents_of_kind(documents: list[dict[str, Any]], kind: str) -> list[dict[str, Any]]:
+    return [document for document in documents if str(document.get("kind") or "") == kind]
+
+
 def _candidate_bundle_from_source(study: dict[str, Any], suffix: str, optimizer_output: str | None) -> list[dict[str, Any]]:
     namespace = str(study.get("namespace") or "default")
     source = study.get("source_manifests") if isinstance(study.get("source_manifests"), dict) else {}
@@ -1175,12 +1179,19 @@ def _candidate_bundle_from_optimizer_output(
     if not documents:
         return None
 
-    unsupported = sorted({str(document.get("kind") or "<missing>") for document in documents if str(document.get("kind") or "") not in _ALLOWED_CANDIDATE_KINDS})
+    warnings: list[str] = []
+    unsupported = sorted(
+        {
+            str(document.get("kind") or "<missing>")
+            for document in documents
+            if str(document.get("kind") or "") not in _ALLOWED_CANDIDATE_KINDS
+        }
+    )
     if unsupported:
-        raise HTTPException(
-            status_code=422,
-            detail=f"optimizer candidate manifest includes unsupported kind(s): {', '.join(unsupported)}",
+        warnings.append(
+            f"Optimizer output included unsupported kind(s) ignored during generated candidate creation: {', '.join(unsupported)}."
         )
+    documents = [document for document in documents if str(document.get("kind") or "") in _ALLOWED_CANDIDATE_KINDS]
 
     namespace = str(study.get("namespace") or "default")
     source = study.get("source_manifests") if isinstance(study.get("source_manifests"), dict) else {}
@@ -1191,30 +1202,30 @@ def _candidate_bundle_from_optimizer_output(
     safe_suffix = _normalise_candidate_suffix(suffix)
     workflow_name = str(study.get("workflow_name") or _manifest_name(source_workflow))
     candidate_workflow_name = f"{workflow_name}-{safe_suffix}"
-    workflow_document = _find_optimizer_document(
-        documents,
-        kind="AgentWorkflow",
-        source_name=workflow_name,
-        suffixed_name=candidate_workflow_name,
-    )
-    if workflow_document is None:
-        raise HTTPException(
-            status_code=422,
-            detail="optimizer output must include an AgentWorkflow manifest matching the source workflow",
-        )
-    if _manifest_namespace(workflow_document) != namespace:
-        raise HTTPException(status_code=422, detail="optimizer workflow manifest must stay in the study namespace")
-    workflow_spec = workflow_document.get("spec") if isinstance(workflow_document.get("spec"), dict) else None
-    if workflow_spec is None:
-        raise HTTPException(status_code=422, detail="optimizer workflow manifest must include a spec")
 
     bundle = _candidate_bundle_from_source(study, safe_suffix, optimizer_output=None)
     candidate_workflow = _workflow_from_bundle(bundle)
     if candidate_workflow is None:
         raise HTTPException(status_code=409, detail="Study has no source workflow manifest")
 
+    workflow_document = _find_optimizer_document(
+        documents,
+        kind="AgentWorkflow",
+        source_name=workflow_name,
+        suffixed_name=candidate_workflow_name,
+    )
+    workflow_documents = _documents_of_kind(documents, "AgentWorkflow")
+    if workflow_document is None and len(workflow_documents) == 1:
+        workflow_document = workflow_documents[0]
+        warnings.append("Optimizer workflow manifest name was normalized to the copied candidate resource name.")
+    elif workflow_document is None and workflow_documents:
+        warnings.append("Optimizer output included workflow manifests, but none matched the source workflow; generated workflow from source.")
+    elif workflow_document is None:
+        warnings.append("Optimizer output omitted workflow manifest; generated copied workflow from source.")
+
     source_agents = source.get("agents") if isinstance(source.get("agents"), dict) else {}
     agent_name_map = {name: f"{name}-{safe_suffix}" for name in source_agents}
+    agent_documents = _documents_of_kind(documents, "AIAgent")
 
     for source_agent_name, candidate_agent_name in agent_name_map.items():
         agent_document = _find_optimizer_document(
@@ -1223,39 +1234,49 @@ def _candidate_bundle_from_optimizer_output(
             source_name=source_agent_name,
             suffixed_name=candidate_agent_name,
         )
+        if agent_document is None and len(source_agents) == 1 and len(agent_documents) == 1:
+            agent_document = agent_documents[0]
+            warnings.append("Optimizer agent manifest name was normalized to the copied candidate agent name.")
         if agent_document is None:
             continue
         if _manifest_namespace(agent_document) != namespace:
-            raise HTTPException(status_code=422, detail=f"optimizer agent manifest for '{source_agent_name}' must stay in the study namespace")
+            warnings.append(f"Optimizer agent manifest for '{source_agent_name}' was ignored because it left the study namespace.")
+            continue
         agent_spec = agent_document.get("spec") if isinstance(agent_document.get("spec"), dict) else None
         if agent_spec is None:
-            raise HTTPException(status_code=422, detail=f"optimizer agent manifest for '{source_agent_name}' must include a spec")
+            warnings.append(f"Optimizer agent manifest for '{source_agent_name}' was ignored because it omitted spec.")
+            continue
         source_agent = source_agents.get(source_agent_name) if isinstance(source_agents, dict) else None
+        source_spec = source_agent.get("spec") if isinstance(source_agent, dict) and isinstance(source_agent.get("spec"), dict) else {}
+        merged_spec = _clone(source_spec)
+        system_prompt = str(agent_spec.get("systemPrompt") or "").strip()
+        if system_prompt:
+            merged_spec["systemPrompt"] = agent_spec["systemPrompt"]
         source_model = _spec_model(source_agent)
         if source_model:
-            agent_spec = _clone(agent_spec)
-            agent_spec["model"] = source_model
+            merged_spec["model"] = source_model
         for manifest in bundle:
             if str(manifest.get("kind") or "") == "AIAgent" and _manifest_name(manifest) == candidate_agent_name:
-                manifest["spec"] = _clone(agent_spec)
+                manifest["spec"] = merged_spec
                 break
 
-    candidate_workflow["spec"] = _clone(workflow_spec)
-    spec = candidate_workflow.get("spec") if isinstance(candidate_workflow.get("spec"), dict) else {}
-    rewritten_steps = []
-    for step in spec.get("steps") or []:
-        step_copy = _clone(step)
-        ref = str(step_copy.get("agentRef") or "")
-        if ref in agent_name_map:
-            step_copy["agentRef"] = agent_name_map[ref]
-        rewritten_steps.append(step_copy)
-    spec["steps"] = rewritten_steps
-    candidate_workflow["spec"] = spec
-    warnings = _normalise_candidate_workflow_contract(
-        source_workflow,
-        candidate_workflow,
-        agent_name_map=agent_name_map,
-    )
+    if workflow_document is not None:
+        if _manifest_namespace(workflow_document) != namespace:
+            warnings.append("Optimizer workflow manifest was ignored because it left the study namespace.")
+        else:
+            workflow_spec = workflow_document.get("spec") if isinstance(workflow_document.get("spec"), dict) else None
+            if workflow_spec is None:
+                warnings.append("Optimizer workflow manifest was ignored because it omitted spec.")
+            else:
+                candidate_workflow["spec"] = _clone(workflow_spec)
+                warnings.extend(
+                    _normalise_candidate_workflow_contract(
+                        source_workflow,
+                        candidate_workflow,
+                        agent_name_map=agent_name_map,
+                    )
+                )
+    _apply_roi_candidate_guidance(study, bundle, optimizer_output=optimizer_output)
     return bundle, warnings
 
 

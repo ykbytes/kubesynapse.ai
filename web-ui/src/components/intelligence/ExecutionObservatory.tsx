@@ -2474,6 +2474,28 @@ function OptimisePanel({
                     Run a study to create a copied candidate.
                   </div>
                 )}
+                <div className="mt-2 grid gap-1.5">
+                  <Button type="button" size="sm" variant="outline" className="h-7 justify-start gap-1.5 text-[10px]" disabled={!canApprove || actionLoading === "approve"} onClick={onApproveCandidate}>
+                    {actionLoading === "approve" ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <ClipboardCheck className="h-3 w-3" />}
+                    Approve candidate
+                  </Button>
+                  <Button type="button" size="sm" variant="outline" className="h-7 justify-start gap-1.5 text-[10px]" disabled={!canDryRun || actionLoading === "dry-run"} onClick={onDryRunApply}>
+                    {actionLoading === "dry-run" ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <PlayCircle className="h-3 w-3" />}
+                    Dry-run apply
+                  </Button>
+                  <Button type="button" size="sm" className="h-7 justify-start gap-1.5 text-[10px]" disabled={!canRunCandidate || actionLoading === "candidate-run"} onClick={onRunCandidate}>
+                    {actionLoading === "candidate-run" ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <PlayCircle className="h-3 w-3" />}
+                    Run candidate
+                  </Button>
+                  <Button type="button" size="sm" variant="outline" className="h-7 justify-start gap-1.5 text-[10px]" disabled={!activeCandidate || actionLoading === "trial"} onClick={onRecordTrial}>
+                    {actionLoading === "trial" ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                    Link result trace
+                  </Button>
+                  <Button type="button" size="sm" className="h-7 justify-start gap-1.5 text-[10px]" disabled={!canPromote || actionLoading === "promote"} onClick={onPromoteCandidate}>
+                    {actionLoading === "promote" ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <Rocket className="h-3 w-3" />}
+                    Promote winner
+                  </Button>
+                </div>
               </section>
             </aside>
 
@@ -2541,7 +2563,14 @@ function OptimisePanel({
                   })}
                 </div>
 
-                <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+                <details className="mt-3 rounded-md border border-border/45 bg-background/65 p-2.5">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-foreground">Trial and step evidence</span>
+                    <Badge variant="outline" className="h-5 text-[9px]">
+                      {comparisonTrials.length} trials · {comparisonSteps.length || stepRollups.length} steps
+                    </Badge>
+                  </summary>
+                  <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
                   <div className="rounded-md border border-border/45 bg-background/65 p-2.5">
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <div className="text-xs font-semibold text-foreground">Trial evidence</div>
@@ -2603,7 +2632,8 @@ function OptimisePanel({
                       </div>
                     )}
                   </div>
-                </div>
+                  </div>
+                </details>
 
                 {stepRegressions.length > 0 && (
                   <div className="mt-3 rounded-md border border-red-500/25 bg-red-500/10 p-2.5">
@@ -2636,8 +2666,8 @@ function OptimisePanel({
                   </div>
                 )}
 
-                <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-                  <div className="rounded-md border border-border/45 bg-background/65 p-2.5">
+                <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+                  <div className="order-2 rounded-md border border-border/45 bg-background/65 p-2.5">
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <div className="text-xs font-semibold text-foreground">Tool impact</div>
                       <Badge variant="outline" className="h-5 text-[9px]">{comparisonTools.length} tools</Badge>
@@ -2666,10 +2696,10 @@ function OptimisePanel({
                     )}
                   </div>
 
-                  <div className="rounded-md border border-border/45 bg-background/65 p-2.5">
+                  <div className="order-1 rounded-md border border-primary/20 bg-background/70 p-2.5">
                     <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        <div className="text-xs font-semibold text-foreground">Manifest diff</div>
+                        <div className="text-xs font-semibold text-foreground">Side-by-side manifest comparison</div>
                         <div className="text-[10px] text-muted-foreground">
                           Split view of original manifests and copied candidate manifests.
                         </div>
@@ -2737,8 +2767,8 @@ function OptimisePanel({
                 </div>
               </section>
 
-              <section className="rounded-lg border border-border/50 bg-card/45 p-3">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <details className="rounded-lg border border-border/50 bg-card/45 p-3">
+                <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                       <Target className="h-4 w-4 text-primary" />
@@ -2749,8 +2779,8 @@ function OptimisePanel({
                     </p>
                   </div>
                   {(detailsLoading || manifestLoading || studyLoading) && <Badge variant="outline" className="gap-1 text-[10px]"><LoaderCircle className="h-3 w-3 animate-spin" /> loading</Badge>}
-                </div>
-                <div className="grid gap-2 md:grid-cols-2">
+                </summary>
+                <div className="mt-3 grid gap-2 md:grid-cols-2">
                   {(rankedLevers.length > 0 ? rankedLevers : (packet?.opportunity_map ?? []).map((item) => ({
                     kind: String(item.label ?? "signal"),
                     lever: String(item.label ?? "signal"),
@@ -2792,11 +2822,11 @@ function OptimisePanel({
                     </div>
                   ))}
                 </div>
-              </section>
+              </details>
 
               {(stepRollups.length > 0 || modelRollups.length > 0 || toolRollups.length > 0) && (
-                <section className="rounded-lg border border-border/50 bg-card/45 p-3">
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <details className="rounded-lg border border-border/50 bg-card/45 p-3">
+                  <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                         <Gauge className="h-4 w-4 text-primary" />
@@ -2809,8 +2839,8 @@ function OptimisePanel({
                     <Badge variant="outline" className="h-5 text-[10px]">
                       {stepRollups.length} steps · {modelRollups.length} models · {toolRollups.length} tools
                     </Badge>
-                  </div>
-                  <div className="grid gap-2 lg:grid-cols-3">
+                  </summary>
+                  <div className="mt-3 grid gap-2 lg:grid-cols-3">
                     <div className="rounded-md border border-border/45 bg-background/70 p-2.5">
                       <div className="mb-2 flex items-center justify-between gap-2">
                         <span className="text-xs font-semibold text-foreground">Slowest steps</span>
@@ -2872,11 +2902,11 @@ function OptimisePanel({
                       </div>
                     </div>
                   </div>
-                </section>
+                </details>
               )}
 
-              <section className="rounded-lg border border-border/50 bg-card/45 p-3">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <details className="rounded-lg border border-border/50 bg-card/45 p-3">
+                <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                       <Sparkles className="h-4 w-4 text-primary" />
@@ -2894,10 +2924,10 @@ function OptimisePanel({
                       Dry-run apply
                     </Button>
                   </div>
-                </div>
+                </summary>
 
                 {activeCandidate ? (
-                  <div className="grid gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                  <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
                     <div className="space-y-2">
                       <div className="rounded-md border border-border/45 bg-background/70 p-2">
                         <div className="text-[10px] text-muted-foreground">Candidate workflow</div>
@@ -2955,10 +2985,10 @@ function OptimisePanel({
                     No candidate yet. Run the ROI study to persist the baseline and generate an isolated manifest copy.
                   </div>
                 )}
-              </section>
+              </details>
 
-              <section className="rounded-lg border border-border/50 bg-card/45 p-3">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <details className="rounded-lg border border-border/50 bg-card/45 p-3">
+                <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                       <FlaskConical className="h-4 w-4 text-primary" />
@@ -2984,8 +3014,8 @@ function OptimisePanel({
                       Promote
                     </Button>
                   </div>
-                </div>
-                <div className="grid gap-2 md:grid-cols-3">
+                </summary>
+                <div className="mt-3 grid gap-2 md:grid-cols-3">
                   <div className="rounded-md border border-border/45 bg-background/70 p-2">
                     <div className="text-[10px] text-muted-foreground">Confidence</div>
                     <div className="mt-0.5 text-sm font-semibold text-foreground">{roi?.passing_trial_count ?? 0}/{safeTrialTarget} safe trials</div>
@@ -3013,7 +3043,7 @@ function OptimisePanel({
                     ))}
                   </div>
                 )}
-              </section>
+              </details>
             </main>
 
             <aside className="space-y-3">
@@ -3136,15 +3166,15 @@ function OptimisePanel({
               </section>
 
               {datasetReadiness && (
-                <section className="rounded-lg border border-border/50 bg-card/45 p-3">
-                  <div className="mb-2 flex items-center justify-between gap-2">
+                <details className="rounded-lg border border-border/50 bg-card/45 p-3">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-2">
                     <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                       <Database className="h-4 w-4 text-primary" />
                       Dataset factory
                     </div>
                     <Badge variant="outline" className="text-[10px]">{datasetReadiness.state.replace(/_/g, " ")}</Badge>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-[10px]">
+                  </summary>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
                     <div className="rounded-md border border-border/40 bg-background/65 p-2">
                       <div className="text-muted-foreground">Baseline traces</div>
                       <div className="mt-0.5 text-sm font-semibold text-foreground">{datasetReadiness.baseline_examples ?? 0}</div>
@@ -3168,16 +3198,16 @@ function OptimisePanel({
                       {String(localModelPath.suitability ?? "needs_more_examples").replace(/_/g, " ")} · {String(localModelPath.target ?? "tenant-local evaluator or router")}
                     </div>
                   </div>
-                </section>
+                </details>
               )}
 
               {diagnostics.length > 0 && (
-                <section className="rounded-lg border border-border/50 bg-card/45 p-3">
-                  <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+                <details className="rounded-lg border border-border/50 bg-card/45 p-3">
+                  <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold text-foreground">
                     <Lightbulb className="h-4 w-4 text-amber-500" />
                     Trajectory diagnostics
-                  </div>
-                  <div className="space-y-1.5">
+                  </summary>
+                  <div className="mt-3 space-y-1.5">
                     {diagnostics.slice(0, 4).map((diagnostic) => (
                       <div key={diagnostic.id} className="rounded-md border border-border/40 bg-background/65 p-2">
                         <div className="flex items-center justify-between gap-2">
@@ -3195,7 +3225,7 @@ function OptimisePanel({
                       </div>
                     ))}
                   </div>
-                </section>
+                </details>
               )}
 
               {(error || studyError) && (
@@ -3204,18 +3234,18 @@ function OptimisePanel({
                 </div>
               )}
 
-              <section className="rounded-lg border border-border/50 bg-card/45 p-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+              <details className="rounded-lg border border-border/50 bg-card/45 p-3">
+                <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold text-foreground">
                   <Sparkles className="h-4 w-4 text-primary" />
                   Candidate reasoning
-                </div>
+                </summary>
                 {running ? (
-                  <div className="flex items-center justify-center gap-2 rounded-md border border-border/40 bg-background/60 py-8 text-xs text-muted-foreground">
+                  <div className="mt-3 flex items-center justify-center gap-2 rounded-md border border-border/40 bg-background/60 py-8 text-xs text-muted-foreground">
                     <LoaderCircle className="h-4 w-4 animate-spin" />
                     Agent analysis running
                   </div>
                 ) : result ? (
-                  <div className="space-y-2">
+                  <div className="mt-3 space-y-2">
                     <div className="grid grid-cols-2 gap-2 text-[10px]">
                       <div className="rounded-md border border-border/40 bg-background/65 p-2">
                         <div className="text-muted-foreground">Thread</div>
@@ -3235,18 +3265,18 @@ function OptimisePanel({
                     </details>
                   </div>
                 ) : (
-                  <div className="rounded-md border border-dashed border-border/50 p-4 text-center text-xs text-muted-foreground">
+                  <div className="mt-3 rounded-md border border-dashed border-border/50 p-4 text-center text-xs text-muted-foreground">
                     Run the study to get candidate reasoning.
                   </div>
                 )}
-              </section>
+                </details>
 
-              <section className="rounded-lg border border-border/50 bg-card/45 p-3">
-                <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
+              <details className="rounded-lg border border-border/50 bg-card/45 p-3">
+                <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold text-foreground">
                   <Database className="h-4 w-4 text-primary" />
                   Inspectors
-                </div>
-                <div className="space-y-2">
+                </summary>
+                <div className="mt-3 space-y-2">
                   {applyPreview && (
                     <details className="rounded-md border border-border/40 bg-background/65 p-2">
                       <summary className="cursor-pointer text-xs font-medium text-foreground">Apply preview</summary>
@@ -3277,7 +3307,7 @@ function OptimisePanel({
                     />
                   </details>
                 </div>
-              </section>
+              </details>
             </aside>
           </div>
         </div>

@@ -485,6 +485,103 @@ spec:
     assert any("topology" in warning.lower() for warning in candidate["validation_results"]["warnings"])
 
 
+def test_generate_candidate_recovers_from_incomplete_optimizer_manifest(client, auth_headers) -> None:
+    baseline_id = _seed_execution(execution_id="exec-opt-incomplete-output")
+
+    with _optimization_api_context(manifests=True):
+        study = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={"namespace": "default", "workflow_name": "daily-standup", "baseline_execution_ids": [baseline_id]},
+        ).json()
+
+    optimizer_output = """
+The candidate only needs an agent prompt trim.
+
+```yaml
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: generated-agent-name
+  namespace: default
+spec:
+  model: opencode-go/different-model
+  runtime:
+    kind: opencode
+  systemPrompt: >
+    Keep the same output contract, but avoid rereading unchanged workspace files.
+```
+"""
+
+    with _optimization_api_context():
+        response = client.post(
+            f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
+            headers=auth_headers,
+            json={"optimizer_output": optimizer_output, "suffix": "opt-incomplete"},
+        )
+
+    assert response.status_code == 201
+    candidate = response.json()
+    bundle = candidate["manifest_bundle"]
+    workflow = next(manifest for manifest in bundle if manifest["kind"] == "AgentWorkflow")
+    agent = next(manifest for manifest in bundle if manifest["kind"] == "AIAgent")
+
+    assert workflow["metadata"]["name"] == "daily-standup-opt-incomplete"
+    assert workflow["spec"]["steps"][0]["agentRef"] == "daily-standup-opt-incomplete"
+    assert agent["metadata"]["name"] == "daily-standup-opt-incomplete"
+    assert agent["spec"]["model"] == "opencode/deepseek-v4-flash-free"
+    assert agent["spec"]["runtime"] == {"kind": "opencode"}
+    assert agent["spec"]["mcpConnections"] == [{"name": "filesystem", "server_id": "filesystem-sidecar"}]
+    assert "avoid rereading unchanged workspace files" in agent["spec"]["systemPrompt"]
+    assert candidate["validation_results"]["valid"] is True
+    assert any("workflow manifest" in warning.lower() for warning in candidate["validation_results"]["warnings"])
+
+
+def test_generate_candidate_normalizes_unexpected_workflow_name(client, auth_headers) -> None:
+    baseline_id = _seed_execution(execution_id="exec-opt-unexpected-name")
+
+    with _optimization_api_context(manifests=True):
+        study = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={"namespace": "default", "workflow_name": "daily-standup", "baseline_execution_ids": [baseline_id]},
+        ).json()
+
+    optimizer_output = """
+```yaml
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: optimizer-invented-name
+  namespace: default
+spec:
+  input: Generate a daily standup.
+  steps:
+    - name: summarise
+      type: agent
+      agentRef: optimizer-invented-agent
+      prompt: >
+        Reuse existing context summaries before reading files, then write standup.md.
+```
+"""
+
+    with _optimization_api_context():
+        response = client.post(
+            f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
+            headers=auth_headers,
+            json={"optimizer_output": optimizer_output, "suffix": "opt-named"},
+        )
+
+    assert response.status_code == 201
+    candidate = response.json()
+    workflow = next(manifest for manifest in candidate["manifest_bundle"] if manifest["kind"] == "AgentWorkflow")
+    assert workflow["metadata"]["name"] == "daily-standup-opt-named"
+    assert workflow["spec"]["steps"][0]["name"] == "summarise"
+    assert workflow["spec"]["steps"][0]["agentRef"] == "daily-standup-opt-named"
+    assert "Reuse existing context summaries" in workflow["spec"]["steps"][0]["prompt"]
+    assert any("name" in warning.lower() for warning in candidate["validation_results"]["warnings"])
+
+
 def test_candidate_lifecycle_approval_trials_and_verified_roi(client, auth_headers) -> None:
     baseline_id = _seed_execution(execution_id="exec-opt-roi-base", duration_ms=100_000, tokens=2_000, cost_usd=0.08, tool_calls=8)
     candidate_execution_ids = [

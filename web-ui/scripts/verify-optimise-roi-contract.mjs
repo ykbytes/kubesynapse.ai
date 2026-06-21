@@ -75,9 +75,18 @@ const checks = [
       source.includes("Trial evidence") &&
       source.includes("Step impact") &&
       source.includes("Tool impact") &&
-      source.includes("Manifest diff") &&
+      source.includes("Side-by-side manifest comparison") &&
       source.includes("Original ·") &&
       source.includes("Candidate ·"),
+  },
+  {
+    name: "optimizer UI keeps secondary analysis in collapsible panels",
+    pass:
+      source.includes("<details className=\"rounded-lg border border-border/50 bg-card/45 p-3\"") &&
+      source.includes("Ranked optimization levers") &&
+      source.includes("Execution economics") &&
+      source.includes("Candidate reasoning") &&
+      source.includes("Inspectors"),
   },
   {
     name: "optimizer comparison uses authoritative scorecard data",
