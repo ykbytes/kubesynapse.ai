@@ -90,6 +90,24 @@ const checks = [
       source.includes("Candidate ·"),
   },
   {
+    name: "optimizer UI uses compact internal tabs and topology mode control",
+    pass:
+      source.includes("optimiseWorkspaceTab") &&
+      source.includes("Preserve topology") &&
+      source.includes("Allow topology rewrite") &&
+      source.includes("value=\"diff\"") &&
+      source.includes("value=\"candidate\"") &&
+      source.includes("allowTopologyRewrite"),
+  },
+  {
+    name: "optimizer prompt separates source workflow from topology rewrite mode",
+    pass:
+      source.includes("optimization_mode") &&
+      source.includes("The source workflow and source agents must not become aware of ROI Lab") &&
+      source.includes("Topology rewrite mode") &&
+      apiSource.includes("allow_topology_rewrite"),
+  },
+  {
     name: "optimizer UI keeps secondary analysis in collapsible panels",
     pass:
       source.includes("<details className=\"rounded-lg border border-border/50 bg-card/45 p-3\"") &&

@@ -3460,6 +3460,7 @@ export interface GenerateOptimizationCandidatePayload {
   optimizer_output?: string | null;
   suffix?: string | null;
   expected_savings?: Record<string, unknown>;
+  allow_topology_rewrite?: boolean;
 }
 
 export interface CreateOptimizationTrialPayload {

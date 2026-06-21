@@ -53,12 +53,14 @@ class CreateCandidateRequest(BaseModel):
     optimizer_output: str | None = None
     manifest_bundle: list[dict[str, Any]] = Field(default_factory=list, min_length=1, max_length=20)
     expected_savings: dict[str, Any] = Field(default_factory=dict)
+    allow_topology_rewrite: bool = False
 
 
 class GenerateCandidateRequest(BaseModel):
     optimizer_output: str | None = None
     suffix: str | None = Field(default=None, max_length=32)
     expected_savings: dict[str, Any] = Field(default_factory=dict)
+    allow_topology_rewrite: bool = False
 
 
 class ApprovalRequest(BaseModel):
@@ -818,6 +820,7 @@ def _validate_candidate_bundle(
     study: dict[str, Any],
     bundle: list[dict[str, Any]],
     *,
+    allow_topology_rewrite: bool = False,
     warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     errors: list[str] = []
@@ -837,7 +840,12 @@ def _validate_candidate_bundle(
         if _manifest_namespace(manifest) != namespace:
             errors.append("candidate manifests must stay in the study namespace")
 
-    if source_workflow and candidate_workflow and _step_signature(source_workflow) != _step_signature(candidate_workflow):
+    topology_preserved = (
+        _step_signature(source_workflow) == _step_signature(candidate_workflow)
+        if source_workflow and candidate_workflow
+        else False
+    )
+    if source_workflow and candidate_workflow and not topology_preserved and not allow_topology_rewrite:
         errors.append("workflow topology must preserve step names/order and step types")
 
     source_agents = source.get("agents") if isinstance(source.get("agents"), dict) else {}
@@ -846,6 +854,11 @@ def _validate_candidate_bundle(
         for manifest in bundle
         if isinstance(manifest, dict) and str(manifest.get("kind") or "") == "AIAgent"
     }
+    source_models = {
+        model
+        for model in (_spec_model(agent) for agent in source_agents.values())
+        if model
+    } if isinstance(source_agents, dict) else set()
     for source_agent_name, candidate_agent_name in _candidate_agent_ref_map(source_workflow, candidate_workflow).items():
         source_agent = source_agents.get(source_agent_name) if isinstance(source_agents, dict) else None
         candidate_agent = candidate_agents.get(candidate_agent_name)
@@ -855,6 +868,22 @@ def _validate_candidate_bundle(
             errors.append(
                 f"candidate agent '{candidate_agent_name}' must preserve source model '{source_model}' in v1"
             )
+    if allow_topology_rewrite and source_models:
+        for candidate_agent_name, candidate_agent in candidate_agents.items():
+            candidate_model = _spec_model(candidate_agent)
+            if candidate_model and candidate_model not in source_models:
+                errors.append(
+                    f"candidate agent '{candidate_agent_name}' must use one of the source models in topology rewrite mode"
+                )
+
+    workflow_agent_refs = {
+        str(step.get("agentRef") or "")
+        for step in _workflow_steps(candidate_workflow or {})
+        if str(step.get("agentRef") or "")
+    }
+    missing_refs = sorted(ref for ref in workflow_agent_refs if ref not in candidate_agents)
+    if missing_refs:
+        errors.append(f"candidate workflow references missing candidate agent(s): {', '.join(missing_refs)}")
 
     source_names = {_manifest_name(manifest) for manifest in _source_bundle_from_study(study)}
     candidate_names = {_manifest_name(manifest) for manifest in bundle}
@@ -874,9 +903,14 @@ def _validate_candidate_bundle(
         "valid": not errors,
         "errors": errors,
         "warnings": validation_warnings,
-        "scope": "prompt_model_tool_v1",
-        "topology_preserved": not any("workflow topology" in error for error in errors),
-        "hybrid_gate": "candidate requires approval, safe trials, and contract-preserving outputs before promotion",
+        "scope": "prompt_model_tool_topology_v1" if allow_topology_rewrite else "prompt_model_tool_v1",
+        "topology_preserved": topology_preserved,
+        "topology_rewrite_allowed": allow_topology_rewrite,
+        "hybrid_gate": (
+            "candidate requires approval, safe trials, human contract review, and output-equivalence checks before promotion"
+            if allow_topology_rewrite
+            else "candidate requires approval, safe trials, and contract-preserving outputs before promotion"
+        ),
     }
 
 
@@ -896,7 +930,14 @@ def _manifest_diff(study: dict[str, Any], bundle: list[dict[str, Any]]) -> dict[
     }
 
 
-def _copy_metadata(manifest: dict[str, Any], name: str, namespace: str, study: dict[str, Any]) -> dict[str, Any]:
+def _copy_metadata(
+    manifest: dict[str, Any],
+    name: str,
+    namespace: str,
+    study: dict[str, Any],
+    *,
+    allow_topology_rewrite: bool = False,
+) -> dict[str, Any]:
     metadata = _clone(manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {})
     metadata["name"] = name
     metadata["namespace"] = namespace
@@ -909,6 +950,7 @@ def _copy_metadata(manifest: dict[str, Any], name: str, namespace: str, study: d
             "kubesynapse.ai/optimization-study": str(study["id"]),
             "kubesynapse.ai/source-workflow": str(study["workflow_name"]),
             "kubesynapse.ai/candidate": "true",
+            "kubesynapse.ai/topology-rewrite": "allowed" if allow_topology_rewrite else "preserved",
         }
     )
     metadata["labels"] = labels
@@ -916,6 +958,34 @@ def _copy_metadata(manifest: dict[str, Any], name: str, namespace: str, study: d
     annotations["kubesynapse.ai/optimization-mode"] = "roi-lab-v1"
     metadata["annotations"] = annotations
     return metadata
+
+
+def _label_candidate_bundle(
+    study: dict[str, Any],
+    bundle: list[dict[str, Any]],
+    *,
+    allow_topology_rewrite: bool = False,
+) -> list[dict[str, Any]]:
+    labelled = _clone(bundle)
+    namespace = str(study.get("namespace") or "default")
+    for manifest in labelled:
+        if not isinstance(manifest, dict):
+            continue
+        metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+        metadata = _clone(metadata)
+        metadata["namespace"] = metadata.get("namespace") or namespace
+        labels = metadata.get("labels") if isinstance(metadata.get("labels"), dict) else {}
+        labels.update(
+            {
+                "kubesynapse.ai/optimization-study": str(study["id"]),
+                "kubesynapse.ai/source-workflow": str(study["workflow_name"]),
+                "kubesynapse.ai/candidate": "true",
+                "kubesynapse.ai/topology-rewrite": "allowed" if allow_topology_rewrite else "preserved",
+            }
+        )
+        metadata["labels"] = labels
+        manifest["metadata"] = metadata
+    return labelled
 
 
 def _normalise_candidate_suffix(suffix: str) -> str:
@@ -1002,7 +1072,13 @@ def _documents_of_kind(documents: list[dict[str, Any]], kind: str) -> list[dict[
     return [document for document in documents if str(document.get("kind") or "") == kind]
 
 
-def _candidate_bundle_from_source(study: dict[str, Any], suffix: str, optimizer_output: str | None) -> list[dict[str, Any]]:
+def _candidate_bundle_from_source(
+    study: dict[str, Any],
+    suffix: str,
+    optimizer_output: str | None,
+    *,
+    allow_topology_rewrite: bool = False,
+) -> list[dict[str, Any]]:
     namespace = str(study.get("namespace") or "default")
     source = study.get("source_manifests") if isinstance(study.get("source_manifests"), dict) else {}
     source_workflow = source.get("workflow") if isinstance(source.get("workflow"), dict) else None
@@ -1019,11 +1095,23 @@ def _candidate_bundle_from_source(study: dict[str, Any], suffix: str, optimizer_
         if not isinstance(source_agent, dict):
             continue
         candidate_agent = _clone(source_agent)
-        candidate_agent["metadata"] = _copy_metadata(candidate_agent, agent_name_map[source_name], namespace, study)
+        candidate_agent["metadata"] = _copy_metadata(
+            candidate_agent,
+            agent_name_map[source_name],
+            namespace,
+            study,
+            allow_topology_rewrite=allow_topology_rewrite,
+        )
         bundle.append(candidate_agent)
 
     candidate_workflow = _clone(source_workflow)
-    candidate_workflow["metadata"] = _copy_metadata(candidate_workflow, workflow_name, namespace, study)
+    candidate_workflow["metadata"] = _copy_metadata(
+        candidate_workflow,
+        workflow_name,
+        namespace,
+        study,
+        allow_topology_rewrite=allow_topology_rewrite,
+    )
     spec = candidate_workflow.get("spec") if isinstance(candidate_workflow.get("spec"), dict) else {}
     steps = []
     for step in spec.get("steps") or []:
@@ -1035,7 +1123,6 @@ def _candidate_bundle_from_source(study: dict[str, Any], suffix: str, optimizer_
     spec["steps"] = steps
     candidate_workflow["spec"] = spec
     bundle.append(candidate_workflow)
-    _apply_roi_candidate_guidance(study, bundle, optimizer_output=optimizer_output)
     return bundle
 
 
@@ -1174,6 +1261,8 @@ def _candidate_bundle_from_optimizer_output(
     study: dict[str, Any],
     suffix: str,
     optimizer_output: str | None,
+    *,
+    allow_topology_rewrite: bool = False,
 ) -> tuple[list[dict[str, Any]], list[str]] | None:
     documents = _extract_optimizer_manifest_documents(optimizer_output)
     if not documents:
@@ -1203,7 +1292,12 @@ def _candidate_bundle_from_optimizer_output(
     workflow_name = str(study.get("workflow_name") or _manifest_name(source_workflow))
     candidate_workflow_name = f"{workflow_name}-{safe_suffix}"
 
-    bundle = _candidate_bundle_from_source(study, safe_suffix, optimizer_output=None)
+    bundle = _candidate_bundle_from_source(
+        study,
+        safe_suffix,
+        optimizer_output=None,
+        allow_topology_rewrite=allow_topology_rewrite,
+    )
     candidate_workflow = _workflow_from_bundle(bundle)
     if candidate_workflow is None:
         raise HTTPException(status_code=409, detail="Study has no source workflow manifest")
@@ -1226,6 +1320,7 @@ def _candidate_bundle_from_optimizer_output(
     source_agents = source.get("agents") if isinstance(source.get("agents"), dict) else {}
     agent_name_map = {name: f"{name}-{safe_suffix}" for name in source_agents}
     agent_documents = _documents_of_kind(documents, "AIAgent")
+    used_agent_document_names: set[str] = set()
 
     for source_agent_name, candidate_agent_name in agent_name_map.items():
         agent_document = _find_optimizer_document(
@@ -1239,6 +1334,7 @@ def _candidate_bundle_from_optimizer_output(
             warnings.append("Optimizer agent manifest name was normalized to the copied candidate agent name.")
         if agent_document is None:
             continue
+        used_agent_document_names.add(_manifest_name(agent_document))
         if _manifest_namespace(agent_document) != namespace:
             warnings.append(f"Optimizer agent manifest for '{source_agent_name}' was ignored because it left the study namespace.")
             continue
@@ -1260,6 +1356,44 @@ def _candidate_bundle_from_optimizer_output(
                 manifest["spec"] = merged_spec
                 break
 
+    if allow_topology_rewrite:
+        source_models = {
+            model
+            for model in (_spec_model(agent) for agent in source_agents.values())
+            if model
+        } if isinstance(source_agents, dict) else set()
+        default_model = next(iter(source_models)) if len(source_models) == 1 else None
+        existing_agent_names = {_manifest_name(manifest) for manifest in bundle if str(manifest.get("kind") or "") == "AIAgent"}
+        for agent_document in agent_documents:
+            source_doc_name = _manifest_name(agent_document)
+            if not source_doc_name or source_doc_name in used_agent_document_names:
+                continue
+            if _manifest_namespace(agent_document) != namespace:
+                warnings.append(f"Optimizer topology agent manifest '{source_doc_name}' was ignored because it left the study namespace.")
+                continue
+            agent_spec = agent_document.get("spec") if isinstance(agent_document.get("spec"), dict) else None
+            if agent_spec is None:
+                warnings.append(f"Optimizer topology agent manifest '{source_doc_name}' was ignored because it omitted spec.")
+                continue
+            candidate_agent_name = source_doc_name if source_doc_name.endswith(f"-{safe_suffix}") else f"{source_doc_name}-{safe_suffix}"
+            if candidate_agent_name in existing_agent_names:
+                continue
+            candidate_agent = _clone(agent_document)
+            candidate_agent["metadata"] = _copy_metadata(
+                candidate_agent,
+                candidate_agent_name,
+                namespace,
+                study,
+                allow_topology_rewrite=True,
+            )
+            candidate_spec = _clone(agent_spec)
+            if default_model and not candidate_spec.get("model"):
+                candidate_spec["model"] = default_model
+            candidate_agent["spec"] = candidate_spec
+            bundle.append(candidate_agent)
+            existing_agent_names.add(candidate_agent_name)
+            agent_name_map[source_doc_name] = candidate_agent_name
+
     if workflow_document is not None:
         if _manifest_namespace(workflow_document) != namespace:
             warnings.append("Optimizer workflow manifest was ignored because it left the study namespace.")
@@ -1269,14 +1403,19 @@ def _candidate_bundle_from_optimizer_output(
                 warnings.append("Optimizer workflow manifest was ignored because it omitted spec.")
             else:
                 candidate_workflow["spec"] = _clone(workflow_spec)
-                warnings.extend(
-                    _normalise_candidate_workflow_contract(
-                        source_workflow,
-                        candidate_workflow,
-                        agent_name_map=agent_name_map,
+                if allow_topology_rewrite:
+                    for step in _workflow_steps(candidate_workflow):
+                        ref = str(step.get("agentRef") or "")
+                        if ref in agent_name_map:
+                            step["agentRef"] = agent_name_map[ref]
+                else:
+                    warnings.extend(
+                        _normalise_candidate_workflow_contract(
+                            source_workflow,
+                            candidate_workflow,
+                            agent_name_map=agent_name_map,
+                        )
                     )
-                )
-    _apply_roi_candidate_guidance(study, bundle, optimizer_output=optimizer_output)
     return bundle, warnings
 
 
@@ -2484,16 +2623,25 @@ def create_candidate(study_id: str, body: CreateCandidateRequest, user: dict[str
     if study is None:
         raise HTTPException(status_code=404, detail="Optimization study not found")
     ensure_namespace_access(user, str(study["namespace"]), "admin")
-    validation = _validate_candidate_bundle(study, body.manifest_bundle)
+    manifest_bundle = _label_candidate_bundle(
+        study,
+        body.manifest_bundle,
+        allow_topology_rewrite=body.allow_topology_rewrite,
+    )
+    validation = _validate_candidate_bundle(
+        study,
+        manifest_bundle,
+        allow_topology_rewrite=body.allow_topology_rewrite,
+    )
     if not validation["valid"]:
         raise HTTPException(status_code=422, detail="; ".join(validation["errors"]))
     return optimization_store.create_candidate(
         study_id=study_id,
         namespace=str(study["namespace"]),
-        name=body.name or _candidate_workflow_name(body.manifest_bundle),
-        candidate_workflow_name=_candidate_workflow_name(body.manifest_bundle),
-        manifest_bundle=_clone(body.manifest_bundle),
-        manifest_diff=_manifest_diff(study, body.manifest_bundle),
+        name=body.name or _candidate_workflow_name(manifest_bundle),
+        candidate_workflow_name=_candidate_workflow_name(manifest_bundle),
+        manifest_bundle=manifest_bundle,
+        manifest_diff=_manifest_diff(study, manifest_bundle),
         optimizer_output=body.optimizer_output,
         validation_results=validation,
         expected_savings=body.expected_savings,
@@ -2508,13 +2656,28 @@ def generate_candidate(study_id: str, body: GenerateCandidateRequest, user: dict
         raise HTTPException(status_code=404, detail="Optimization study not found")
     ensure_namespace_access(user, str(study["namespace"]), "admin")
     suffix = body.suffix or f"opt-{study_id[-5:]}"
-    generated = _candidate_bundle_from_optimizer_output(study, suffix, body.optimizer_output)
+    generated = _candidate_bundle_from_optimizer_output(
+        study,
+        suffix,
+        body.optimizer_output,
+        allow_topology_rewrite=body.allow_topology_rewrite,
+    )
     validation_warnings: list[str] = []
     if generated is None:
-        bundle = _candidate_bundle_from_source(study, suffix, body.optimizer_output)
+        bundle = _candidate_bundle_from_source(
+            study,
+            suffix,
+            body.optimizer_output,
+            allow_topology_rewrite=body.allow_topology_rewrite,
+        )
     else:
         bundle, validation_warnings = generated
-    validation = _validate_candidate_bundle(study, bundle, warnings=validation_warnings)
+    validation = _validate_candidate_bundle(
+        study,
+        bundle,
+        allow_topology_rewrite=body.allow_topology_rewrite,
+        warnings=validation_warnings,
+    )
     if not validation["valid"]:
         raise HTTPException(status_code=422, detail="; ".join(validation["errors"]))
     return optimization_store.create_candidate(

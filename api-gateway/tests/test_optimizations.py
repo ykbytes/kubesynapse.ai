@@ -241,6 +241,59 @@ def test_candidate_validation_rejects_topology_changes_and_secret_expansion(clie
     assert "secret" in detail.lower()
 
 
+def test_candidate_validation_allows_topology_rewrite_only_when_explicit(client, auth_headers) -> None:
+    base_id = _seed_execution(execution_id="exec-opt-topology-mode")
+    with _optimization_api_context(manifests=True):
+        study = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={"namespace": "default", "workflow_name": "daily-standup", "baseline_execution_ids": [base_id]},
+        ).json()
+
+    rewritten_workflow = _workflow_manifest("daily-standup-opt-single")
+    rewritten_workflow["spec"]["steps"] = [
+        {
+            "name": "standup-e2e",
+            "type": "agent",
+            "agentRef": "daily-standup-opt-single",
+            "prompt": "Produce the same standup.md artifact in one consolidated agent pass.",
+        }
+    ]
+    rewritten_agent = _agent_manifest("daily-standup-opt-single")
+    rewritten_agent["spec"]["systemPrompt"] = "You consolidate git, Jira, and final standup writing without losing required output behavior."
+
+    with _optimization_api_context():
+        blocked = client.post(
+            f"/api/v1/optimizations/studies/{study['id']}/candidates",
+            headers=auth_headers,
+            json={
+                "name": "single step candidate",
+                "optimizer_output": "merge compatible steps into one agent",
+                "manifest_bundle": [rewritten_agent, rewritten_workflow],
+            },
+        )
+        allowed = client.post(
+            f"/api/v1/optimizations/studies/{study['id']}/candidates",
+            headers=auth_headers,
+            json={
+                "name": "single step candidate",
+                "optimizer_output": "merge compatible steps into one agent",
+                "manifest_bundle": [rewritten_agent, rewritten_workflow],
+                "allow_topology_rewrite": True,
+            },
+        )
+
+    assert blocked.status_code == 422
+    assert allowed.status_code == 201
+    candidate = allowed.json()
+    assert candidate["validation_results"]["valid"] is True
+    assert candidate["validation_results"]["scope"] == "prompt_model_tool_topology_v1"
+    assert candidate["validation_results"]["topology_preserved"] is False
+    assert candidate["manifest_diff"]["topology"]["preserved"] is False
+    workflow = next(manifest for manifest in candidate["manifest_bundle"] if manifest["kind"] == "AgentWorkflow")
+    assert workflow["metadata"]["labels"]["kubesynapse.ai/topology-rewrite"] == "allowed"
+
+
 def test_candidate_validation_rejects_source_model_changes(client, auth_headers) -> None:
     base_id = _seed_execution(execution_id="exec-opt-model-guard")
     with _optimization_api_context(manifests=True):
@@ -321,7 +374,7 @@ def test_generate_candidate_does_not_copy_optimizer_output_into_manifest_annotat
     assert "token-like text" in candidate["optimizer_output"]
 
 
-def test_generate_candidate_fallback_adds_safe_roi_guidance_without_mutating_source(client, auth_headers) -> None:
+def test_generate_candidate_fallback_copies_manifests_without_roi_prompt_injection(client, auth_headers) -> None:
     baseline_id = _seed_execution(execution_id="exec-opt-guided-fallback")
 
     with _optimization_api_context(manifests=True):
@@ -346,9 +399,10 @@ def test_generate_candidate_fallback_adds_safe_roi_guidance_without_mutating_sou
 
     assert workflow["metadata"]["name"] == "daily-standup-opt-guided"
     assert workflow["spec"]["steps"][0]["agentRef"] == "daily-standup-opt-guided"
-    assert "[ROI Candidate Guidance]" in workflow["spec"]["steps"][0]["prompt"]
-    assert "Preserve every required output path" in workflow["spec"]["steps"][0]["prompt"]
-    assert "[ROI Candidate Guidance]" in agent["spec"]["systemPrompt"]
+    assert "[ROI Candidate Guidance]" not in workflow["spec"]["steps"][0]["prompt"]
+    assert workflow["spec"]["steps"][0]["prompt"] == "Read git and Jira context, then write standup.md."
+    assert "[ROI Candidate Guidance]" not in agent["spec"]["systemPrompt"]
+    assert agent["spec"]["systemPrompt"] == "You write daily standup reports."
     assert agent["spec"]["model"] == "opencode/deepseek-v4-flash-free"
 
     with _optimization_api_context():
@@ -818,10 +872,11 @@ def test_roi_comparison_exposes_trials_steps_tools_and_manifest_diff(client, aut
     assert workflow_section["candidate_name"] == "daily-standup-opt-compare"
     assert "Read git and Jira context" in workflow_section["source_yaml"]
     assert "[ROI Candidate Guidance]" not in workflow_section["source_yaml"]
-    assert "[ROI Candidate Guidance]" in workflow_section["candidate_yaml"]
-    assert "spec.steps[0].prompt" in workflow_section["changed_paths"]
+    assert "Read git and Jira context" in workflow_section["candidate_yaml"]
+    assert "[ROI Candidate Guidance]" not in workflow_section["candidate_yaml"]
+    assert "spec.steps[0].agentRef" in workflow_section["changed_paths"]
     assert any(row["type"] in {"replace", "insert"} for row in workflow_section["diff_rows"])
-    assert any("[ROI Candidate Guidance]" in str(row["candidate"]) for row in workflow_section["diff_rows"])
+    assert not any("[ROI Candidate Guidance]" in str(row["candidate"]) for row in workflow_section["diff_rows"])
 
 
 def test_run_candidate_applies_copy_triggers_workflow_and_records_trial(client, auth_headers) -> None:

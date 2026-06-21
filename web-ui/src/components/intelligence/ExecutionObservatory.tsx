@@ -108,6 +108,7 @@ import { LiveActivityStream, useWorkflowActivities } from "./LiveActivityStream"
 type LogFilterMode = "all" | "activity" | "errors" | "tooling";
 type ObservatoryTab = "timeline" | "analytics" | "trace" | "optimise" | "logs" | "compare";
 type OptimisationScope = "current" | "last6" | "last20";
+type OptimisationTopologyMode = "preserve_topology" | "allow_topology_rewrite";
 type OptimisationRunPhaseKey = "prepare" | "study" | "agent" | "candidate" | "roi";
 type OptimisationRunPhaseStatus = "pending" | "running" | "success" | "error";
 type OptimisationRunPhase = {
@@ -213,7 +214,7 @@ function renderManifestDiffRows(rows: OptimizationManifestDiffSection["diff_rows
     const sourceTone = row.type === "delete" || row.type === "replace" ? "bg-red-500/10 text-red-900 dark:text-red-100" : "bg-background/55";
     const candidateTone = row.type === "insert" || row.type === "replace" ? "bg-emerald-500/10 text-emerald-900 dark:text-emerald-100" : "bg-background/55";
     return (
-      <div key={`${row.source_line_no ?? "x"}-${row.candidate_line_no ?? "x"}-${index}`} className="grid min-w-[44rem] grid-cols-2 gap-px text-[10px] leading-4">
+      <div key={`${row.source_line_no ?? "x"}-${row.candidate_line_no ?? "x"}-${index}`} className="grid min-w-[68rem] grid-cols-2 gap-px text-[10px] leading-4">
         <div className={cn("grid grid-cols-[2.5rem_minmax(0,1fr)] gap-2 border-b border-border/25 px-2 py-0.5 font-mono", sourceTone)}>
           <span className="select-none text-right text-muted-foreground">{row.source_line_no ?? ""}</span>
           <span className="whitespace-pre">{row.source}</span>
@@ -1039,6 +1040,7 @@ type OptimisationPacket = {
   namespace: string;
   workflow_name: string;
   selected_scope: OptimisationScope;
+  optimization_mode: OptimisationTopologyMode;
   selected_agent: string | null;
   objective: string[];
   guardrails: string[];
@@ -1220,6 +1222,7 @@ function buildOptimisationPacket({
   workflowName,
   selectedAgent,
   scope,
+  topologyMode,
 }: {
   detail: ExecutionTrace;
   orderedSteps: StepTrace[];
@@ -1232,6 +1235,7 @@ function buildOptimisationPacket({
   workflowName: string;
   selectedAgent: string | null;
   scope: OptimisationScope;
+  topologyMode: OptimisationTopologyMode;
 }): OptimisationPacket {
   const scopeLimit = optimisationScopeLimit(scope);
   const details = scopedDetails.length > 0 ? scopedDetails.slice(0, scopeLimit) : [detail];
@@ -1320,6 +1324,7 @@ function buildOptimisationPacket({
     namespace,
     workflow_name: workflowName,
     selected_scope: scope,
+    optimization_mode: topologyMode,
     selected_agent: selectedAgent,
     objective: [
       "Reduce wall-clock time for the selected workflow.",
@@ -1333,7 +1338,9 @@ function buildOptimisationPacket({
       "Name optimized resources with an explicit suffix such as -opt or -candidate and preserve labels needed for ownership/audit.",
       "Applying or running optimized manifests requires a separate admin-created deployment-capable agent with least-privilege RBAC.",
       "Call out contract-breaking changes explicitly and provide migration notes.",
-      "Prefer lower-risk prompt, context, caching, batching, and routing improvements before structural rewrites.",
+      topologyMode === "allow_topology_rewrite"
+        ? "Topology rewrites are allowed for this study only if the candidate preserves the workflow purpose, required artifacts, schemas, and user-visible behavior."
+        : "Do not add, remove, reorder, merge, split, or change the type of workflow steps.",
     ],
     current_execution: {
       id: detail.id,
@@ -1409,9 +1416,16 @@ function buildOptimisationPacket({
       candidate_contract: {
         source_workflow_is_read_only: true,
         must_create_candidate_copy: true,
-        allowed_scope: ["prompt", "model routing", "context trimming", "cache hints", "tool-use instructions", "timeouts", "batching guidance"],
-        forbidden_scope: ["in-place workflow edits", "step add/remove/reorder", "step type changes", "secret/env expansion", "privilege expansion"],
-        preserve: ["step names", "step order", "step types", "agent handoffs", "output artifacts", "schemas", "workspace paths"],
+        topology_mode: topologyMode,
+        allowed_scope: topologyMode === "allow_topology_rewrite"
+          ? ["prompt", "context trimming", "cache hints", "tool-use instructions", "timeouts", "batching guidance", "step merge/split/reorder when behavior is preserved"]
+          : ["prompt", "context trimming", "cache hints", "tool-use instructions", "timeouts", "batching guidance"],
+        forbidden_scope: topologyMode === "allow_topology_rewrite"
+          ? ["in-place workflow edits", "secret/env expansion", "privilege expansion", "model/provider changes", "lost required artifacts or behavior"]
+          : ["in-place workflow edits", "step add/remove/reorder", "step type changes", "secret/env expansion", "privilege expansion", "model/provider changes"],
+        preserve: topologyMode === "allow_topology_rewrite"
+          ? ["workflow purpose", "output artifacts", "schemas", "workspace paths", "security boundaries", "human-visible behavior"]
+          : ["step names", "step order", "step types", "agent handoffs", "output artifacts", "schemas", "workspace paths"],
       },
       manifest_inventory: {
         workflow_loaded: Boolean(workflowManifest),
@@ -1593,6 +1607,7 @@ function buildCompactOptimisationPacket(packet: OptimisationPacket): Optimisatio
 }
 
 function buildOptimisationPromptBody(packet: OptimisationPacket, compacted: boolean): string {
+  const topologyRewrite = packet.optimization_mode === "allow_topology_rewrite";
   return [
     "You are a senior AI workflow optimisation engineer for KubeSynapse.",
     "",
@@ -1603,12 +1618,17 @@ function buildOptimisationPromptBody(packet: OptimisationPacket, compacted: bool
     "- Do not modify files, workflow definitions, cluster resources, credentials, or external systems.",
     "- Treat this as an analysis-only optimisation review.",
     "- Never edit the source workflow in place. Generate a candidate copy of the Kubernetes manifests and explain the diff.",
+    "- The source workflow and source agents must not become aware of ROI Lab, optimization studies, or benchmarking mechanics.",
     "- Use the source workflow and agent names in proposed manifest metadata; the gateway will create suffixed copied resources and rewrite agentRefs safely.",
     "- If a test-run loop is useful, describe the loop and required permissions, but do not run kubectl or apply anything.",
     "- Any apply/run capability must be handled by a separate admin-created agent with least-privilege Kubernetes RBAC and explicit user approval.",
-    "- Preserve existing step outputs, artifact paths, schemas, handoff semantics, and security boundaries unless you explicitly mark a breaking change and provide migration steps.",
-    "- Do not add, remove, reorder, merge, split, or change the type of workflow steps in v1.",
-    "- Prefer prompt/context/tool-use improvements before proposing structural rewrites.",
+    "- Preserve existing step outputs, artifact paths, schemas, handoff semantics, workflow purpose, and security boundaries unless you explicitly mark a breaking change and provide migration steps.",
+    topologyRewrite
+      ? "- Topology rewrite mode is enabled: you may merge, split, remove, or reorder steps only when the candidate demonstrably preserves the same workflow purpose and required outputs."
+      : "- Topology rewrite mode is disabled: do not add, remove, reorder, merge, split, or change the type of workflow steps.",
+    topologyRewrite
+      ? "- If you rewrite topology, explain why the new topology is behavior-equivalent and list every original capability preserved by the candidate."
+      : "- Prefer prompt/context/tool-use improvements; structural rewrites are out of scope for this study.",
     "- Preserve the source agents' provider and model exactly in v1; do not route to a different model family.",
     "- Treat the run history as an optimization dataset: compare step duration, token count, LLM calls, tool calls, repeated tool arguments, cache use, retries, quiet gaps, and output quality signals.",
     "- Optimize only changes that can be verified by baseline-vs-candidate trial runs. If quality cannot be machine-verified, require human review.",
@@ -1618,7 +1638,9 @@ function buildOptimisationPromptBody(packet: OptimisationPacket, compacted: bool
     "Candidate manifest output contract:",
     "- Include a fenced YAML block headed `candidate_manifest_bundle` with AgentWorkflow and relevant AIAgent documents.",
     "- The candidate_manifest_bundle may change prompts, runtime hints, context trimming, caching hints, tool-use instructions, timeouts, and batching guidance.",
-    "- The candidate_manifest_bundle must preserve step names, step order, step types, agent handoffs, output artifacts, schemas, and workspace paths.",
+    topologyRewrite
+      ? "- The candidate_manifest_bundle may change topology, but must preserve workflow purpose, output artifacts, schemas, workspace paths, security boundaries, and user-visible behavior."
+      : "- The candidate_manifest_bundle must preserve step names, step order, step types, agent handoffs, output artifacts, schemas, and workspace paths.",
     "- Do not introduce new secret, env, envFrom, valueFrom, ServiceAccount, Role, RoleBinding, ClusterRole, ClusterRoleBinding, or external credential references.",
     "- Keep metadata names as the source names in your YAML. The gateway creates suffixed copied resources and rewrites agentRefs.",
     "",
@@ -2152,6 +2174,8 @@ function OptimisePanel({
   onSelectedAgentChange,
   scope,
   onScopeChange,
+  topologyMode,
+  onTopologyModeChange,
   packet,
   prompt,
   detailsLoading,
@@ -2189,6 +2213,8 @@ function OptimisePanel({
   onSelectedAgentChange: (agentName: string) => void;
   scope: OptimisationScope;
   onScopeChange: (scope: OptimisationScope) => void;
+  topologyMode: OptimisationTopologyMode;
+  onTopologyModeChange: (mode: OptimisationTopologyMode) => void;
   packet: OptimisationPacket | null;
   prompt: string;
   detailsLoading: boolean;
@@ -2253,6 +2279,13 @@ function OptimisePanel({
     comparisonManifestSections.find((section) => section.id === selectedManifestSectionId) ??
     comparisonManifestSections[0] ??
     null;
+  const [optimiseWorkspaceTab, setOptimiseWorkspaceTab] = useState<"summary" | "candidate" | "diff" | "evidence" | "agent">("summary");
+  const allowTopologyRewrite = topologyMode === "allow_topology_rewrite";
+  const showSummaryTab = optimiseWorkspaceTab === "summary";
+  const showCandidateTab = optimiseWorkspaceTab === "candidate";
+  const showDiffTab = optimiseWorkspaceTab === "diff";
+  const showEvidenceTab = optimiseWorkspaceTab === "evidence";
+  const showAgentTab = optimiseWorkspaceTab === "agent";
   const proofStatus = roi?.proof_status ?? (activeCandidate ? "pending_trials" : study ? "candidate_needed" : "baseline_needed");
   const isVerified = roi?.verified === true;
   const canApprove = Boolean(activeCandidate && activeCandidate.approval_status !== "approved" && activeCandidate.status !== "rejected");
@@ -2438,6 +2471,29 @@ function OptimisePanel({
               <SelectItem value="last20">Last 20 traces</SelectItem>
             </SelectContent>
           </Select>
+          <div className="flex h-8 items-center rounded-md border border-border/50 bg-background/70 p-0.5">
+            <Button
+              type="button"
+              size="sm"
+              variant={!allowTopologyRewrite ? "secondary" : "ghost"}
+              className="h-6 px-2 text-[10px]"
+              onClick={() => onTopologyModeChange("preserve_topology")}
+            >
+              Preserve topology
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={allowTopologyRewrite ? "secondary" : "ghost"}
+              className={cn(
+                "h-6 px-2 text-[10px]",
+                allowTopologyRewrite && "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+              )}
+              onClick={() => onTopologyModeChange("allow_topology_rewrite")}
+            >
+              Allow topology rewrite
+            </Button>
+          </div>
           <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5 text-xs" disabled={!study || studyLoading} onClick={onRefreshStudy}>
             {studyLoading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
             Refresh
@@ -2506,7 +2562,40 @@ function OptimisePanel({
             </div>
           </section>
 
-          <div className="grid gap-3 xl:grid-cols-[13rem_minmax(0,1.25fr)_minmax(22rem,0.85fr)]">
+          <Tabs
+            value={optimiseWorkspaceTab}
+            onValueChange={(value) => setOptimiseWorkspaceTab(value as typeof optimiseWorkspaceTab)}
+            className="space-y-3"
+          >
+            <TabsList className="h-9 w-full justify-start overflow-x-auto rounded-md border border-border/50 bg-card/60 p-1">
+              <TabsTrigger value="summary" className="h-7 gap-1.5 px-3 text-xs">
+                <TrendingDown className="h-3.5 w-3.5" />
+                Summary
+              </TabsTrigger>
+              <TabsTrigger value="candidate" className="h-7 gap-1.5 px-3 text-xs">
+                <Sparkles className="h-3.5 w-3.5" />
+                Candidate
+              </TabsTrigger>
+              <TabsTrigger value="diff" className="h-7 gap-1.5 px-3 text-xs">
+                <GitCompare className="h-3.5 w-3.5" />
+                Manifest diff
+              </TabsTrigger>
+              <TabsTrigger value="evidence" className="h-7 gap-1.5 px-3 text-xs">
+                <FlaskConical className="h-3.5 w-3.5" />
+                Evidence
+              </TabsTrigger>
+              <TabsTrigger value="agent" className="h-7 gap-1.5 px-3 text-xs">
+                <Bot className="h-3.5 w-3.5" />
+                Agent
+              </TabsTrigger>
+            </TabsList>
+
+          <div className={cn(
+            "grid gap-3",
+            showAgentTab
+              ? "xl:grid-cols-[13rem_minmax(0,1fr)_minmax(22rem,0.72fr)]"
+              : "xl:grid-cols-[13rem_minmax(0,1fr)]",
+          )}>
             <aside className="space-y-3">
               <section className="rounded-lg border border-border/50 bg-card/45 p-2">
                 <div className="px-1 pb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Study stages</div>
@@ -2623,7 +2712,10 @@ function OptimisePanel({
             </aside>
 
             <main className="space-y-3">
-              <section className="rounded-lg border border-border/50 bg-card/45 p-3">
+              <section className={cn(
+                "rounded-lg border border-border/50 bg-card/45 p-3",
+                !(showSummaryTab || showDiffTab || showEvidenceTab) && "hidden",
+              )}>
                 <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-[18rem] flex-1">
                     <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
@@ -2655,7 +2747,7 @@ function OptimisePanel({
                   </div>
                 </div>
 
-                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                <div className={cn("grid gap-2 md:grid-cols-2 xl:grid-cols-4", showDiffTab && "hidden")}>
                   {actualComparisonMetrics.map((item) => {
                     const value = item.actual_delta_percent;
                     const hasCandidateValue = item.candidate_value > 0 || hasActualComparison;
@@ -2686,7 +2778,7 @@ function OptimisePanel({
                   })}
                 </div>
 
-                <details className="mt-3 rounded-md border border-border/45 bg-background/65 p-2.5">
+                <details className={cn("mt-3 rounded-md border border-border/45 bg-background/65 p-2.5", !showEvidenceTab && "hidden")} open>
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-2">
                     <span className="text-xs font-semibold text-foreground">Trial and step evidence</span>
                     <Badge variant="outline" className="h-5 text-[9px]">
@@ -2758,7 +2850,7 @@ function OptimisePanel({
                   </div>
                 </details>
 
-                {stepRegressions.length > 0 && (
+                {showEvidenceTab && stepRegressions.length > 0 && (
                   <div className="mt-3 rounded-md border border-red-500/25 bg-red-500/10 p-2.5">
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 text-xs font-semibold text-red-700 dark:text-red-200">
@@ -2789,8 +2881,12 @@ function OptimisePanel({
                   </div>
                 )}
 
-                <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
-                  <div className="order-2 rounded-md border border-border/45 bg-background/65 p-2.5">
+                <div className={cn(
+                  "mt-3 grid gap-3",
+                  showDiffTab ? "grid-cols-1" : "xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]",
+                  showSummaryTab && "hidden",
+                )}>
+                  <div className={cn("order-2 rounded-md border border-border/45 bg-background/65 p-2.5", !showEvidenceTab && "hidden")}>
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <div className="text-xs font-semibold text-foreground">Tool impact</div>
                       <Badge variant="outline" className="h-5 text-[9px]">{comparisonTools.length} tools</Badge>
@@ -2819,7 +2915,10 @@ function OptimisePanel({
                     )}
                   </div>
 
-                  <div className="order-1 rounded-md border border-primary/20 bg-background/70 p-2.5">
+                  <div className={cn(
+                    "order-1 rounded-md border border-primary/20 bg-background/70 p-2.5",
+                    !showDiffTab && "hidden",
+                  )}>
                     <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <div className="text-xs font-semibold text-foreground">Side-by-side manifest comparison</div>
@@ -2855,15 +2954,15 @@ function OptimisePanel({
                           ))}
                         </div>
                         <div className="overflow-hidden rounded-md border border-border/40 bg-background/70">
-                          <div className="grid min-w-[44rem] grid-cols-2 gap-px border-b border-border/40 bg-muted/40 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          <div className="grid min-w-[68rem] grid-cols-2 gap-px border-b border-border/40 bg-muted/40 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                             <div className="px-2 py-1">Original · {selectedManifestSection.source_name}</div>
                             <div className="px-2 py-1">Candidate · {selectedManifestSection.candidate_name}</div>
                           </div>
-                          <div className="max-h-80 overflow-auto">
+                          <div className="max-h-[70vh] overflow-auto">
                             {selectedManifestSection.diff_rows.length > 0
                               ? renderManifestDiffRows(selectedManifestSection.diff_rows)
                               : (
-                                  <div className="grid min-w-[44rem] grid-cols-2 gap-px text-[10px] leading-4">
+                                  <div className="grid min-w-[68rem] grid-cols-2 gap-px text-[10px] leading-4">
                                     <pre className="overflow-auto bg-slate-950 p-2 text-slate-100 whitespace-pre-wrap">{selectedManifestSection.source_yaml || "No source manifest available."}</pre>
                                     <pre className="overflow-auto bg-slate-950 p-2 text-slate-100 whitespace-pre-wrap">{selectedManifestSection.candidate_yaml || "No candidate manifest available."}</pre>
                                   </div>
@@ -2890,7 +2989,7 @@ function OptimisePanel({
                 </div>
               </section>
 
-              <details className="rounded-lg border border-border/50 bg-card/45 p-3">
+              <details className={cn("rounded-lg border border-border/50 bg-card/45 p-3", !showSummaryTab && "hidden")} open>
                 <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
@@ -2948,7 +3047,7 @@ function OptimisePanel({
               </details>
 
               {(stepRollups.length > 0 || modelRollups.length > 0 || toolRollups.length > 0) && (
-                <details className="rounded-lg border border-border/50 bg-card/45 p-3">
+                <details className={cn("rounded-lg border border-border/50 bg-card/45 p-3", !showEvidenceTab && "hidden")} open>
                   <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
@@ -3028,7 +3127,7 @@ function OptimisePanel({
                 </details>
               )}
 
-              <details className="rounded-lg border border-border/50 bg-card/45 p-3">
+              <details className={cn("rounded-lg border border-border/50 bg-card/45 p-3", !showCandidateTab && "hidden")} open>
                 <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
@@ -3110,7 +3209,7 @@ function OptimisePanel({
                 )}
               </details>
 
-              <details className="rounded-lg border border-border/50 bg-card/45 p-3">
+              <details className={cn("rounded-lg border border-border/50 bg-card/45 p-3", !showEvidenceTab && "hidden")} open>
                 <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
@@ -3169,7 +3268,7 @@ function OptimisePanel({
               </details>
             </main>
 
-            <aside className="space-y-3">
+            <aside className={cn("space-y-3", !showAgentTab && "hidden")}>
               <section className="rounded-lg border border-border/50 bg-card/45 p-3">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
@@ -3433,6 +3532,7 @@ function OptimisePanel({
               </details>
             </aside>
           </div>
+          </Tabs>
         </div>
       </ScrollArea>
     </div>
@@ -3481,6 +3581,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
   const [optimiseAgentsLoading, setOptimiseAgentsLoading] = useState(false);
   const [optimiseAgentName, setOptimiseAgentName] = useState("");
   const [optimiseScope, setOptimiseScope] = useState<OptimisationScope>("last6");
+  const [optimiseTopologyMode, setOptimiseTopologyMode] = useState<OptimisationTopologyMode>("preserve_topology");
   const [optimiseDetails, setOptimiseDetails] = useState<ExecutionTrace[]>([]);
   const [optimiseDetailsLoading, setOptimiseDetailsLoading] = useState(false);
   const [optimiseWorkflowManifest, setOptimiseWorkflowManifest] = useState<Record<string, unknown> | null>(null);
@@ -3801,8 +3902,9 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
       workflowName: selectedWorkflowName,
       selectedAgent: optimiseAgentName || null,
       scope: optimiseScope,
+      topologyMode: optimiseTopologyMode,
     });
-  }, [detail, executions, namespace, optimiseAgentManifests, optimiseAgentName, optimiseDetails, optimiseScope, optimiseWorkflowManifest, orderedEvents, orderedSteps, selectedWorkflowName]);
+  }, [detail, executions, namespace, optimiseAgentManifests, optimiseAgentName, optimiseDetails, optimiseScope, optimiseTopologyMode, optimiseWorkflowManifest, orderedEvents, orderedSteps, selectedWorkflowName]);
   const optimisePrompt = useMemo(() => (optimisePacket ? buildOptimisationPrompt(optimisePacket) : ""), [optimisePacket]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
@@ -4066,6 +4168,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
           optimizer_output: result.response,
           suffix: `opt-${study.id.slice(-5)}`,
           expected_savings: extractOptimiserExpectedSavings(result.response),
+          allow_topology_rewrite: optimiseTopologyMode === "allow_topology_rewrite",
         });
       } catch (error) {
         const message = `Candidate generation failed after optimizer analysis completed: ${error instanceof Error ? error.message : "unknown error"}`;
@@ -4426,6 +4529,8 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                     setOptimiseStudyError("");
                     setOptimiseApplyPreview(null); setOptimiseDatasetPreview(null);
                   }}
+                  topologyMode={optimiseTopologyMode}
+                  onTopologyModeChange={setOptimiseTopologyMode}
                   packet={optimisePacket}
                   prompt={optimisePrompt}
                   detailsLoading={optimiseDetailsLoading}
