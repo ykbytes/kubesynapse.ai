@@ -744,19 +744,7 @@ class TraceWriter:
         events = read_trace_events(self.execution_id)
         if events:
             return events
-
-        if not self._path.exists():
-            return []
-        events: list[dict[str, Any]] = []
-        with open(self._path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        events.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
-        return events
+        return _read_trace_event_file(self.execution_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1114,6 +1102,33 @@ def ensure_trace_database() -> None:
 # Query helpers
 # ---------------------------------------------------------------------------
 
+def _read_trace_events_with_session(session: Any, execution_id: str) -> list[dict[str, Any]]:
+    rows = (
+        session.query(ExecutionTraceEventRecord)
+        .filter_by(execution_id=execution_id)
+        .order_by(ExecutionTraceEventRecord.id.asc())
+        .all()
+    )
+    return [row.to_dict() for row in rows]
+
+
+def _read_trace_event_file(execution_id: str) -> list[dict[str, Any]]:
+    path = TRACE_STORAGE_DIR / execution_id / "trace.jsonl"
+    if not path.exists():
+        return []
+    events: list[dict[str, Any]] = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return events
+
+
 def _serialize_execution(session: Any, execution: WorkflowExecution, include_related: bool = False) -> dict[str, Any]:
     result = execution.to_dict()
 
@@ -1176,7 +1191,8 @@ def _serialize_execution(session: Any, execution: WorkflowExecution, include_rel
     result["steps"] = steps
     result["llm_calls"] = llm_calls
     result["tool_calls"] = tool_calls
-    result["events"] = TRACER.read_trace(execution.id)
+    events = _read_trace_events_with_session(session, execution.id)
+    result["events"] = events if events else _read_trace_event_file(execution.id)
     return result
 
 
@@ -1230,6 +1246,35 @@ def get_execution(execution_id: str) -> dict[str, Any] | None:
         return _serialize_execution(session, execution, include_related=True)
 
 
+def get_executions_by_ids(execution_ids: list[str]) -> dict[str, dict[str, Any]]:
+    ensure_trace_database()
+    ordered_ids: list[str] = []
+    seen: set[str] = set()
+    for execution_id in execution_ids:
+        normalized = str(execution_id or "").strip()
+        if normalized and normalized not in seen:
+            ordered_ids.append(normalized)
+            seen.add(normalized)
+    if not ordered_ids:
+        return {}
+
+    with db_session() as session:
+        rows = (
+            session.query(WorkflowExecution)
+            .filter(WorkflowExecution.id.in_(ordered_ids))
+            .all()
+        )
+        serialized_by_id = {
+            row.id: _serialize_execution(session, row, include_related=True)
+            for row in rows
+        }
+        return {
+            execution_id: serialized_by_id[execution_id]
+            for execution_id in ordered_ids
+            if execution_id in serialized_by_id
+        }
+
+
 def get_execution_summary(execution_id: str) -> dict[str, Any] | None:
     ensure_trace_database()
     with db_session() as session:
@@ -1254,13 +1299,7 @@ def get_step_detail(step_id: str) -> dict[str, Any] | None:
 def read_trace_events(execution_id: str) -> list[dict[str, Any]]:
     ensure_trace_database()
     with db_session() as session:
-        rows = (
-            session.query(ExecutionTraceEventRecord)
-            .filter_by(execution_id=execution_id)
-            .order_by(ExecutionTraceEventRecord.id.asc())
-            .all()
-        )
-        return [row.to_dict() for row in rows]
+        return _read_trace_events_with_session(session, execution_id)
 
 
 def delete_trace_events(execution_id: str) -> None:

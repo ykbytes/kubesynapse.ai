@@ -300,7 +300,7 @@ spec:
             {{- toYaml .Values.apiGateway.resources | nindent 12 }}
           startupProbe:
             httpGet:
-              path: /api/health
+              path: /health
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 5
@@ -308,7 +308,7 @@ spec:
             failureThreshold: 120
           readinessProbe:
             httpGet:
-              path: /api/ready
+              path: /health
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
@@ -316,7 +316,7 @@ spec:
             failureThreshold: 12
           livenessProbe:
             httpGet:
-              path: /api/health
+              path: /health
               port: 8080
             initialDelaySeconds: 60
             periodSeconds: 30

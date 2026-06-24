@@ -7,6 +7,7 @@ requiring a real Kubernetes cluster or database.
 from __future__ import annotations
 
 import uuid
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -16,6 +17,7 @@ import traces_router
 from fastapi.testclient import TestClient
 
 import pytest
+import routers.admin as admin_router
 
 from auth_store import db_session
 
@@ -55,6 +57,65 @@ class TestHealthEndpoints:
 
         assert response.status_code == 503
         assert response.json()["checks"]["litellm"] == "error"
+
+    def test_ready_bounds_slow_database_dependency_check(self, client: TestClient) -> None:
+        """A slow database check should not make the readiness probe hang."""
+
+        admin_router._READY_CACHE["expires_at"] = 0.0
+
+        class _HealthyAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, *args, **kwargs):
+                return MagicMock(status_code=200)
+
+        def _slow_database_check() -> bool:
+            time.sleep(0.25)
+            return True
+
+        started_at = time.monotonic()
+        with (
+            patch("routers.admin._READY_DEPENDENCY_TIMEOUT_SECONDS", 0.01),
+            patch("routers.admin._check_database_ready_sync", side_effect=_slow_database_check),
+            patch("routers.admin.httpx.AsyncClient", return_value=_HealthyAsyncClient()),
+        ):
+            response = client.get("/api/ready")
+        elapsed = time.monotonic() - started_at
+
+        assert elapsed < 0.2
+        assert response.status_code == 503
+        assert response.json()["checks"]["database"] == "timeout"
+
+    def test_ready_reuses_recent_dependency_check_result(self, client: TestClient) -> None:
+        """Readiness probes should not open DB/LiteLLM connections on every hit."""
+
+        admin_router._READY_CACHE["expires_at"] = 0.0
+
+        class _HealthyAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def get(self, *args, **kwargs):
+                return MagicMock(status_code=200)
+
+        with (
+            patch("routers.admin._READY_CACHE_TTL_SECONDS", 30.0),
+            patch("routers.admin._check_database_ready_sync", return_value=True) as db_check,
+            patch("routers.admin.httpx.AsyncClient", return_value=_HealthyAsyncClient()),
+        ):
+            first = client.get("/api/ready")
+            second = client.get("/api/ready")
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert db_check.call_count == 1
 
 
 class TestAuthMiddleware:

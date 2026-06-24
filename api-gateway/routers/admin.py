@@ -1,7 +1,10 @@
 """Auto-generated router — extracted from api-gateway main.py."""
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import re
+import time
 from typing import Any, cast
 
 import httpx
@@ -39,6 +42,64 @@ from routers.observability import (
 router = APIRouter(tags=["admin"])
 
 _USER_NAMESPACE_SLUG_RE = re.compile(r"[^a-z0-9]+")
+_READY_CACHE_TTL_SECONDS = 5.0
+_READY_DEPENDENCY_TIMEOUT_SECONDS = 2.0
+_READY_CACHE: dict[str, Any] = {"expires_at": 0.0, "status_code": 503, "payload": None}
+_READY_CACHE_LOCK: asyncio.Lock | None = None
+_READY_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="readiness")
+
+
+def _ready_cache_lock() -> asyncio.Lock:
+    global _READY_CACHE_LOCK
+    if _READY_CACHE_LOCK is None:
+        _READY_CACHE_LOCK = asyncio.Lock()
+    return _READY_CACHE_LOCK
+
+
+def _check_database_ready_sync() -> bool:
+    from sqlalchemy import text as _sa_text
+
+    from auth_store import ENGINE
+
+    with ENGINE.connect() as conn:
+        conn.execute(_sa_text("select 1"))
+    return True
+
+
+async def _check_database_ready() -> str:
+    loop = asyncio.get_running_loop()
+    future = loop.run_in_executor(_READY_EXECUTOR, _check_database_ready_sync)
+    try:
+        await asyncio.wait_for(future, timeout=_READY_DEPENDENCY_TIMEOUT_SECONDS)
+    except TimeoutError:
+        return "timeout"
+    except Exception:
+        return "error"
+    return "ok"
+
+
+async def _check_litellm_ready() -> str:
+    litellm_headers: dict[str, str] = {}
+    if LITELLM_MASTER_KEY:
+        litellm_headers["Authorization"] = f"Bearer {LITELLM_MASTER_KEY}"
+    try:
+        async with httpx.AsyncClient(timeout=_READY_DEPENDENCY_TIMEOUT_SECONDS, trust_env=False) as client:
+            readiness_response = await client.get(f"{LITELLM_INTERNAL_URL.rstrip('/')}/v1/models", headers=litellm_headers)
+    except TimeoutError:
+        return "timeout"
+    except Exception:
+        return "error"
+    return "ok" if readiness_response.status_code == 200 else "error"
+
+
+async def _collect_ready_payload() -> tuple[int, dict[str, Any]]:
+    database, litellm = await asyncio.gather(_check_database_ready(), _check_litellm_ready())
+    checks = {"database": database, "litellm": litellm}
+    all_ok = all(v == "ok" for v in checks.values())
+    return (
+        200 if all_ok else 503,
+        {"status": "ready" if all_ok else "degraded", "gateway": "kubesynapse", "checks": checks},
+    )
 
 
 def _user_namespace_slug(username: str) -> str:
@@ -383,30 +444,29 @@ async def ready(response: Response) -> dict[str, Any]:
     if _SHUTDOWN.is_set():
         response.status_code = 503
         return {"status": "shutting-down", "gateway": "kubesynapse"}
-    checks: dict[str, str] = {}
-    try:
-        from sqlalchemy import text as _sa_text
+    now = time.monotonic()
+    cached_payload = _READY_CACHE.get("payload")
+    if cached_payload is not None and now < float(_READY_CACHE.get("expires_at", 0.0)):
+        response.status_code = int(_READY_CACHE.get("status_code", 503))
+        return cast(dict[str, Any], cached_payload)
 
-        from auth_store import ENGINE
+    async with _ready_cache_lock():
+        now = time.monotonic()
+        cached_payload = _READY_CACHE.get("payload")
+        if cached_payload is not None and now < float(_READY_CACHE.get("expires_at", 0.0)):
+            response.status_code = int(_READY_CACHE.get("status_code", 503))
+            return cast(dict[str, Any], cached_payload)
 
-        with ENGINE.connect() as conn:
-            conn.execute(_sa_text("select 1"))
-        checks["database"] = "ok"
-    except Exception:
-        checks["database"] = "error"
-    litellm_headers: dict[str, str] = {}
-    if LITELLM_MASTER_KEY:
-        litellm_headers["Authorization"] = f"Bearer {LITELLM_MASTER_KEY}"
-    try:
-        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
-            readiness_response = await client.get(f"{LITELLM_INTERNAL_URL.rstrip('/')}/v1/models", headers=litellm_headers)
-        checks["litellm"] = "ok" if readiness_response.status_code == 200 else "error"
-    except Exception:
-        checks["litellm"] = "error"
-    all_ok = all(v == "ok" for v in checks.values())
-    if not all_ok:
-        response.status_code = 503
-    return {"status": "ready" if all_ok else "degraded", "gateway": "kubesynapse", "checks": checks}
+        status_code, payload = await _collect_ready_payload()
+        _READY_CACHE.update(
+            {
+                "expires_at": time.monotonic() + _READY_CACHE_TTL_SECONDS,
+                "status_code": status_code,
+                "payload": payload,
+            }
+        )
+        response.status_code = status_code
+        return payload
 
 
 @router.get("/approvals/{approval_name}", response_model=ApprovalInfo)

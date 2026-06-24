@@ -157,10 +157,20 @@ def _fake_get_execution(execution_id: str):
     return _TRACE_FIXTURES.get(execution_id)
 
 
+def _fake_get_executions_by_ids(execution_ids: list[str]):
+    return {
+        execution_id: _TRACE_FIXTURES[execution_id]
+        for execution_id in execution_ids
+        if execution_id in _TRACE_FIXTURES
+    }
+
+
 @contextmanager
 def _optimization_api_context(*, manifests: bool = False):
     with patch("routers.optimizations.ensure_namespace_access", side_effect=_allow_namespace_access), patch(
         "routers.optimizations.trace_store.get_execution", side_effect=_fake_get_execution
+    ), patch(
+        "routers.optimizations.trace_store.get_executions_by_ids", side_effect=_fake_get_executions_by_ids
     ):
         if manifests:
             with patch("routers.optimizations.read_custom_resource", side_effect=_fake_read_custom_resource):
@@ -186,7 +196,7 @@ def test_create_study_computes_baseline_metrics_and_opportunities(client, auth_h
             },
         )
 
-    assert response.status_code == 201
+    assert response.status_code == 201, response.json()
     data = response.json()
     assert data["status"] == "baseline_ready"
     assert data["baseline_metrics"]["sample_count"] == 2
@@ -207,6 +217,37 @@ def test_create_study_computes_baseline_metrics_and_opportunities(client, auth_h
     assert any(lever["lever"] == "tool_batching" for lever in intelligence["ranked_levers"])
     assert intelligence["step_rollups"][0]["step_name"] == "summarise"
     assert intelligence["model_rollups"][0]["model"] == "opencode/deepseek-v4-flash-free"
+
+
+def test_create_study_uses_bulk_trace_loading(client, auth_headers) -> None:
+    first = _seed_execution(execution_id="exec-opt-bulk-1", duration_ms=60_000, tokens=1_200, tool_calls=3)
+    second = _seed_execution(execution_id="exec-opt-bulk-2", duration_ms=90_000, tokens=1_500, tool_calls=4)
+    requested_ids: list[str] = []
+
+    def fake_get_executions(execution_ids: list[str]) -> dict[str, dict]:
+        requested_ids.extend(execution_ids)
+        return {execution_id: _TRACE_FIXTURES[execution_id] for execution_id in execution_ids}
+
+    with patch("routers.optimizations.ensure_namespace_access", side_effect=_allow_namespace_access), patch(
+        "routers.optimizations.trace_store.get_execution",
+        side_effect=AssertionError("create_study must not load baseline traces one connection at a time"),
+    ), patch("routers.optimizations.trace_store.get_executions_by_ids", side_effect=fake_get_executions, create=True), patch(
+        "routers.optimizations.read_custom_resource", side_effect=_fake_read_custom_resource
+    ):
+        response = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={
+                "namespace": "default",
+                "workflow_name": "daily-standup",
+                "optimizer_agent_name": "workflow-optimizer",
+                "baseline_execution_ids": [first, second],
+            },
+        )
+
+    assert response.status_code == 201, response.json()
+    assert requested_ids == [first, second]
+    assert response.json()["baseline_metrics"]["sample_count"] == 2
 
 
 def test_candidate_validation_rejects_topology_changes_and_secret_expansion(client, auth_headers) -> None:
@@ -366,7 +407,7 @@ def test_generate_candidate_does_not_copy_optimizer_output_into_manifest_annotat
             },
         )
 
-    assert response.status_code == 201
+    assert response.status_code == 201, response.json()
     candidate = response.json()
     serialized_bundle = str(candidate["manifest_bundle"])
     assert "optimizer-output-preview" not in serialized_bundle
@@ -539,6 +580,61 @@ spec:
     assert any("topology" in warning.lower() for warning in candidate["validation_results"]["warnings"])
 
 
+def test_generate_candidate_normalizes_topology_rewrite_api_versions(client, auth_headers) -> None:
+    baseline_id = _seed_execution(execution_id="exec-opt-generated-version-normalize")
+
+    with _optimization_api_context(manifests=True):
+        study = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={"namespace": "default", "workflow_name": "daily-standup", "baseline_execution_ids": [baseline_id]},
+        ).json()
+
+    optimizer_output = """
+```yaml
+apiVersion: kubesynapse.ai/v1
+kind: AgentWorkflow
+metadata:
+  name: daily-standup-single-pass
+  namespace: default
+spec:
+  steps:
+    - name: standup-e2e
+      type: agent
+      agentRef: standup-single-pass
+      prompt: Preserve the same standup artifact in one consolidated pass.
+---
+apiVersion: kubesynapse.ai/v1
+kind: AIAgent
+metadata:
+  name: standup-single-pass
+  namespace: default
+spec:
+  model: opencode/deepseek-v4-flash-free
+  runtime:
+    kind: opencode
+  systemPrompt: Preserve the baseline report contract with fewer repeated tool calls.
+```
+"""
+
+    with _optimization_api_context():
+        response = client.post(
+            f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
+            headers=auth_headers,
+            json={"optimizer_output": optimizer_output, "suffix": "opt-single", "allow_topology_rewrite": True},
+        )
+
+    assert response.status_code == 201, response.json()
+    candidate = response.json()
+    assert {manifest["apiVersion"] for manifest in candidate["manifest_bundle"]} == {"kubesynapse.ai/v1alpha1"}
+    extra_agent = next(
+        manifest for manifest in candidate["manifest_bundle"]
+        if manifest["kind"] == "AIAgent" and manifest["metadata"]["name"] == "standup-single-pass-opt-single"
+    )
+    assert extra_agent["metadata"]["labels"]["kubesynapse.ai/topology-rewrite"] == "allowed"
+    assert candidate["validation_results"]["topology_rewrite_allowed"] is True
+
+
 def test_generate_candidate_recovers_from_incomplete_optimizer_manifest(client, auth_headers) -> None:
     baseline_id = _seed_execution(execution_id="exec-opt-incomplete-output")
 
@@ -634,6 +730,51 @@ spec:
     assert workflow["spec"]["steps"][0]["agentRef"] == "daily-standup-opt-named"
     assert "Reuse existing context summaries" in workflow["spec"]["steps"][0]["prompt"]
     assert any("name" in warning.lower() for warning in candidate["validation_results"]["warnings"])
+
+
+def test_generate_candidate_falls_back_when_optimizer_manifest_fails_validation(client, auth_headers) -> None:
+    baseline_id = _seed_execution(execution_id="exec-opt-unsafe-generated")
+
+    with _optimization_api_context(manifests=True):
+        study = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={"namespace": "default", "workflow_name": "daily-standup", "baseline_execution_ids": [baseline_id]},
+        ).json()
+
+    optimizer_output = """
+The optimizer candidate accidentally references a topology agent it forgot to include.
+
+```yaml
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: daily-standup
+  namespace: default
+spec:
+  steps:
+    - name: standup-e2e
+      type: agent
+      agentRef: missing-optimizer-agent
+      prompt: Preserve the same standup.md output in one pass.
+```
+"""
+
+    with _optimization_api_context():
+        response = client.post(
+            f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
+            headers=auth_headers,
+            json={"optimizer_output": optimizer_output, "suffix": "opt-safe-fallback", "allow_topology_rewrite": True},
+        )
+
+    assert response.status_code == 201, response.json()
+    candidate = response.json()
+    serialized_bundle = str(candidate["manifest_bundle"])
+    assert "missing-optimizer-agent" not in serialized_bundle
+    assert candidate["candidate_workflow_name"] == "daily-standup-opt-safe-fallback"
+    assert candidate["validation_results"]["valid"] is True
+    assert any("safe copied candidate" in warning.lower() for warning in candidate["validation_results"]["warnings"])
+    assert any("missing candidate agent" in warning.lower() for warning in candidate["validation_results"]["warnings"])
 
 
 def test_list_studies_returns_recent_workflow_studies_with_candidates(client, auth_headers) -> None:

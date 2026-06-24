@@ -992,6 +992,26 @@ function createOptimiseRunPhases(): OptimisationRunPhase[] {
   return OPTIMISE_RUN_PHASE_BLUEPRINT.map((phase) => ({ ...phase, status: "pending" }));
 }
 
+function markOptimiseRunPhase(
+  phases: OptimisationRunPhase[],
+  key: OptimisationRunPhaseKey,
+  status: OptimisationRunPhaseStatus,
+  detail?: string,
+): OptimisationRunPhase[] {
+  return phases.map((phase) => (
+    phase.key === key
+      ? { ...phase, status, detail: detail ?? phase.detail }
+      : phase
+  ));
+}
+
+function createOptimiseRunPhasesWithActive(
+  key: OptimisationRunPhaseKey,
+  detail: string,
+): OptimisationRunPhase[] {
+  return markOptimiseRunPhase(createOptimiseRunPhases(), key, "running", detail);
+}
+
 function createOptimiseRunPhasesFromStudy(
   study: OptimizationStudy | null,
   candidate: OptimizationCandidate | null,
@@ -1721,6 +1741,58 @@ function extractOptimiserExpectedSavings(response: string | null | undefined): R
   return fallback;
 }
 
+function buildGuardedOptimizerFallbackOutput(
+  study: OptimizationStudy,
+  packet: OptimisationPacket,
+  reason: string,
+): string {
+  const topOpportunity = study.opportunities[0];
+  const opportunityEvidence = isPlainObject(topOpportunity?.evidence) ? topOpportunity.evidence : {};
+  const targetTool = typeof opportunityEvidence.tool_name === "string"
+    ? opportunityEvidence.tool_name
+    : typeof opportunityEvidence.top_tool === "string"
+      ? opportunityEvidence.top_tool
+      : null;
+  const metricDelta = {
+    duration_saved_percent: 0,
+    tokens_saved_percent: 0,
+    tool_calls_saved_percent: 0,
+    cost_saved_percent: 0,
+  };
+  const hypothesis = {
+    expected_metric_delta: metricDelta,
+    confidence: "low",
+    evidence_execution_ids: study.baseline_execution_ids,
+    target_steps: topOpportunity?.affected_steps?.slice(0, 3) ?? [],
+    target_tools: targetTool ? [targetTool] : [],
+    quality_gate: {
+      mode: "safe_copy_fallback",
+      required_trials: 5,
+      requires_human_review: true,
+    },
+    rollback_plan: "Do not promote this fallback until a real optimizer analysis or verified safe trials prove ROI.",
+  };
+  return [
+    "# Guarded fallback optimizer dossier",
+    "",
+    "The dedicated optimizer agent invocation did not complete, so ROI Lab created a safe copied candidate from the source manifests instead of failing the study.",
+    "",
+    `Failure reason: ${reason}`,
+    "",
+    "This fallback intentionally avoids editing workflow prompts, agent prompts, topology, models, secrets, RBAC, or runtime settings. It keeps the study and candidate visible so an admin can inspect manifests, retry analysis, or run a no-change control trial.",
+    "",
+    "```json",
+    JSON.stringify({ roi_hypothesis: hypothesis }, null, 2),
+    "```",
+    "",
+    "## change_log",
+    "",
+    "| resource | path | original intent | candidate change | expected impact | contract risk |",
+    "| --- | --- | --- | --- | --- | --- |",
+    `| ${packet.workflow_name} | metadata.name/labels | Source workflow remains unchanged | Gateway creates a suffixed copied workflow with optimization labels | Enables safe trial without source mutation | low |`,
+  ].join("\n");
+}
+
 function TraceExplorer({
   detail,
   orderedSteps,
@@ -2336,6 +2408,11 @@ function OptimisePanel({
   );
   const money = (value?: number | null) => (value && value > 0 ? formatCurrency(value) : "--");
   const metricNumber = (value?: number | null) => compactNumber(value).toLocaleString(undefined, { maximumFractionDigits: 1 });
+  const activeExpectedSavings = activeCandidate?.expected_savings ?? {};
+  const estimatedPercent = (key: string) => {
+    const value = activeExpectedSavings[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  };
   const fallbackComparisonMetrics: OptimizationComparisonMetric[] = [
     {
       key: "duration_saved_percent",
@@ -2343,7 +2420,7 @@ function OptimisePanel({
       baseline_value: baselineMetrics?.duration_per_successful_run_ms ?? baselineMetrics?.avg_duration_ms ?? 0,
       candidate_value: candidateMetrics?.duration_per_successful_run_ms ?? candidateMetrics?.avg_duration_ms ?? 0,
       actual_delta_percent: percent("duration_saved_percent"),
-      estimated_delta_percent: undefined,
+      estimated_delta_percent: estimatedPercent("duration_saved_percent"),
       value_kind: "duration_ms",
       source: "study_rollup",
       unit: "per successful run",
@@ -2354,7 +2431,7 @@ function OptimisePanel({
       baseline_value: baselineMetrics?.tokens_per_successful_run ?? baselineMetrics?.avg_tokens ?? 0,
       candidate_value: candidateMetrics?.tokens_per_successful_run ?? candidateMetrics?.avg_tokens ?? 0,
       actual_delta_percent: percent("tokens_saved_percent"),
-      estimated_delta_percent: undefined,
+      estimated_delta_percent: estimatedPercent("tokens_saved_percent"),
       value_kind: "tokens",
       source: "study_rollup",
       unit: "per successful run",
@@ -2365,7 +2442,7 @@ function OptimisePanel({
       baseline_value: baselineMetrics?.avg_tool_calls ?? 0,
       candidate_value: candidateMetrics?.avg_tool_calls ?? 0,
       actual_delta_percent: percent("tool_calls_saved_percent"),
-      estimated_delta_percent: undefined,
+      estimated_delta_percent: estimatedPercent("tool_calls_saved_percent"),
       value_kind: "tool_calls",
       source: "study_rollup",
       unit: "average per run",
@@ -2376,7 +2453,7 @@ function OptimisePanel({
       baseline_value: baselineMetrics?.cost_per_successful_run ?? baselineMetrics?.avg_cost_usd ?? 0,
       candidate_value: candidateMetrics?.cost_per_successful_run ?? candidateMetrics?.avg_cost_usd ?? 0,
       actual_delta_percent: percent("cost_saved_percent"),
-      estimated_delta_percent: undefined,
+      estimated_delta_percent: estimatedPercent("cost_saved_percent"),
       value_kind: "cost_usd",
       source: "study_rollup",
       unit: "per successful run",
@@ -2506,7 +2583,7 @@ function OptimisePanel({
             onClick={onRun}
           >
             {running ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-            Run ROI study
+            {running ? "Running study..." : "Run ROI study"}
           </Button>
         </div>
       </div>
@@ -2561,6 +2638,46 @@ function OptimisePanel({
               </div>
             </div>
           </section>
+
+          {(running || runPhases.some((phase) => phase.status !== "pending")) && (
+            <section className="rounded-lg border border-border/50 bg-card/45 p-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {runPhases.map((phase) => {
+                  const Icon =
+                    phase.status === "running" ? LoaderCircle :
+                    phase.status === "success" ? CheckCircle2 :
+                    phase.status === "error" ? ShieldAlert :
+                    Activity;
+                  return (
+                    <div
+                      key={phase.key}
+                      className={cn(
+                        "flex min-w-[11rem] flex-1 items-start gap-2 rounded-md border px-2 py-1.5",
+                        phase.status === "running" && "border-sky-500/30 bg-sky-500/8",
+                        phase.status === "success" && "border-emerald-500/25 bg-emerald-500/8",
+                        phase.status === "error" && "border-red-500/30 bg-red-500/10",
+                        phase.status === "pending" && "border-border/35 bg-background/60",
+                      )}
+                    >
+                      <Icon className={cn(
+                        "mt-0.5 h-3.5 w-3.5 shrink-0",
+                        phase.status === "running" && "animate-spin text-sky-500",
+                        phase.status === "success" && "text-emerald-600 dark:text-emerald-400",
+                        phase.status === "error" && "text-red-500",
+                        phase.status === "pending" && "text-muted-foreground",
+                      )} />
+                      <div className="min-w-0">
+                        <div className="truncate text-[10px] font-semibold text-foreground">{phase.label}</div>
+                        <div className="line-clamp-1 text-[9px] leading-4 text-muted-foreground">
+                          {phase.detail || phase.description}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
 
           <Tabs
             value={optimiseWorkspaceTab}
@@ -4055,17 +4172,21 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
     status: OptimisationRunPhaseStatus,
     detailText?: string,
   ) => {
-    setOptimiseRunPhases((phases) => phases.map((phase) => (
-      phase.key === key
-        ? { ...phase, status, detail: detailText ?? phase.detail }
-        : phase
-    )));
+    setOptimiseRunPhases((phases) => markOptimiseRunPhase(phases, key, status, detailText));
   }, []);
 
   const handleRunOptimisation = async () => {
-    if (!optimiseAgentName || !optimisePrompt || !detail) return;
-    setOptimiseRunPhases(createOptimiseRunPhases());
-    updateOptimiseRunPhase("prepare", "running", "Collecting selected runs, manifests, and optimization guardrails.");
+    if (!optimiseAgentName || !optimisePrompt || !optimisePacket || !detail) return;
+    setOptimiseRunning(true);
+    setOptimiseError("");
+    setOptimiseResult(null);
+    setOptimiseStudyError("");
+    setOptimiseApplyPreview(null);
+    setOptimiseDatasetPreview(null);
+    setOptimiseRunPhases(createOptimiseRunPhasesWithActive(
+      "prepare",
+      "Collecting selected runs, manifests, and optimization guardrails.",
+    ));
     const baselineExecutionIds = Array.from(
       new Set((optimiseDetails.length > 0 ? optimiseDetails : [detail]).map((trace) => trace.id).filter(Boolean)),
     ).slice(0, optimisationScopeLimit(optimiseScope));
@@ -4074,6 +4195,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
       setOptimiseError(message);
       updateOptimiseRunPhase("prepare", "error", message);
       toast.error(message);
+      setOptimiseRunning(false);
       return;
     }
     const selectedAgentForRun = optimiseAgents.find((agent) => agent.name === optimiseAgentName) ?? null;
@@ -4082,15 +4204,10 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
       setOptimiseError(message);
       updateOptimiseRunPhase("prepare", "error", message);
       toast.error(message);
+      setOptimiseRunning(false);
       return;
     }
 
-    setOptimiseRunning(true);
-    setOptimiseError("");
-    setOptimiseResult(null);
-    setOptimiseStudyError("");
-    setOptimiseApplyPreview(null);
-    setOptimiseDatasetPreview(null);
     try {
       const sourceManifests = optimiseWorkflowManifest
         ? (() => {
@@ -4135,10 +4252,10 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
       setOptimiseStudies((items) => [study, ...items.filter((item) => item.id !== study.id)]);
       updateOptimiseRunPhase("study", "success", `${study.baseline_execution_ids.length} traces persisted; ${study.opportunities.length} server-ranked levers.`);
 
-      let result: InvokeResponse;
+      let optimizerOutput = "";
       updateOptimiseRunPhase("agent", "running", `Invoking ${optimiseAgentName} with the compact workflow intelligence dossier.`);
       try {
-        result = await invokeAgent(
+        const result = await invokeAgent(
           token,
           namespace,
           optimiseAgentName,
@@ -4151,23 +4268,35 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
           },
           `optimise-${detail.id}-${Date.now()}`,
         );
+        optimizerOutput = result.response ?? "";
+        setOptimiseResult(result);
+        updateOptimiseRunPhase("agent", "success", `Optimizer returned ${optimizerOutput.length.toLocaleString()} characters of analysis and candidate material.`);
       } catch (error) {
         const message = `Optimizer agent invocation failed after the baseline study was created: ${error instanceof Error ? error.message : "unknown error"}`;
         updateOptimiseRunPhase("agent", "error", message);
+        optimizerOutput = buildGuardedOptimizerFallbackOutput(study, optimisePacket, message);
+        setOptimiseResult({
+          agent_name: optimiseAgentName,
+          response: optimizerOutput,
+          thread_id: `fallback-${study.id}`,
+          model: selectedAgentForRun?.model ?? "unavailable",
+          status: "fallback",
+          warnings: [message],
+          artifacts: null,
+          tool_calls: null,
+          metadata: { fallback: true, reason: message },
+        });
         setOptimiseError(message);
-        toast.error(message);
-        return;
+        toast.error(`${message}. Creating a safe copied candidate for review.`);
       }
-      setOptimiseResult(result);
-      updateOptimiseRunPhase("agent", "success", `Optimizer returned ${(result.response ?? "").length.toLocaleString()} characters of analysis and candidate material.`);
 
       let candidate: OptimizationCandidate;
       updateOptimiseRunPhase("candidate", "running", "Parsing candidate_manifest_bundle, creating copied resources, and running contract validation.");
       try {
         candidate = await generateOptimizationCandidate(token, study.id, {
-          optimizer_output: result.response,
+          optimizer_output: optimizerOutput,
           suffix: `opt-${study.id.slice(-5)}`,
-          expected_savings: extractOptimiserExpectedSavings(result.response),
+          expected_savings: extractOptimiserExpectedSavings(optimizerOutput),
           allow_topology_rewrite: optimiseTopologyMode === "allow_topology_rewrite",
         });
       } catch (error) {

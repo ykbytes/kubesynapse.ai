@@ -125,6 +125,14 @@ def _get_trace(execution_id: str) -> dict[str, Any]:
     return trace
 
 
+def _get_traces(execution_ids: list[str]) -> list[dict[str, Any]]:
+    traces_by_id = trace_store.get_executions_by_ids(execution_ids)
+    missing = [execution_id for execution_id in execution_ids if execution_id not in traces_by_id]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Execution '{missing[0]}' not found")
+    return [traces_by_id[execution_id] for execution_id in execution_ids]
+
+
 def _aggregate_metrics(traces: list[dict[str, Any]]) -> dict[str, Any]:
     count = len(traces)
     if count == 0:
@@ -971,6 +979,8 @@ def _label_candidate_bundle(
     for manifest in labelled:
         if not isinstance(manifest, dict):
             continue
+        if str(manifest.get("kind") or "") in _ALLOWED_CANDIDATE_KINDS:
+            manifest["apiVersion"] = f"{RESOURCE_GROUP}/{RESOURCE_VERSION}"
         metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
         metadata = _clone(metadata)
         metadata["namespace"] = metadata.get("namespace") or namespace
@@ -1329,7 +1339,7 @@ def _candidate_bundle_from_optimizer_output(
             source_name=source_agent_name,
             suffixed_name=candidate_agent_name,
         )
-        if agent_document is None and len(source_agents) == 1 and len(agent_documents) == 1:
+        if agent_document is None and not allow_topology_rewrite and len(source_agents) == 1 and len(agent_documents) == 1:
             agent_document = agent_documents[0]
             warnings.append("Optimizer agent manifest name was normalized to the copied candidate agent name.")
         if agent_document is None:
@@ -2079,7 +2089,7 @@ def _apply_manifest_bundle(
             results.append({"kind": kind, "name": name, "status": "deferred_until_trial"})
             continue
         body = _clone(manifest)
-        body.setdefault("apiVersion", f"{RESOURCE_GROUP}/{RESOURCE_VERSION}")
+        body["apiVersion"] = f"{RESOURCE_GROUP}/{RESOURCE_VERSION}"
         body.setdefault("kind", RESOURCE_KIND_BY_PLURAL[plural])
         body.setdefault("metadata", {})["namespace"] = namespace
         try:
@@ -2264,7 +2274,7 @@ def _trigger_candidate_workflow(
 
     api = client.CustomObjectsApi()
     manifest = _candidate_workflow_manifest(bundle, workflow_name)
-    manifest.setdefault("apiVersion", f"{RESOURCE_GROUP}/{RESOURCE_VERSION}")
+    manifest["apiVersion"] = f"{RESOURCE_GROUP}/{RESOURCE_VERSION}"
     manifest.setdefault("kind", RESOURCE_KIND_BY_PLURAL["agentworkflows"])
     metadata = manifest.setdefault("metadata", {})
     metadata["name"] = workflow_name
@@ -2554,7 +2564,7 @@ def _evaluation_records(traces: list[dict[str, Any]], trials: list[dict[str, Any
 @router.post("/studies", status_code=201)
 def create_study(body: CreateStudyRequest, user: dict[str, Any] = Depends(verify_token)) -> dict[str, Any]:
     ensure_namespace_access(user, body.namespace, "operator")
-    traces = [_get_trace(execution_id) for execution_id in body.baseline_execution_ids]
+    traces = _get_traces(body.baseline_execution_ids)
     for trace in traces:
         ensure_namespace_access(user, str(trace.get("namespace") or body.namespace), "operator")
     source_manifests = _load_source_manifests(body.namespace, body.workflow_name, body.source_manifests)
@@ -2672,6 +2682,11 @@ def generate_candidate(study_id: str, body: GenerateCandidateRequest, user: dict
         )
     else:
         bundle, validation_warnings = generated
+    bundle = _label_candidate_bundle(
+        study,
+        bundle,
+        allow_topology_rewrite=body.allow_topology_rewrite,
+    )
     validation = _validate_candidate_bundle(
         study,
         bundle,
@@ -2679,7 +2694,32 @@ def generate_candidate(study_id: str, body: GenerateCandidateRequest, user: dict
         warnings=validation_warnings,
     )
     if not validation["valid"]:
-        raise HTTPException(status_code=422, detail="; ".join(validation["errors"]))
+        fallback_warnings = [
+            *validation_warnings,
+            (
+                "Optimizer-generated manifest failed validation "
+                f"({'; '.join(validation['errors'])}); generated a safe copied candidate instead."
+            ),
+        ]
+        bundle = _candidate_bundle_from_source(
+            study,
+            suffix,
+            body.optimizer_output,
+            allow_topology_rewrite=body.allow_topology_rewrite,
+        )
+        bundle = _label_candidate_bundle(
+            study,
+            bundle,
+            allow_topology_rewrite=body.allow_topology_rewrite,
+        )
+        validation = _validate_candidate_bundle(
+            study,
+            bundle,
+            allow_topology_rewrite=body.allow_topology_rewrite,
+            warnings=fallback_warnings,
+        )
+        if not validation["valid"]:
+            raise HTTPException(status_code=422, detail="; ".join(validation["errors"]))
     return optimization_store.create_candidate(
         study_id=study_id,
         namespace=str(study["namespace"]),
