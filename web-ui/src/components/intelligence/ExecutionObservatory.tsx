@@ -64,11 +64,11 @@ import {
   fetchWorkflowManifest,
   fetchWorkflowRunTrace,
   generateOptimizationCandidate,
-  invokeAgent,
   listAgents,
   listExecutions,
   promoteOptimizationCandidate,
   runOptimizationCandidate,
+  streamAgentInvoke,
   type WorkflowRunRecord,
   type WorkflowRunTraceResponse,
 } from "@/lib/api";
@@ -78,6 +78,7 @@ import type {
   ExecutionListItem,
   ExecutionTrace,
   InvokeResponse,
+  InvokePayload,
   LLMCallRecord,
   OptimizationCandidate,
   OptimizationComparison,
@@ -1707,6 +1708,20 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+function normaliseOptimizerStringList(value: unknown): string[] {
+  const clean = (item: unknown) => String(item ?? "").trim();
+  if (Array.isArray(value)) {
+    return value.map(clean).filter(Boolean).slice(0, 8);
+  }
+  if (typeof value === "string") {
+    return value.split(/[,\n]/).map(clean).filter(Boolean).slice(0, 8);
+  }
+  if (isPlainObject(value)) {
+    return Object.values(value).map(clean).filter(Boolean).slice(0, 8);
+  }
+  return [];
+}
+
 function extractOptimiserExpectedSavings(response: string | null | undefined): Record<string, unknown> {
   const fallback: Record<string, unknown> = {
     scope: "prompt_model_tool_v1",
@@ -1763,7 +1778,7 @@ function buildGuardedOptimizerFallbackOutput(
     expected_metric_delta: metricDelta,
     confidence: "low",
     evidence_execution_ids: study.baseline_execution_ids,
-    target_steps: topOpportunity?.affected_steps?.slice(0, 3) ?? [],
+    target_steps: normaliseOptimizerStringList(topOpportunity?.affected_steps).slice(0, 3),
     target_tools: targetTool ? [targetTool] : [],
     quality_gate: {
       mode: "safe_copy_fallback",
@@ -1791,6 +1806,158 @@ function buildGuardedOptimizerFallbackOutput(
     "| --- | --- | --- | --- | --- | --- |",
     `| ${packet.workflow_name} | metadata.name/labels | Source workflow remains unchanged | Gateway creates a suffixed copied workflow with optimization labels | Enables safe trial without source mutation | low |`,
   ].join("\n");
+}
+
+async function invokeOptimizerAgentForRoi({
+  token,
+  namespace,
+  agentName,
+  payload,
+  requestId,
+  fallbackModel,
+  onStatus,
+}: {
+  token: string;
+  namespace: string;
+  agentName: string;
+  payload: InvokePayload;
+  requestId: string;
+  fallbackModel?: string;
+  onStatus?: (detail: string) => void;
+}): Promise<InvokeResponse> {
+  const abortController = new AbortController();
+  let streamFailure: Error | null = null;
+  let completedPayload: Record<string, unknown> | null = null;
+  let responseText = "";
+  let threadId = requestId;
+  let model = fallbackModel?.trim() || "streaming";
+  let lastStatusChars = 0;
+
+  const maybeString = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : "");
+  const updateText = (next: string) => {
+    if (!next) return;
+    responseText = next.startsWith(responseText)
+      ? next
+      : responseText.startsWith(next)
+        ? responseText
+        : `${responseText}${next}`;
+    if (responseText.length - lastStatusChars >= 1200) {
+      lastStatusChars = responseText.length;
+      onStatus?.(`Optimizer is streaming analysis (${responseText.length.toLocaleString()} characters received).`);
+    }
+  };
+
+  const deadlineId = window.setTimeout(() => {
+    streamFailure = new Error("Optimizer stream exceeded 120 seconds; continuing with a safe fallback candidate.");
+    abortController.abort();
+  }, 120_000);
+
+  try {
+    await streamAgentInvoke({
+      signal: abortController.signal,
+      token,
+      namespace,
+      agentName,
+      payload,
+      requestId,
+      onEvent: ({ event, payload: eventPayload }) => {
+        if (event === "response.started") {
+          const nextThreadId = maybeString(eventPayload.thread_id);
+          if (nextThreadId) threadId = nextThreadId;
+          onStatus?.("Optimizer stream opened; waiting for model output.");
+          return;
+        }
+
+        if (event === "response.config") {
+          const config = isPlainObject(eventPayload.config) ? eventPayload.config : eventPayload;
+          const nextModel = maybeString(config.model);
+          if (nextModel) model = nextModel;
+          onStatus?.(`Optimizer is streaming analysis with ${model}.`);
+          return;
+        }
+
+        if (event === "response.reasoning") {
+          onStatus?.("Optimizer is reasoning over trace costs, tool churn, manifest safety, and candidate ROI.");
+          return;
+        }
+
+        if (event === "response.delta") {
+          updateText(maybeString(eventPayload.delta));
+          return;
+        }
+
+        if (event === "response.tool_call") {
+          const tool = maybeString(eventPayload.tool) || "tool";
+          onStatus?.(`Optimizer is using ${tool} while preparing candidate guidance.`);
+          return;
+        }
+
+        if (event === "response.completed") {
+          completedPayload = eventPayload;
+          const completedResponse = maybeString(eventPayload.response);
+          if (completedResponse) responseText = completedResponse;
+          const nextThreadId = maybeString(eventPayload.thread_id);
+          if (nextThreadId) threadId = nextThreadId;
+          const nextModel = maybeString(eventPayload.model);
+          if (nextModel) model = nextModel;
+          onStatus?.(`Optimizer completed analysis (${responseText.length.toLocaleString()} characters).`);
+          return;
+        }
+
+        if (event === "response.error") {
+          const message = maybeString(eventPayload.error) || "Optimizer stream failed.";
+          streamFailure = new Error(message);
+          throw streamFailure;
+        }
+      },
+      onError: (error) => {
+        streamFailure = error instanceof Error ? error : new Error(String(error));
+      },
+      onClose: () => {
+        onStatus?.("Optimizer stream closed; preparing candidate manifest bundle.");
+      },
+    });
+  } finally {
+    window.clearTimeout(deadlineId);
+  }
+
+  if (streamFailure) throw streamFailure;
+  if (!responseText.trim()) {
+    throw new Error("Optimizer stream closed without a candidate analysis response.");
+  }
+
+  const finalPayload = (completedPayload ?? {}) as Record<string, unknown>;
+  const warnings = Array.isArray(finalPayload.warnings)
+    ? finalPayload.warnings.map((warning: unknown) => String(warning)).filter(Boolean)
+    : [];
+  const artifacts = Array.isArray(finalPayload.artifacts)
+    ? finalPayload.artifacts.filter(isPlainObject)
+    : null;
+  const toolCalls = Array.isArray(finalPayload.tool_calls)
+    ? finalPayload.tool_calls.filter(isPlainObject)
+    : null;
+  const metadata = isPlainObject(finalPayload.metadata)
+    ? finalPayload.metadata
+    : { streamed: true };
+
+  return {
+    agent_name: maybeString(finalPayload.agent_name) || agentName,
+    response: responseText,
+    thread_id: threadId,
+    model,
+    policy_name: maybeString(finalPayload.policy_name) || null,
+    tool_name: maybeString(finalPayload.tool_name) || null,
+    sandbox_session: isPlainObject(finalPayload.sandbox_session) ? finalPayload.sandbox_session : null,
+    status: maybeString(finalPayload.status) || "completed",
+    approval_name: maybeString(finalPayload.approval_name) || null,
+    retry_after_seconds: typeof finalPayload.retry_after_seconds === "number" ? finalPayload.retry_after_seconds : null,
+    a2a: null,
+    subagents: null,
+    warnings,
+    artifacts,
+    tool_calls: toolCalls,
+    metadata,
+  };
 }
 
 function TraceExplorer({
@@ -4252,22 +4419,30 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
       setOptimiseStudies((items) => [study, ...items.filter((item) => item.id !== study.id)]);
       updateOptimiseRunPhase("study", "success", `${study.baseline_execution_ids.length} traces persisted; ${study.opportunities.length} server-ranked levers.`);
 
-      let optimizerOutput = "";
-      updateOptimiseRunPhase("agent", "running", `Invoking ${optimiseAgentName} with the compact workflow intelligence dossier.`);
+      let optimizerOutput = buildGuardedOptimizerFallbackOutput(
+        study,
+        optimisePacket,
+        "Optimizer streaming analysis has not completed yet; using server-ranked ROI levers as a safe fallback seed.",
+      );
+      updateOptimiseRunPhase("agent", "running", `Starting streamed optimizer analysis with ${optimiseAgentName}.`);
       try {
-        const result = await invokeAgent(
+        const result = await invokeOptimizerAgentForRoi({
           token,
           namespace,
-          optimiseAgentName,
-          {
+          agentName: optimiseAgentName,
+          payload: {
             prompt: optimisePrompt,
             no_session: true,
             autonomous: false,
-            max_turns: 6,
+            max_turns: 3,
             output_format: "markdown",
           },
-          `optimise-${detail.id}-${Date.now()}`,
-        );
+          requestId: `optimise-${detail.id}-${Date.now()}`,
+          fallbackModel: selectedAgentForRun?.model ?? "unavailable",
+          onStatus: (status) => {
+            updateOptimiseRunPhase("agent", "running", status);
+          },
+        });
         optimizerOutput = result.response ?? "";
         setOptimiseResult(result);
         updateOptimiseRunPhase("agent", "success", `Optimizer returned ${optimizerOutput.length.toLocaleString()} characters of analysis and candidate material.`);

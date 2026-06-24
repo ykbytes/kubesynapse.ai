@@ -31,6 +31,21 @@ const checks = [
       source.includes("Optimizer agent invocation failed after the baseline study was created"),
   },
   {
+    name: "optimizer analysis uses streaming invoke to avoid proxy timeouts",
+    pass:
+      source.includes("streamAgentInvoke") &&
+      source.includes("invokeOptimizerAgentForRoi") &&
+      source.includes("Optimizer is streaming analysis") &&
+      !source.includes("const result = await invokeAgent(\n          token,\n          namespace,\n          optimiseAgentName"),
+  },
+  {
+    name: "optimizer fallback tolerates non-array affected steps",
+    pass:
+      source.includes("normaliseOptimizerStringList") &&
+      source.includes("normaliseOptimizerStringList(topOpportunity?.affected_steps)") &&
+      !source.includes("topOpportunity?.affected_steps?.slice"),
+  },
+  {
     name: "ROI study run has visible phase feedback",
     pass:
       source.includes("type OptimisationRunPhase") &&
