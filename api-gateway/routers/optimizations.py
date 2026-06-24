@@ -700,7 +700,81 @@ def _extract_agent_refs(workflow_manifest: dict[str, Any]) -> list[str]:
     return refs
 
 
-def _load_source_manifests(namespace: str, workflow_name: str, provided: dict[str, Any] | None = None) -> dict[str, Any]:
+def _trace_model_runtime_hint(traces: list[dict[str, Any]] | None) -> tuple[str, str]:
+    model_counts: Counter[str] = Counter()
+    provider_counts: Counter[str] = Counter()
+    for trace in traces or []:
+        for call in trace.get("llm_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            model = str(call.get("model") or "").strip()
+            provider = str(call.get("provider") or "").strip()
+            if model:
+                model_counts[model] += 1
+            if provider:
+                provider_counts[provider] += 1
+    model = model_counts.most_common(1)[0][0] if model_counts else "opencode/deepseek-v4-flash-free"
+    runtime = provider_counts.most_common(1)[0][0] if provider_counts else "opencode"
+    if runtime not in {"opencode", "pipecat"}:
+        runtime = "opencode"
+    return model, runtime
+
+
+def _workflow_steps_for_agent_ref(workflow_manifest: dict[str, Any], agent_ref: str) -> list[dict[str, Any]]:
+    spec = workflow_manifest.get("spec") if isinstance(workflow_manifest.get("spec"), dict) else {}
+    steps: list[dict[str, Any]] = []
+    for step in spec.get("steps") or []:
+        if isinstance(step, dict) and str(step.get("agentRef") or "").strip() == agent_ref:
+            steps.append(step)
+    return steps
+
+
+def _reconstructed_source_agent(
+    *,
+    namespace: str,
+    agent_ref: str,
+    workflow_manifest: dict[str, Any],
+    traces: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    model, runtime = _trace_model_runtime_hint(traces)
+    steps = _workflow_steps_for_agent_ref(workflow_manifest, agent_ref)
+    step_contract = "\n\n".join(
+        f"## Workflow step: {step.get('name') or 'unnamed'}\n{str(step.get('prompt') or '').strip()}"
+        for step in steps
+        if str(step.get("prompt") or "").strip()
+    )
+    system_prompt = (
+        "Reconstructed source contract for an AIAgent manifest that was not available in the cluster. "
+        "Preserve the behavior expressed by the workflow step prompts and baseline traces.\n\n"
+        f"{step_contract or 'No step prompt was available; preserve the baseline workflow behavior from traces.'}"
+    )
+    return {
+        "apiVersion": "kubesynapse.ai/v1alpha1",
+        "kind": "AIAgent",
+        "metadata": {
+            "name": agent_ref,
+            "namespace": namespace,
+            "annotations": {
+                "kubesynapse.ai/reconstructed-source": "true",
+                "kubesynapse.ai/reconstruction-source": "workflow-step-prompts-and-baseline-traces",
+            },
+        },
+        "spec": {
+            "model": model,
+            "runtime": {"kind": runtime},
+            "systemPrompt": system_prompt,
+        },
+    }
+
+
+def _load_source_manifests(
+    namespace: str,
+    workflow_name: str,
+    provided: dict[str, Any] | None = None,
+    *,
+    traces: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    warnings: list[str] = []
     if provided:
         workflow = provided.get("workflow")
         if not isinstance(workflow, dict):
@@ -730,25 +804,43 @@ def _load_source_manifests(namespace: str, workflow_name: str, provided: dict[st
             if not isinstance(manifest, dict):
                 try:
                     manifest = read_custom_resource("aiagents", agent_ref, namespace, "Agent")
-                except Exception as exc:
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"source agent manifest is unavailable for workflow agentRef '{agent_ref}'",
-                    ) from exc
+                except Exception:
+                    manifest = _reconstructed_source_agent(
+                        namespace=namespace,
+                        agent_ref=agent_ref,
+                        workflow_manifest=workflow,
+                        traces=traces,
+                    )
+                    warnings.append(
+                        f"source agent manifest for workflow agentRef '{agent_ref}' was unavailable; "
+                        "reconstructed a limited source contract from workflow step prompts and baseline traces"
+                    )
             if str(manifest.get("kind") or "") != "AIAgent":
                 raise HTTPException(status_code=422, detail=f"source agent manifest for '{agent_ref}' must be an AIAgent")
             if _manifest_namespace(manifest) != namespace:
                 raise HTTPException(status_code=422, detail=f"source agent manifest for '{agent_ref}' must stay in the study namespace")
             agents[agent_ref] = _clone(manifest)
 
-        return {"workflow": _clone(workflow), "agent_refs": agent_refs, "agents": agents}
+        return {"workflow": _clone(workflow), "agent_refs": agent_refs, "agents": agents, "warnings": warnings}
 
     workflow = read_custom_resource("agentworkflows", workflow_name, namespace, "Workflow")
     agent_refs = _extract_agent_refs(workflow)
     agents: dict[str, Any] = {}
     for agent_ref in agent_refs:
-        agents[agent_ref] = read_custom_resource("aiagents", agent_ref, namespace, "Agent")
-    return {"workflow": workflow, "agent_refs": agent_refs, "agents": agents}
+        try:
+            agents[agent_ref] = read_custom_resource("aiagents", agent_ref, namespace, "Agent")
+        except Exception:
+            agents[agent_ref] = _reconstructed_source_agent(
+                namespace=namespace,
+                agent_ref=agent_ref,
+                workflow_manifest=workflow,
+                traces=traces,
+            )
+            warnings.append(
+                f"source agent manifest for workflow agentRef '{agent_ref}' was unavailable; "
+                "reconstructed a limited source contract from workflow step prompts and baseline traces"
+            )
+    return {"workflow": workflow, "agent_refs": agent_refs, "agents": agents, "warnings": warnings}
 
 
 def _workflow_from_bundle(bundle: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -2645,7 +2737,12 @@ def create_study(body: CreateStudyRequest, user: dict[str, Any] = Depends(verify
     traces = _get_traces(body.baseline_execution_ids)
     for trace in traces:
         ensure_namespace_access(user, str(trace.get("namespace") or body.namespace), "operator")
-    source_manifests = _load_source_manifests(body.namespace, body.workflow_name, body.source_manifests)
+    source_manifests = _load_source_manifests(
+        body.namespace,
+        body.workflow_name,
+        body.source_manifests,
+        traces=traces,
+    )
     baseline_metrics = _aggregate_metrics(traces)
     intelligence = _build_optimizer_intelligence(traces, source_manifests)
     opportunities = intelligence["ranked_levers"]

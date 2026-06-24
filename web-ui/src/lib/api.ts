@@ -1286,6 +1286,7 @@ function parseDeleteResponsePayload(payload: unknown): DeleteResponse {
     kind: readString(record, "kind", "DeleteResponse"),
     name: readString(record, "name", "DeleteResponse"),
     namespace: readString(record, "namespace", "DeleteResponse"),
+    related: readOptionalRecord(record, "related", "DeleteResponse"),
   };
 }
 
@@ -2610,10 +2611,17 @@ export async function deleteWorkflow(
   token: string,
   namespace: string,
   workflowName: string,
+  options: { deleteRelatedResources?: boolean } = {},
 ): Promise<DeleteResponse> {
-  const response = await fetchAuthenticated(buildUrl(`/api/workflows/${workflowName}`, namespace), token, {
-    method: "DELETE",
-  });
+  const url = buildUrl(`/api/workflows/${workflowName}`, namespace);
+  const separator = url.includes("?") ? "&" : "?";
+  const response = await fetchAuthenticated(
+    options.deleteRelatedResources ? `${url}${separator}delete_related_resources=true` : url,
+    token,
+    {
+      method: "DELETE",
+    },
+  );
   return parseJsonResponse(response, parseDeleteResponsePayload);
 }
 

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import {
   Dialog,
   DialogContent,
@@ -17,6 +18,7 @@ interface ConfirmDialogProps {
   confirmLabel?: string;
   cancelLabel?: string;
   variant?: "destructive" | "default";
+  children?: ReactNode;
   onConfirm: () => void;
 }
 
@@ -28,6 +30,7 @@ export function ConfirmDialog({
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
   variant = "default",
+  children,
   onConfirm,
 }: ConfirmDialogProps) {
   const isDestructive = variant === "destructive";
@@ -56,6 +59,7 @@ export function ConfirmDialog({
             {description}
           </DialogDescription>
         </DialogHeader>
+        {children ? <div className="pt-1">{children}</div> : null}
         <DialogFooter>
           <Button
             variant="outline"

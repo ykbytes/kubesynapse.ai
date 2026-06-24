@@ -60,7 +60,7 @@ export interface WorkflowManagerProps {
   error: string;
   onCreate: (payload: WorkflowPayload) => void;
   onUpdate: (name: string, payload: WorkflowUpdatePayload) => void;
-  onDelete: (name: string) => void;
+  onDelete: (name: string, options?: { deleteRelatedResources?: boolean }) => void;
   onTrigger: (name: string, input?: string, factoryMode?: FactoryMode) => void;
   onCancel?: (name: string) => void;
   isCancelling?: boolean;
@@ -115,6 +115,7 @@ export function WorkflowManager({
   const [triggerInput, setTriggerInput] = useState("");
   const [showTriggerConfirm, setShowTriggerConfirm] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteRelatedResources, setDeleteRelatedResources] = useState(false);
   const [errorDialogOpen, setErrorDialogOpen] = useState(false);
 
   useEffect(() => {
@@ -171,7 +172,13 @@ export function WorkflowManager({
 
   useEffect(() => {
     setSelectedHistoryRun(null);
+    setDeleteRelatedResources(false);
   }, [workflow?.name]);
+
+  const workflowAgentRefs = useMemo(
+    () => Array.from(new Set(steps.map((step) => step.agent_ref.trim()).filter(Boolean))),
+    [steps],
+  );
 
   useEffect(() => {
     const hasBeenTriggered = Boolean(
@@ -738,12 +745,32 @@ export function WorkflowManager({
       {workflow && (
         <ConfirmDialog
           open={deleteDialogOpen}
-          onOpenChange={setDeleteDialogOpen}
+          onOpenChange={(open) => {
+            setDeleteDialogOpen(open);
+            if (!open) setDeleteRelatedResources(false);
+          }}
           title="Delete workflow"
           description={`This will permanently delete the workflow "${workflow.name}". This action cannot be undone.`}
           confirmLabel="Delete"
-          onConfirm={() => onDelete(workflow.name)}
-        />
+          variant="destructive"
+          onConfirm={() => onDelete(workflow.name, { deleteRelatedResources })}
+        >
+          <label className="flex cursor-pointer items-start gap-3 rounded-md border border-border bg-muted/35 p-3 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1 h-4 w-4 accent-primary"
+              checked={deleteRelatedResources}
+              onChange={(event) => setDeleteRelatedResources(event.currentTarget.checked)}
+            />
+            <span className="space-y-1">
+              <span className="block font-medium text-foreground">Also delete related resources</span>
+              <span className="block text-xs leading-5 text-muted-foreground">
+                Deletes workflow triggers that target this workflow and agent configurations used only by this workflow.
+                Shared agents are skipped. Current agent refs: {workflowAgentRefs.length > 0 ? workflowAgentRefs.join(", ") : "none"}.
+              </span>
+            </span>
+          </label>
+        </ConfirmDialog>
       )}
       <ManifestModalComponent />
     </div>

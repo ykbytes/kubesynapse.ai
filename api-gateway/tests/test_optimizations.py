@@ -180,6 +180,67 @@ def _optimization_api_context(*, manifests: bool = False):
             yield
 
 
+def test_create_study_reconstructs_missing_source_agent_contract_from_traces(client, auth_headers) -> None:
+    baseline_id = _seed_execution(
+        execution_id="exec-opt-missing-source-agent",
+        workflow_name="daily-standup",
+        duration_ms=180_000,
+        tokens=4_000,
+        tool_calls=8,
+    )
+    workflow = _workflow_manifest("daily-standup")
+    workflow["spec"]["steps"] = [
+        {
+            "name": "summarize-git",
+            "type": "agent",
+            "agentRef": "standup-git",
+            "prompt": "Summarize git commits and write /workspace/commits-summary.md.",
+        },
+        {
+            "name": "track-jira",
+            "type": "agent",
+            "agentRef": "standup-jira",
+            "prompt": "Analyze Jira sprint status and write /workspace/sprint-status.json.",
+        },
+    ]
+
+    def fake_read_missing_git(plural: str, name: str, namespace: str, label: str) -> dict:
+        if plural == "aiagents" and name == "standup-git":
+            raise RuntimeError("missing source agent")
+        return _fake_read_custom_resource(plural, name, namespace, label)
+
+    with patch("routers.optimizations.ensure_namespace_access", side_effect=_allow_namespace_access), patch(
+        "routers.optimizations.trace_store.get_execution", side_effect=_fake_get_execution
+    ), patch(
+        "routers.optimizations.trace_store.get_executions_by_ids", side_effect=_fake_get_executions_by_ids
+    ), patch("routers.optimizations.read_custom_resource", side_effect=fake_read_missing_git):
+        response = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={
+                "namespace": "default",
+                "workflow_name": "daily-standup",
+                "optimizer_agent_name": "workflow-optimizer",
+                "baseline_execution_ids": [baseline_id],
+                "source_manifests": {
+                    "workflow": workflow,
+                    "agent_refs": ["standup-git", "standup-jira"],
+                    "agents": {"standup-jira": _agent_manifest("standup-jira")},
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.json()
+    source = response.json()["source_manifests"]
+    reconstructed = source["agents"]["standup-git"]
+    assert reconstructed["kind"] == "AIAgent"
+    assert reconstructed["metadata"]["annotations"]["kubesynapse.ai/reconstructed-source"] == "true"
+    assert reconstructed["spec"]["model"] == "opencode/deepseek-v4-flash-free"
+    assert reconstructed["spec"]["runtime"] == {"kind": "opencode"}
+    assert "Summarize git commits" in reconstructed["spec"]["systemPrompt"]
+    assert any("standup-git" in warning for warning in source["warnings"])
+
+
 def test_create_study_computes_baseline_metrics_and_opportunities(client, auth_headers) -> None:
     first = _seed_execution(execution_id="exec-opt-base-1", duration_ms=60_000, tokens=1_200, cost_usd=0.036, tool_calls=3)
     second = _seed_execution(execution_id="exec-opt-base-2", duration_ms=120_000, tokens=1_800, cost_usd=0.054, tool_calls=5)

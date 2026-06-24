@@ -1042,6 +1042,7 @@ export interface DeleteResponse {
   kind: string;
   name: string;
   namespace: string;
+  related?: Record<string, unknown> | null;
 }
 
 export interface UiToolCall {

@@ -119,6 +119,69 @@ def get_workflow_manifest(
     return JSONResponse(content=manifest)
 
 
+def _workflow_agent_refs(resource: dict[str, Any] | None) -> list[str]:
+    spec = resource.get("spec") if isinstance(resource, dict) and isinstance(resource.get("spec"), dict) else {}
+    refs: list[str] = []
+    for step in spec.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        agent_ref = str(step.get("agentRef") or "").strip()
+        if agent_ref and agent_ref not in refs:
+            refs.append(agent_ref)
+    return refs
+
+
+def _workflow_trigger_targets(trigger: dict[str, Any], workflow_name: str, namespace: str) -> bool:
+    if str(trigger.get("target_kind") or "workflow").strip() != "workflow":
+        return False
+    workflow_ref = trigger.get("workflow_ref") if isinstance(trigger.get("workflow_ref"), dict) else {}
+    target_name = str(workflow_ref.get("name") or trigger.get("target_workflow_name") or "").strip()
+    target_namespace = str(workflow_ref.get("namespace") or trigger.get("target_workflow_namespace") or namespace).strip() or namespace
+    return target_name == workflow_name and target_namespace == namespace
+
+
+def _delete_related_workflow_resources(workflow_name: str, namespace: str, workflow: dict[str, Any]) -> dict[str, Any]:
+    target_agent_refs = set(_workflow_agent_refs(workflow))
+    other_agent_refs: set[str] = set()
+    for item in list_custom_resources("agentworkflows", namespace):
+        if not isinstance(item, dict):
+            continue
+        item_name = str(((item.get("metadata") or {}) if isinstance(item.get("metadata"), dict) else {}).get("name") or "")
+        if item_name == workflow_name:
+            continue
+        other_agent_refs.update(_workflow_agent_refs(item))
+
+    deleted_agents: list[str] = []
+    skipped_agents: list[dict[str, str]] = []
+    for agent_ref in sorted(target_agent_refs):
+        if agent_ref in other_agent_refs:
+            skipped_agents.append({"name": agent_ref, "reason": "referenced by another workflow"})
+            continue
+        try:
+            delete_custom_resource("aiagents", agent_ref, namespace, "Agent")
+            deleted_agents.append(agent_ref)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                skipped_agents.append({"name": agent_ref, "reason": "already absent"})
+                continue
+            raise
+
+    deleted_triggers: list[str] = []
+    for trigger in list_workflow_triggers(namespace):
+        if not isinstance(trigger, dict) or not _workflow_trigger_targets(trigger, workflow_name, namespace):
+            continue
+        trigger_name = str(trigger.get("name") or "").strip()
+        if trigger_name and delete_workflow_trigger(namespace, trigger_name):
+            deleted_triggers.append(trigger_name)
+
+    return {
+        "delete_related_resources": True,
+        "deleted_agents": deleted_agents,
+        "skipped_agents": skipped_agents,
+        "deleted_triggers": deleted_triggers,
+    }
+
+
 @router.patch("/workflows/{workflow_name}", response_model=WorkflowInfo)
 def update_workflow(
     workflow_name: str,
@@ -135,11 +198,18 @@ def update_workflow(
 def delete_workflow(
     workflow_name: str,
     namespace: str = "default",
+    delete_related_resources: bool = False,
     user=Depends(verify_token),
 ):
     ensure_namespace_access(user, namespace, "operator")
+    workflow = read_custom_resource("agentworkflows", workflow_name, namespace, "Workflow")
+    related = (
+        _delete_related_workflow_resources(workflow_name, namespace, workflow)
+        if delete_related_resources
+        else {"delete_related_resources": False}
+    )
     delete_custom_resource("agentworkflows", workflow_name, namespace, "Workflow")
-    return DeleteResponse(status="deleted", kind="workflow", name=workflow_name, namespace=namespace)
+    return DeleteResponse(status="deleted", kind="workflow", name=workflow_name, namespace=namespace, related=related)
 
 
 class WorkflowTriggerRequest(BaseModel):

@@ -37,6 +37,10 @@ spec:
     - Keep metadata names as the source names in your YAML; the gateway creates
       suffixed copied resources and rewrites agentRefs safely.
     - Preserve the source agents' provider and model exactly.
+    - If a source agent manifest is marked kubesynapse.ai/reconstructed-source,
+      treat its workflow step prompt and baseline traces as the source contract,
+      lower confidence, and prefer conservative changes unless topology rewrite
+      is explicitly allowed.
     - Do not add secrets, env expansion, service accounts, roles, role bindings,
       broader RBAC, extra namespaces, or external credential references.
     - Do not insert ROI Lab, optimizer, candidate-trial, benchmark, or
@@ -47,6 +51,8 @@ spec:
       split, or change workflow steps.
     - If topology-rewrite mode is active, you may change topology only when you
       prove behavior equivalence and list every preserved source capability.
+      Include a source-step to candidate-responsibility map and a trial stop
+      condition for latency, token, tool-call, and quality regressions.
     - Prefer one precise change on the dominant bottleneck over many broad,
       token-heavy instructions.
     - If you cannot produce a safe effective optimization, say so and return a
@@ -98,6 +104,7 @@ spec:
         Techniques:
         - Inspired by LLMLingua-style prompt compression: keep task-critical constraints, schemas, examples, and current input; remove repeated narration and irrelevant history.
         - Use stable-prefix layout for cacheability: stable role, policy, schema, and examples first; volatile run data later.
+        - Keep optimizer analysis, ROI estimates, and benchmark language outside target prompts so prompt-cache prefixes remain task-focused and reusable.
         - Convert repeated upstream context into compact summaries or reusable artifacts already present in the workspace.
         - Make prompts step-specific. A step prompt should contain only the contract it owns and references to required upstream artifacts.
         - Preserve exact required output paths, schemas, status markers, and handoff assumptions.

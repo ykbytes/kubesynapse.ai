@@ -1146,6 +1146,7 @@ class DeleteResponse(BaseModel):
     kind: str
     name: str
     namespace: str
+    related: dict[str, Any] | None = None
 
 
 class AuthRegisterRequest(BaseModel):

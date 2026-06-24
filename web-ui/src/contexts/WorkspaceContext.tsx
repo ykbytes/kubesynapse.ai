@@ -159,7 +159,7 @@ export interface WorkspaceContextValue {
   handleDeleteAgent: () => Promise<string | null>;
   handleCreateWorkflow: (payload: WorkflowPayload) => Promise<void>;
   handleUpdateWorkflow: (name: string, payload: WorkflowUpdatePayload) => Promise<void>;
-  handleDeleteWorkflow: (name: string) => Promise<void>;
+  handleDeleteWorkflow: (name: string, options?: { deleteRelatedResources?: boolean }) => Promise<void>;
   handleTriggerWorkflow: (name: string, input?: string, factoryMode?: FactoryMode) => Promise<void>;
   handleCancelWorkflow: (name: string) => Promise<void>;
   handleRetryFailedSteps: (name: string) => Promise<void>;
@@ -701,13 +701,23 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     finally { setSavingWorkflow(false); }
   }, [token, namespace, refreshWorkspaceData]);
 
-  const handleDeleteWorkflow = useCallback(async (name: string) => {
+  const handleDeleteWorkflow = useCallback(async (name: string, options: { deleteRelatedResources?: boolean } = {}) => {
     if (!token.trim()) return;
     setDeletingWorkflow(true); setWorkflowError("");
     try {
-      await deleteWorkflow(token, namespace, name);
+      const result = await deleteWorkflow(token, namespace, name, options);
       setSelectedWorkflowName(""); setWorkflowCreateMode(workflows.length <= 1);
-      await refreshWorkspaceData({ silent: false }); toast.success("Workflow deleted");
+      await refreshWorkspaceData({ silent: false });
+      const related = result.related && typeof result.related === "object" ? result.related : null;
+      const deletedAgentRows = Array.isArray(related?.["deleted_agents"]) ? related["deleted_agents"] : [];
+      const deletedTriggerRows = Array.isArray(related?.["deleted_triggers"]) ? related["deleted_triggers"] : [];
+      const deletedAgents = deletedAgentRows.length;
+      const deletedTriggers = deletedTriggerRows.length;
+      toast.success(
+        options.deleteRelatedResources
+          ? `Workflow deleted · ${deletedAgents} agent${deletedAgents === 1 ? "" : "s"} · ${deletedTriggers} trigger${deletedTriggers === 1 ? "" : "s"}`
+          : "Workflow deleted",
+      );
     } catch (err) { const msg = apiErrorMessage(err); setWorkflowError(msg); toast.error("Failed to delete workflow", { description: msg }); }
     finally { setDeletingWorkflow(false); }
   }, [token, namespace, workflows.length, refreshWorkspaceData]);

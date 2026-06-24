@@ -705,7 +705,7 @@ function AppLayout() {
                 error={ws.workflowError}
                 onCreate={(payload) => void ws.handleCreateWorkflow(payload)}
                 onUpdate={(name, payload) => void ws.handleUpdateWorkflow(name, payload)}
-                onDelete={(name) => void ws.handleDeleteWorkflow(name)}
+                onDelete={(name, options) => void ws.handleDeleteWorkflow(name, options)}
                 onTrigger={(name, input, factoryMode) => void ws.handleTriggerWorkflow(name, input, factoryMode)}
                 onCancel={(name) => void ws.handleCancelWorkflow(name)}
                 isCancelling={ws.cancellingWorkflow}
