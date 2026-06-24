@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import copy
 import difflib
 import json
+import logging
 import re
 import time
-from collections import Counter, defaultdict
+from collections import Counter
+from contextlib import suppress
 from typing import Any
 
 import optimization_store
@@ -19,13 +20,18 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 
 router = APIRouter(prefix="/optimizations", tags=["optimizations"])
+logger = logging.getLogger(__name__)
 
 _ALLOWED_CANDIDATE_KINDS = {"AIAgent", "AgentWorkflow"}
 _PASSING_QUALITY_STATES = {"passed", "machine_passed", "human_passed", "approved"}
 _SENSITIVE_KEY_RE = re.compile(r"(api[_-]?key|token|secret|password|credential|authorization)", re.IGNORECASE)
 _SECRET_VALUE_RE = re.compile(r"\b(sk-[A-Za-z0-9_\-]{8,}|Bearer\s+[A-Za-z0-9._\-]{12,})\b")
 _FENCED_BLOCK_RE = re.compile(r"```[^\n\r]*\r?\n(?P<body>.*?)```", re.DOTALL)
-_ROI_CANDIDATE_GUIDANCE_MARKER = "[ROI Candidate Guidance]"
+_OPTIMIZER_META_PROMPT_RE = re.compile(
+    r"(\[ROI Candidate Guidance\]|\bROI Lab\b|\boptimization stud(?:y|ies)\b|\bcandidate trial\b|"
+    r"\bexpected_metric_delta\b|\bbaseline-vs-candidate\b)",
+    re.IGNORECASE,
+)
 
 
 class CreateStudyRequest(BaseModel):
@@ -37,7 +43,7 @@ class CreateStudyRequest(BaseModel):
     source_manifests: dict[str, Any] | None = None
 
     @model_validator(mode="after")
-    def normalize(self) -> "CreateStudyRequest":
+    def normalize(self) -> CreateStudyRequest:
         self.namespace = self.namespace.strip() or "default"
         self.workflow_name = self.workflow_name.strip()
         if self.optimizer_agent_name is not None:
@@ -78,7 +84,7 @@ class RunCandidateRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=2048)
 
     @model_validator(mode="after")
-    def normalize(self) -> "RunCandidateRequest":
+    def normalize(self) -> RunCandidateRequest:
         if self.baseline_execution_id is not None:
             self.baseline_execution_id = self.baseline_execution_id.strip() or None
         if self.input is not None:
@@ -97,7 +103,7 @@ class CreateTrialRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=2048)
 
     @model_validator(mode="after")
-    def normalize(self) -> "CreateTrialRequest":
+    def normalize(self) -> CreateTrialRequest:
         self.quality_status = self.quality_status.strip().lower() or "needs_review"
         if self.result_execution_id is not None:
             self.result_execution_id = self.result_execution_id.strip() or None
@@ -640,6 +646,7 @@ def _proof_gate_for_study(baseline_metrics: dict[str, Any], intelligence: dict[s
         "minimum_safe_trials": 5,
         "minimum_success_rate": baseline_metrics.get("success_rate", 0),
         "minimum_quality_status": "passed",
+        "max_metric_regression_percent": 5,
         "hard_checks": [
             "same_namespace",
             "allowed_kinds",
@@ -647,6 +654,7 @@ def _proof_gate_for_study(baseline_metrics: dict[str, Any], intelligence: dict[s
             "preserve_step_names",
             "preserve_output_contracts",
             "no_secret_or_env_expansion",
+            "no_optimizer_meta_in_candidate_prompts",
             "admin_approval_for_apply",
         ],
         "human_review_triggers": [
@@ -657,6 +665,7 @@ def _proof_gate_for_study(baseline_metrics: dict[str, Any], intelligence: dict[s
         ],
         "promotion_requirements": [
             "positive_cost_or_time_delta",
+            "no_metric_regression_beyond_noise_budget",
             "no_contract_regression",
             "passing_quality_trials",
             "dataset_redaction_complete",
@@ -788,7 +797,7 @@ def _candidate_agent_ref_map(source_workflow: dict[str, Any] | None, candidate_w
     source_steps = _workflow_steps(source_workflow)
     candidate_steps = _workflow_steps(candidate_workflow)
     refs: dict[str, str] = {}
-    for source_step, candidate_step in zip(source_steps, candidate_steps):
+    for source_step, candidate_step in zip(source_steps, candidate_steps, strict=False):
         source_ref = str(source_step.get("agentRef") or "").strip()
         candidate_ref = str(candidate_step.get("agentRef") or "").strip()
         if source_ref and candidate_ref:
@@ -806,7 +815,7 @@ def _collect_sensitive_markers(value: Any, *, path: str = "") -> set[str]:
                 markers.add(normalized_path)
             markers.update(_collect_sensitive_markers(nested, path=normalized_path))
     elif isinstance(value, list):
-        for index, item in enumerate(value):
+        for item in value:
             markers.update(_collect_sensitive_markers(item, path=f"{path}[]"))
     elif isinstance(value, str) and _SECRET_VALUE_RE.search(value):
         markers.add(f"{path}=secret-value")
@@ -822,6 +831,97 @@ def _source_bundle_from_study(study: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(agents, dict):
         bundle.extend([agent for agent in agents.values() if isinstance(agent, dict)])
     return bundle
+
+
+def _workflow_semantic_spec(manifest: dict[str, Any] | None) -> dict[str, Any]:
+    spec = _clone(manifest.get("spec") if isinstance(manifest, dict) and isinstance(manifest.get("spec"), dict) else {})
+    steps = []
+    for step in spec.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        step_copy = _clone(step)
+        step_copy.pop("agentRef", None)
+        steps.append(step_copy)
+    if steps:
+        spec["steps"] = steps
+    return spec
+
+
+def _agent_semantic_spec(manifest: dict[str, Any] | None) -> dict[str, Any]:
+    spec = _clone(manifest.get("spec") if isinstance(manifest, dict) and isinstance(manifest.get("spec"), dict) else {})
+    # Status, metadata, generated resource names, and candidate agentRefs are copy mechanics.
+    # Agent spec changes are product changes and should be visible as effective candidate work.
+    return spec
+
+
+def _candidate_effective_changes(study: dict[str, Any], bundle: list[dict[str, Any]]) -> list[str]:
+    source = study.get("source_manifests") if isinstance(study.get("source_manifests"), dict) else {}
+    source_workflow = source.get("workflow") if isinstance(source.get("workflow"), dict) else None
+    candidate_workflow = _workflow_from_bundle(bundle)
+    changes: list[str] = []
+
+    workflow_paths = _diff_paths(
+        _workflow_semantic_spec(source_workflow),
+        _workflow_semantic_spec(candidate_workflow),
+        "AgentWorkflow.spec",
+    )
+    changes.extend(workflow_paths)
+    if source_workflow and candidate_workflow and _step_signature(source_workflow) != _step_signature(candidate_workflow):
+        changes.append("AgentWorkflow.topology")
+
+    source_agents = source.get("agents") if isinstance(source.get("agents"), dict) else {}
+    candidate_agents = {
+        _manifest_name(manifest): manifest
+        for manifest in bundle
+        if isinstance(manifest, dict) and str(manifest.get("kind") or "") == "AIAgent"
+    }
+    mapped_candidate_names = set()
+    for source_agent_name, candidate_agent_name in _candidate_agent_ref_map(source_workflow, candidate_workflow).items():
+        source_agent = source_agents.get(source_agent_name) if isinstance(source_agents, dict) else None
+        candidate_agent = candidate_agents.get(candidate_agent_name)
+        if candidate_agent:
+            mapped_candidate_names.add(candidate_agent_name)
+        agent_paths = _diff_paths(
+            _agent_semantic_spec(source_agent),
+            _agent_semantic_spec(candidate_agent),
+            f"AIAgent.{source_agent_name}.spec",
+        )
+        changes.extend(agent_paths)
+
+    if source_workflow and candidate_workflow and _step_signature(source_workflow) != _step_signature(candidate_workflow):
+        for candidate_agent_name in sorted(set(candidate_agents) - mapped_candidate_names):
+            changes.append(f"AIAgent.{candidate_agent_name}.topology_agent")
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for change in changes:
+        if not change or change in seen:
+            continue
+        seen.add(change)
+        deduped.append(change)
+    return deduped
+
+
+def _candidate_optimizer_meta_noise(bundle: list[dict[str, Any]]) -> list[dict[str, str]]:
+    noise: list[dict[str, str]] = []
+    for manifest in bundle:
+        if not isinstance(manifest, dict):
+            continue
+        kind = str(manifest.get("kind") or "")
+        resource = f"{kind}/{_manifest_name(manifest)}"
+        spec = manifest.get("spec") if isinstance(manifest.get("spec"), dict) else {}
+        if kind == "AgentWorkflow":
+            for index, step in enumerate(spec.get("steps") or []):
+                if not isinstance(step, dict):
+                    continue
+                prompt = str(step.get("prompt") or "")
+                if _OPTIMIZER_META_PROMPT_RE.search(prompt):
+                    noise.append({"resource": resource, "path": f"spec.steps[{index}].prompt"})
+        elif kind == "AIAgent":
+            system_prompt = str(spec.get("systemPrompt") or "")
+            if _OPTIMIZER_META_PROMPT_RE.search(system_prompt):
+                noise.append({"resource": resource, "path": "spec.systemPrompt"})
+    return noise
 
 
 def _validate_candidate_bundle(
@@ -907,6 +1007,17 @@ def _validate_candidate_bundle(
     if candidate_sensitive - source_sensitive:
         errors.append("secret/env expansion is not allowed in v1 candidates")
 
+    optimizer_meta_noise = _candidate_optimizer_meta_noise(bundle)
+    if optimizer_meta_noise:
+        locations = ", ".join(f"{item['resource']}:{item['path']}" for item in optimizer_meta_noise[:6])
+        errors.append(f"candidate prompts must not include optimizer/ROI Lab meta instructions ({locations})")
+
+    effective_changes = _candidate_effective_changes(study, bundle)
+    if not effective_changes:
+        validation_warnings.append(
+            "Candidate has no effective workflow, prompt, runtime, or topology changes beyond copied resource names; treat it as a no-change control."
+        )
+
     return {
         "valid": not errors,
         "errors": errors,
@@ -914,6 +1025,10 @@ def _validate_candidate_bundle(
         "scope": "prompt_model_tool_topology_v1" if allow_topology_rewrite else "prompt_model_tool_v1",
         "topology_preserved": topology_preserved,
         "topology_rewrite_allowed": allow_topology_rewrite,
+        "effective_change_count": len(effective_changes),
+        "effective_changes": effective_changes[:80],
+        "no_effective_changes": not bool(effective_changes),
+        "optimizer_meta_noise": optimizer_meta_noise,
         "hybrid_gate": (
             "candidate requires approval, safe trials, human contract review, and output-equivalence checks before promotion"
             if allow_topology_rewrite
@@ -1028,16 +1143,12 @@ def _parse_manifest_text(text: str) -> list[dict[str, Any]]:
     if not stripped:
         return documents
 
-    try:
+    with suppress(Exception):
         documents.extend(_manifest_like_documents(json.loads(stripped)))
-    except Exception:
-        pass
 
-    try:
+    with suppress(Exception):
         for document in yaml.safe_load_all(stripped):
             documents.extend(_manifest_like_documents(document))
-    except Exception:
-        pass
 
     return documents
 
@@ -1134,73 +1245,6 @@ def _candidate_bundle_from_source(
     candidate_workflow["spec"] = spec
     bundle.append(candidate_workflow)
     return bundle
-
-
-def _candidate_guidance_lines(study: dict[str, Any], optimizer_output: str | None = None) -> list[str]:
-    raw_opportunities = study.get("opportunities") if isinstance(study.get("opportunities"), list) else []
-    levers = {
-        str(item.get("lever") or item.get("title") or "").strip().lower()
-        for item in raw_opportunities
-        if isinstance(item, dict)
-    }
-    lines = [
-        "Preserve every required output path, schema, marker, step name, and handoff exactly.",
-        "Use already-provided run context and previous step output before reading workspace files.",
-        "Batch deterministic tool work: avoid repeated reads, repeated writes, and noisy progress-only tool calls.",
-        "Do not read a target output file before the first write unless the task explicitly requires it.",
-        "Keep progress planning concise; avoid repeated todowrite-only updates unless they materially change execution.",
-        "Make the first candidate measurable: target lower wall-clock time, lower total tokens, and fewer tool calls while preserving output quality.",
-        "Avoid local regressions: if one step becomes slower or noisier, explain why the global ROI still improves and flag it for review.",
-        "If a workspace artifact is created by the current step, write it once and return the required embedded content for downstream steps.",
-    ]
-    if "context_trim" in levers:
-        lines.append("Keep prompts focused on the current step goal; do not restate full upstream context when a compact summary is enough.")
-    if "tool_batching" in levers:
-        lines.append("Group related file operations and verification into the fewest safe tool calls.")
-    if "cache_hints" in levers:
-        lines.append("Treat stable rules, schemas, and examples as cacheable context; separate them from volatile run data.")
-    if optimizer_output and "model" in optimizer_output.lower():
-        lines.append("Keep the source model unchanged in this v1 candidate; model routing is measured later under a separate approval gate.")
-    return lines
-
-
-def _append_guidance_block(text: str, lines: list[str]) -> str:
-    existing = str(text or "").rstrip()
-    if _ROI_CANDIDATE_GUIDANCE_MARKER in existing:
-        return existing
-    guidance = "\n".join([_ROI_CANDIDATE_GUIDANCE_MARKER, *[f"- {line}" for line in lines]])
-    return f"{existing}\n\n{guidance}".strip()
-
-
-def _apply_roi_candidate_guidance(
-    study: dict[str, Any],
-    bundle: list[dict[str, Any]],
-    *,
-    optimizer_output: str | None = None,
-) -> None:
-    lines = _candidate_guidance_lines(study, optimizer_output=optimizer_output)
-    for manifest in bundle:
-        if not isinstance(manifest, dict):
-            continue
-        spec = manifest.get("spec") if isinstance(manifest.get("spec"), dict) else {}
-        kind = str(manifest.get("kind") or "")
-        if kind == "AgentWorkflow":
-            for step in spec.get("steps") or []:
-                if not isinstance(step, dict):
-                    continue
-                prompt = str(step.get("prompt") or "").strip()
-                if prompt:
-                    step["prompt"] = _append_guidance_block(prompt, lines)
-        elif kind == "AIAgent":
-            system_prompt = str(spec.get("systemPrompt") or "").strip()
-            if system_prompt:
-                spec["systemPrompt"] = _append_guidance_block(
-                    system_prompt,
-                    [
-                        "Follow step-level ROI guidance while preserving workflow behavior.",
-                        "Prefer concise, artifact-focused reasoning and avoid unnecessary verification loops.",
-                    ],
-                )
 
 
 def _candidate_step_execution_overrides(source_step: dict[str, Any], candidate_step: dict[str, Any]) -> dict[str, Any] | None:
@@ -1515,6 +1559,20 @@ def _estimated_delta(candidate: dict[str, Any] | None, key: str) -> float | None
     if expected.get(key) is None:
         return None
     return _round(_as_float(expected.get(key)), 1)
+
+
+def _normalise_expected_savings(expected: dict[str, Any] | None, validation: dict[str, Any]) -> dict[str, Any]:
+    candidate_expected = _clone(expected) if isinstance(expected, dict) else {}
+    if validation.get("no_effective_changes"):
+        return {
+            "duration_saved_percent": 0,
+            "tokens_saved_percent": 0,
+            "tool_calls_saved_percent": 0,
+            "cost_saved_percent": 0,
+            "confidence": "control",
+            "reason": "No effective manifest changes were detected; this candidate is a control copy until the optimizer produces a real diff.",
+        }
+    return candidate_expected
 
 
 def _comparison_scorecard(
@@ -2000,16 +2058,26 @@ def _compute_roi(study: dict[str, Any], candidate_id: str | None = None, *, sync
     baseline_metrics = study.get("baseline_metrics") or {}
     proof_gate = study.get("proof_gate") if isinstance(study.get("proof_gate"), dict) else {}
     minimum_safe_trials = int(proof_gate.get("minimum_safe_trials") or 1)
-    deltas = {
+    rollup_deltas = {
         "duration_saved_percent": _saved_percent(baseline_metrics.get("avg_duration_ms"), candidate_metrics.get("avg_duration_ms")),
         "tokens_saved_percent": _saved_percent(baseline_metrics.get("avg_tokens"), candidate_metrics.get("avg_tokens")),
         "cost_saved_percent": _saved_percent(baseline_metrics.get("avg_cost_usd"), candidate_metrics.get("avg_cost_usd")),
         "tool_calls_saved_percent": _saved_percent(baseline_metrics.get("avg_tool_calls"), candidate_metrics.get("avg_tool_calls")),
     }
+    trial_rows = _trial_comparison_rows(trials)
+    paired_trial_deltas = _average_trial_deltas(trial_rows)
+    deltas = paired_trial_deltas or rollup_deltas
+    max_regression = abs(float(proof_gate.get("max_metric_regression_percent") or 5))
+    regression_deltas = {
+        key: value
+        for key, value in deltas.items()
+        if _as_float(value) < -max_regression
+    }
     verified = bool(
         len(passing_trials) >= minimum_safe_trials
         and candidate_metrics["sample_count"] > 0
         and candidate_metrics["success_rate"] >= float(baseline_metrics.get("success_rate") or 0)
+        and not regression_deltas
         and (deltas["tokens_saved_percent"] > 0 or deltas["duration_saved_percent"] > 0 or deltas["cost_saved_percent"] > 0)
     )
     monthly_runs = max(int(baseline_metrics.get("sample_count") or 0) * 20, 1)
@@ -2033,6 +2101,8 @@ def _compute_roi(study: dict[str, Any], candidate_id: str | None = None, *, sync
         proof_status = "verified"
     elif candidate_metrics["sample_count"] == 0:
         proof_status = "pending_trials"
+    elif regression_deltas:
+        proof_status = "regression"
     elif len(passing_trials) < minimum_safe_trials:
         proof_status = "needs_more_trials"
     else:
@@ -2046,6 +2116,9 @@ def _compute_roi(study: dict[str, Any], candidate_id: str | None = None, *, sync
         "baseline_metrics": baseline_metrics,
         "candidate_metrics": candidate_metrics,
         "deltas": deltas,
+        "rollup_deltas": rollup_deltas,
+        "metric_source": "paired_trials" if paired_trial_deltas is not None else "study_rollup",
+        "regression_deltas": regression_deltas,
         "trial_count": len(trials),
         "passing_trial_count": len(passing_trials),
         "projected_savings": projected,
@@ -2176,7 +2249,7 @@ def _wait_for_candidate_agents_ready(
     custom_api = client.CustomObjectsApi()
     core_api = client.CoreV1Api()
     pending = set(names)
-    readiness: dict[str, str] = {name: "pending" for name in names}
+    readiness: dict[str, str] = dict.fromkeys(names, "pending")
     deadline = time.monotonic() + timeout_seconds
 
     while pending and time.monotonic() < deadline:
@@ -2380,6 +2453,11 @@ def _sync_candidate_trial_results(study: dict[str, Any], candidate_id: str | Non
                     limit=1,
                 )
             except Exception:
+                logger.debug(
+                    "Skipping candidate trial sync lookup for workflow %s",
+                    workflow_name,
+                    exc_info=True,
+                )
                 continue
             if not summaries:
                 continue
@@ -2654,7 +2732,7 @@ def create_candidate(study_id: str, body: CreateCandidateRequest, user: dict[str
         manifest_diff=_manifest_diff(study, manifest_bundle),
         optimizer_output=body.optimizer_output,
         validation_results=validation,
-        expected_savings=body.expected_savings,
+        expected_savings=_normalise_expected_savings(body.expected_savings, validation),
         created_by=_principal(user),
     )
 
@@ -2679,6 +2757,9 @@ def generate_candidate(study_id: str, body: GenerateCandidateRequest, user: dict
             suffix,
             body.optimizer_output,
             allow_topology_rewrite=body.allow_topology_rewrite,
+        )
+        validation_warnings.append(
+            "Optimizer output did not include a parseable candidate_manifest_bundle; generated a no-change control candidate."
         )
     else:
         bundle, validation_warnings = generated
@@ -2729,7 +2810,7 @@ def generate_candidate(study_id: str, body: GenerateCandidateRequest, user: dict
         manifest_diff=_manifest_diff(study, bundle),
         optimizer_output=body.optimizer_output,
         validation_results=validation,
-        expected_savings=body.expected_savings,
+        expected_savings=_normalise_expected_savings(body.expected_savings, validation),
         created_by=_principal(user),
     )
 

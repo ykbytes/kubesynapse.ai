@@ -22,8 +22,9 @@ const checks = [
     name: "optimizer prompt has a runtime safety budget",
     pass:
       source.includes("OPTIMISE_PROMPT_MAX_CHARS") &&
+      source.includes("const OPTIMISE_PROMPT_MAX_CHARS = 48_000") &&
       source.includes("buildRuntimeSafeOptimisationPrompt") &&
-      source.includes("Prompt compacted to fit the opencode runtime"),
+      source.includes("Prompt compacted to keep optimizer analysis responsive"),
   },
   {
     name: "ROI study failure message distinguishes agent invoke failures",
@@ -121,6 +122,15 @@ const checks = [
       source.includes("The source workflow and source agents must not become aware of ROI Lab") &&
       source.includes("Topology rewrite mode") &&
       apiSource.includes("allow_topology_rewrite"),
+  },
+  {
+    name: "optimizer prompt references attached ROI optimization skills",
+    pass:
+      source.includes("critical-path-roi") &&
+      source.includes("context-compression") &&
+      source.includes("tool-economy") &&
+      source.includes("regression-proof-gate") &&
+      source.includes("no-change control candidate"),
   },
   {
     name: "optimizer UI keeps secondary analysis in collapsible panels",

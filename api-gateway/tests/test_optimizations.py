@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
-from sqlalchemy import create_engine, inspect, text
-
 import optimization_store
+import yaml
+from sqlalchemy import create_engine, inspect, text
 
 _TRACE_FIXTURES: dict[str, dict] = {}
 
@@ -445,11 +446,70 @@ def test_generate_candidate_fallback_copies_manifests_without_roi_prompt_injecti
     assert "[ROI Candidate Guidance]" not in agent["spec"]["systemPrompt"]
     assert agent["spec"]["systemPrompt"] == "You write daily standup reports."
     assert agent["spec"]["model"] == "opencode/deepseek-v4-flash-free"
+    assert candidate["validation_results"]["no_effective_changes"] is True
+    assert candidate["expected_savings"]["confidence"] == "control"
+    assert candidate["expected_savings"]["duration_saved_percent"] == 0
 
     with _optimization_api_context():
         refreshed = client.get(f"/api/v1/optimizations/studies/{study['id']}", headers=auth_headers).json()
     assert refreshed["source_manifests"]["workflow"]["spec"]["steps"][0]["prompt"] == "Read git and Jira context, then write standup.md."
     assert refreshed["source_manifests"]["agents"]["daily-standup"]["spec"]["systemPrompt"] == "You write daily standup reports."
+
+
+def test_generate_candidate_rejects_optimizer_meta_inside_candidate_prompts(client, auth_headers) -> None:
+    baseline_id = _seed_execution(execution_id="exec-opt-meta-noise")
+
+    with _optimization_api_context(manifests=True):
+        study = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={"namespace": "default", "workflow_name": "daily-standup", "baseline_execution_ids": [baseline_id]},
+        ).json()
+
+    optimizer_output = """
+```yaml
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: daily-standup
+  namespace: default
+spec:
+  model: opencode/deepseek-v4-flash-free
+  runtime:
+    kind: opencode
+  systemPrompt: |
+    [ROI Candidate Guidance]
+    You are running inside ROI Lab. Beat the baseline-vs-candidate trial.
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: daily-standup
+  namespace: default
+spec:
+  input: Generate a daily standup.
+  steps:
+    - name: summarise
+      type: agent
+      agentRef: daily-standup
+      prompt: Write standup.md.
+```
+"""
+
+    with _optimization_api_context():
+        response = client.post(
+            f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
+            headers=auth_headers,
+            json={"optimizer_output": optimizer_output, "suffix": "opt-meta"},
+        )
+
+    assert response.status_code == 201, response.json()
+    candidate = response.json()
+    serialized_bundle = str(candidate["manifest_bundle"])
+    assert "[ROI Candidate Guidance]" not in serialized_bundle
+    assert "baseline-vs-candidate" not in serialized_bundle
+    assert candidate["validation_results"]["no_effective_changes"] is True
+    assert any("optimizer/roi lab meta" in warning.lower() for warning in candidate["validation_results"]["warnings"])
 
 
 def test_generate_candidate_uses_optimizer_manifest_copy_without_mutating_source(client, auth_headers) -> None:
@@ -519,6 +579,8 @@ spec:
     assert "avoid repeating the same workspace scan" in workflow["spec"]["steps"][0]["prompt"]
     assert agent["spec"]["model"] == "opencode/deepseek-v4-flash-free"
     assert "Avoid rereading unchanged files" in agent["spec"]["systemPrompt"]
+    assert candidate["validation_results"]["no_effective_changes"] is False
+    assert "AIAgent.daily-standup.spec.systemPrompt" in candidate["validation_results"]["effective_changes"]
 
     with _optimization_api_context():
         refreshed = client.get(f"/api/v1/optimizations/studies/{study['id']}", headers=auth_headers).json()
@@ -901,6 +963,65 @@ def test_candidate_lifecycle_approval_trials_and_verified_roi(client, auth_heade
     assert data["candidate_metrics"]["success_rate"] == 1.0
 
 
+def test_roi_marks_regression_when_candidate_trials_are_slower(client, auth_headers) -> None:
+    baseline_id = _seed_execution(
+        execution_id="exec-opt-regress-base",
+        duration_ms=100_000,
+        tokens=2_000,
+        cost_usd=0.08,
+        tool_calls=8,
+    )
+    candidate_execution_ids = [
+        _seed_execution(
+            execution_id=f"exec-opt-regress-candidate-{index}",
+            workflow_name="daily-standup-opt-regress",
+            duration_ms=150_000,
+            tokens=1_500,
+            cost_usd=0.06,
+            tool_calls=6,
+        )
+        for index in range(5)
+    ]
+
+    with _optimization_api_context(manifests=True):
+        study = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={"namespace": "default", "workflow_name": "daily-standup", "baseline_execution_ids": [baseline_id]},
+        ).json()
+
+    with _optimization_api_context():
+        candidate = client.post(
+            f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
+            headers=auth_headers,
+            json={"optimizer_output": "trim repeated context", "suffix": "opt-regress"},
+        ).json()
+        client.post(
+            f"/api/v1/optimizations/candidates/{candidate['id']}/approval",
+            headers=auth_headers,
+            json={"decision": "approved", "reason": "Regression test candidate."},
+        )
+        for candidate_execution_id in candidate_execution_ids:
+            client.post(
+                f"/api/v1/optimizations/candidates/{candidate['id']}/trials",
+                headers=auth_headers,
+                json={
+                    "baseline_execution_id": baseline_id,
+                    "result_execution_id": candidate_execution_id,
+                    "quality_status": "passed",
+                },
+            )
+        roi = client.get(f"/api/v1/optimizations/studies/{study['id']}/roi", headers=auth_headers)
+
+    assert roi.status_code == 200
+    payload = roi.json()
+    assert payload["verified"] is False
+    assert payload["proof_status"] == "regression"
+    assert payload["metric_source"] == "paired_trials"
+    assert payload["deltas"]["duration_saved_percent"] == -50.0
+    assert payload["regression_deltas"]["duration_saved_percent"] == -50.0
+
+
 def test_roi_comparison_exposes_trials_steps_tools_and_manifest_diff(client, auth_headers) -> None:
     baseline_ids = [
         _seed_execution(
@@ -984,7 +1105,7 @@ def test_roi_comparison_exposes_trials_steps_tools_and_manifest_diff(client, aut
     assert duration_metric["baseline_value"] == 100_000.0
     assert duration_metric["candidate_value"] == 55_000.0
     assert duration_metric["actual_delta_percent"] == 45.0
-    assert duration_metric["estimated_delta_percent"] is None
+    assert duration_metric["estimated_delta_percent"] == 0.0
     tool_metric = next(item for item in scorecard["metrics"] if item["key"] == "tool_calls_saved_percent")
     assert tool_metric["actual_delta_percent"] == 50.0
     assert scorecard["next_action"] == "run_more_trials"
@@ -1324,3 +1445,18 @@ def test_dataset_export_redacts_secrets_and_keeps_trace_labels(client, auth_head
     assert dataset["redaction_report"]["state"] == "redacted"
     assert any(record["record_type"] == "llm_call" for record in dataset["training_records"])
     assert dataset["evaluation_records"][0]["quality_label"] == "baseline_success"
+
+
+def test_optimizer_agent_manifest_declares_roi_optimization_skills() -> None:
+    path = Path(__file__).resolve().parents[2] / "examples" / "daily-standup-bot" / "optimizer-agent.yaml"
+    manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+    skills = (((manifest.get("spec") or {}).get("skills") or {}).get("files") or {})
+
+    assert manifest["metadata"]["name"] == "workflow-optimizer"
+    assert len(skills) >= 5
+    skill_text = "\n".join(str(value) for value in skills.values())
+    assert "critical-path-roi" in skill_text
+    assert "context-compression" in skill_text
+    assert "tool-economy" in skill_text
+    assert "topology-rewrite" in skill_text
+    assert "regression-proof-gate" in skill_text
