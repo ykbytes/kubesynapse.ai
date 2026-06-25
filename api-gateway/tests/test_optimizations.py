@@ -392,6 +392,9 @@ def test_candidate_validation_allows_topology_rewrite_only_when_explicit(client,
     assert candidate["validation_results"]["valid"] is True
     assert candidate["validation_results"]["scope"] == "prompt_model_tool_topology_v1"
     assert candidate["validation_results"]["topology_preserved"] is False
+    assert candidate["validation_results"]["optimizer_audit"]["topology_decision"]["decision"] == "rewritten"
+    assert candidate["validation_results"]["optimizer_audit"]["topology_decision"]["rewrite_produced"] is True
+    assert "topology-rewrite" in candidate["validation_results"]["optimizer_audit"]["skills_requested"]
     assert candidate["manifest_diff"]["topology"]["preserved"] is False
     workflow = next(manifest for manifest in candidate["manifest_bundle"] if manifest["kind"] == "AgentWorkflow")
     assert workflow["metadata"]["labels"]["kubesynapse.ai/topology-rewrite"] == "allowed"
@@ -756,6 +759,89 @@ spec:
     )
     assert extra_agent["metadata"]["labels"]["kubesynapse.ai/topology-rewrite"] == "allowed"
     assert candidate["validation_results"]["topology_rewrite_allowed"] is True
+
+
+def test_generate_candidate_records_optimizer_audit_when_topology_rewrite_preserves_graph(client, auth_headers) -> None:
+    baseline_id = _seed_execution(execution_id="exec-opt-audit-preserve-topology")
+
+    with _optimization_api_context(manifests=True):
+        study = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={"namespace": "default", "workflow_name": "daily-standup", "baseline_execution_ids": [baseline_id]},
+        ).json()
+
+    optimizer_output = """
+The optimizer evaluated a single-agent consolidation and rejected it because the source contract needs the existing handoff for review.
+
+```json
+{
+  "optimizer_decision_record": {
+    "skills_used": ["critical-path-roi", "context-compression", "topology-rewrite", "regression-proof-gate"],
+    "resources_used": ["baseline traces", "AgentWorkflow/daily-standup", "AIAgent/daily-standup"],
+    "topology_decision": {"decision": "preserve", "reason": "single-step source already has no safe topology reduction"},
+    "topology_equivalence_map": [{"source_step": "summarise", "candidate_responsibility": "summarise"}],
+    "candidate_strategy": "Trim context and repeated tool reads while preserving the step graph.",
+    "regression_budget": {"duration_regression_percent": 0},
+    "rejected_options": ["No fewer-step candidate exists for a one-step workflow."]
+  }
+}
+```
+
+```yaml
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: daily-standup
+  namespace: default
+spec:
+  model: opencode/deepseek-v4-flash-free
+  runtime:
+    kind: opencode
+  systemPrompt: >
+    Produce the standup artifact using already loaded Git and Jira summaries.
+    Read each source artifact at most once, then write standup.md once.
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: daily-standup
+  namespace: default
+spec:
+  input: Generate a daily standup.
+  steps:
+    - name: summarise
+      type: agent
+      agentRef: daily-standup
+      prompt: >
+        Read known Git and Jira inputs once, reuse summaries, and write standup.md.
+```
+"""
+
+    with _optimization_api_context():
+        response = client.post(
+            f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
+            headers=auth_headers,
+            json={"optimizer_output": optimizer_output, "suffix": "opt-audit", "allow_topology_rewrite": True},
+        )
+
+    assert response.status_code == 201, response.json()
+    candidate = response.json()
+    validation = candidate["validation_results"]
+    audit = validation["optimizer_audit"]
+    assert validation["valid"] is True
+    assert validation["topology_preserved"] is True
+    assert any("topology rewrite was allowed" in warning.lower() for warning in validation["warnings"])
+    assert audit["private_reasoning"] == "not_exposed"
+    assert audit["topology_decision"]["mode"] == "allow_topology_rewrite"
+    assert audit["topology_decision"]["decision"] == "preserved_after_review"
+    assert audit["topology_decision"]["rewrite_produced"] is False
+    assert "topology-rewrite" in audit["skills_requested"]
+    assert "topology-rewrite" in audit["skills_used"]
+    assert audit["parsed_blocks"]["optimizer_decision_record"] is True
+    assert audit["parsed_blocks"]["candidate_manifest_bundle"] is True
+    assert audit["resources_used"]["source_agent_refs"] == ["daily-standup"]
+    assert "single-agent consolidation" in audit["visible_response_excerpt"]
 
 
 def test_generate_candidate_recovers_from_incomplete_optimizer_manifest(client, auth_headers) -> None:

@@ -1078,6 +1078,7 @@ type OptimisationPacket = {
     required_for_apply: string[];
     least_privilege_notes: string[];
   };
+  optimizer_workbench: Record<string, unknown>;
   run_intelligence: Record<string, unknown>;
   run_history: Array<Record<string, unknown>>;
   opportunity_map: Array<Record<string, unknown>>;
@@ -1406,6 +1407,58 @@ function buildOptimisationPacket({
         "Candidate resources should be deployed as copies and cleaned up after comparison runs.",
       ],
     },
+    optimizer_workbench: {
+      skills_available: [
+        {
+          name: "critical-path-roi",
+          purpose: "Rank bottlenecks by critical-path time, token pressure, tool churn, variance, and safety.",
+        },
+        {
+          name: "context-compression",
+          purpose: "Compress prompts and context while preserving schemas, artifacts, and handoff contracts.",
+        },
+        {
+          name: "tool-economy",
+          purpose: "Reduce repeated reads/writes, unnecessary planning tool churn, and deterministic tool loops.",
+        },
+        {
+          name: "topology-rewrite",
+          purpose: topologyMode === "allow_topology_rewrite"
+            ? "Evaluate safe step/agent consolidation, split, removal, or reorder options before selecting the candidate."
+            : "Disabled for this study; topology must be preserved.",
+        },
+        {
+          name: "regression-proof-gate",
+          purpose: "Define paired trial proof, quality gates, regression budgets, and rollback criteria.",
+        },
+      ],
+      audit_requirements: {
+        visible_decision_record_only: true,
+        do_not_emit_private_chain_of_thought: true,
+        required_blocks: ["optimizer_decision_record", "roi_hypothesis", "change_log", "candidate_manifest_bundle"],
+        required_decision_fields: [
+          "skills_used",
+          "resources_used",
+          "topology_decision",
+          "topology_equivalence_map",
+          "candidate_strategy",
+          "regression_budget",
+        ],
+      },
+      topology_search: topologyMode === "allow_topology_rewrite"
+        ? {
+            required: true,
+            instruction: "Evaluate at least one fewer-step/fewer-agent topology candidate. Return it when behavior equivalence is safe; otherwise explain the concrete contract or safety blocker.",
+            candidate_examples: [
+              "merge read-only analysis steps that share tools and produce one final artifact",
+              "keep isolated steps when they represent approval, side-effect, retry, or security boundaries",
+            ],
+          }
+        : {
+            required: false,
+            instruction: "Preserve step names, order, types, and handoffs.",
+          },
+    },
     run_intelligence: {
       title: "Workflow run intelligence dossier",
       sample: {
@@ -1635,6 +1688,7 @@ function buildOptimisationPromptBody(packet: OptimisationPacket, compacted: bool
     "Goal: analyse the provided execution traces and Kubernetes manifests, then propose an optimized copy of the workflow and agent manifests that reduces latency, token spend, tool churn, and failure risk while preserving the workflow contract.",
     "Think like an enterprise workflow ROI engineer: every proposed change must have an evidence source, an expected metric impact, a contract-risk assessment, and a safe trial plan.",
     "Use the optimizer agent's attached skills before writing manifests: critical-path-roi, context-compression, tool-economy, topology-rewrite only when allowed, and regression-proof-gate.",
+    "Expose a concise decision record, not private chain-of-thought. The UI will show your visible response, skills used, resources used, and topology decision for audit.",
     "Borrow the discipline of GEPA/DSPy-style trace reflection, LLMLingua-style context compression, FrugalGPT-style routing economics, prompt-cache layout, and tau-bench-style repeated reliability, but express the result as KubeSynapse manifests.",
     "",
     "Rules:",
@@ -1652,6 +1706,9 @@ function buildOptimisationPromptBody(packet: OptimisationPacket, compacted: bool
     topologyRewrite
       ? "- If you rewrite topology, explain why the new topology is behavior-equivalent and list every original capability preserved by the candidate."
       : "- Prefer prompt/context/tool-use improvements; structural rewrites are out of scope for this study.",
+    topologyRewrite
+      ? "- Because topology rewrite is explicitly enabled, evaluate at least one fewer-step or fewer-agent candidate before deciding. If it is safe, return that topology-rewritten candidate; if not, include the concrete blocker in optimizer_decision_record. Do not preserve topology by default just because it is lower effort."
+      : "- Do not evaluate or return fewer-step/fewer-agent candidates in this mode.",
     "- Preserve the source agents' provider and model exactly in v1; do not route to a different model family.",
     "- If you cannot make a safe effective change, return a no-change control candidate with zero expected savings and explain what extra evidence is needed.",
     "- Do not add ROI Lab, optimizer, candidate-trial, benchmark, expected_metric_delta, baseline-vs-candidate, or savings-analysis text to target workflow prompts or agent system prompts.",
@@ -1670,6 +1727,10 @@ function buildOptimisationPromptBody(packet: OptimisationPacket, compacted: bool
     "- Keep metadata names as the source names in your YAML. The gateway creates suffixed copied resources and rewrites agentRefs.",
     "",
     "Required machine-readable blocks:",
+    "- Include a fenced JSON block headed `optimizer_decision_record` with keys: skills_used, resources_used, topology_decision, topology_equivalence_map, candidate_strategy, regression_budget, rejected_options. Keep this concise; do not include private chain-of-thought.",
+    topologyRewrite
+      ? "- optimizer_decision_record.topology_decision must say whether you returned a topology-rewritten candidate or preserved topology after rejecting a consolidation option, and why."
+      : "- optimizer_decision_record.topology_decision must confirm topology preservation was required by the study mode.",
     "- Include a fenced JSON block headed `roi_hypothesis` with keys: expected_metric_delta, confidence, evidence_execution_ids, target_steps, target_tools, quality_gate, rollback_plan.",
     "- expected_metric_delta must use these keys when applicable: duration_saved_percent, tokens_saved_percent, tool_calls_saved_percent, cost_saved_percent.",
     "- Include a Markdown `change_log` table with columns: resource, path, original intent, candidate change, expected impact, contract risk.",
@@ -1677,12 +1738,13 @@ function buildOptimisationPromptBody(packet: OptimisationPacket, compacted: bool
     "Return Markdown with these sections:",
     "1. Executive recommendation with estimated ROI and confidence.",
     "2. Ranked bottlenecks with evidence from step, LLM, tool, event, and manifest data.",
-    "3. roi_hypothesis fenced JSON.",
-    "4. change_log table.",
-    "5. Prompt edits per step or agent, written as ready-to-review snippets.",
-    "6. candidate_manifest_bundle fenced YAML for copied workflow/agent resources.",
-    "7. Trial plan: baseline, candidate execution, comparison criteria, quality gate, rollback, cleanup.",
-    "8. RBAC and approval requirements for any deployment-capable agent.",
+    "3. optimizer_decision_record fenced JSON.",
+    "4. roi_hypothesis fenced JSON.",
+    "5. change_log table.",
+    "6. Prompt edits per step or agent, written as ready-to-review snippets.",
+    "7. candidate_manifest_bundle fenced YAML for copied workflow/agent resources.",
+    "8. Trial plan: baseline, candidate execution, comparison criteria, quality gate, rollback, cleanup.",
+    "9. RBAC and approval requirements for any deployment-capable agent.",
     "",
     compacted ? "Runtime note: Prompt compacted to keep optimizer analysis responsive; raw traces and manifests remain available in the UI inspectors and persisted ROI study." : "",
     compacted ? "" : "",
@@ -1724,6 +1786,26 @@ function normaliseOptimizerStringList(value: unknown): string[] {
     return Object.values(value).map(clean).filter(Boolean).slice(0, 8);
   }
   return [];
+}
+
+function readOptimizerRecord(value: unknown): Record<string, unknown> {
+  return isPlainObject(value) ? value : {};
+}
+
+function optimizerAuditFromValidation(validation: Record<string, unknown>): Record<string, unknown> {
+  return readOptimizerRecord(validation.optimizer_audit);
+}
+
+function optimizerAuditList(value: unknown, limit = 8): string[] {
+  return normaliseOptimizerStringList(value).slice(0, limit);
+}
+
+function optimizerAuditDisplay(value: unknown, fallback = "--"): string {
+  if (typeof value === "string" && value.trim()) return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value.toLocaleString();
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (Array.isArray(value)) return value.length > 0 ? value.map((item) => String(item)).join(", ") : fallback;
+  return fallback;
 }
 
 function extractOptimiserExpectedSavings(response: string | null | undefined): Record<string, unknown> {
@@ -1791,6 +1873,28 @@ function buildGuardedOptimizerFallbackOutput(
     },
     rollback_plan: "Do not promote this fallback until a real optimizer analysis or verified safe trials prove ROI.",
   };
+  const decisionRecord = {
+    skills_used: ["critical-path-roi", "regression-proof-gate"],
+    resources_used: {
+      source_workflow: packet.workflow_name,
+      baseline_execution_ids: study.baseline_execution_ids,
+      source_agent_refs: packet.source_manifests.agent_refs,
+      trace_count: packet.trace_details.length,
+    },
+    topology_decision: {
+      mode: packet.optimization_mode,
+      decision: "safe_fallback_control",
+      reason,
+    },
+    topology_equivalence_map: [],
+    candidate_strategy: "Create a safe copied control candidate because optimizer analysis did not complete.",
+    regression_budget: {
+      duration_regression_percent: 0,
+      tokens_regression_percent: 0,
+      tool_calls_regression_percent: 0,
+    },
+    rejected_options: ["No optimizer-produced candidate was available to validate."],
+  };
   return [
     "# Guarded fallback optimizer dossier",
     "",
@@ -1799,6 +1903,12 @@ function buildGuardedOptimizerFallbackOutput(
     `Failure reason: ${reason}`,
     "",
     "This fallback intentionally avoids editing workflow prompts, agent prompts, topology, models, secrets, RBAC, or runtime settings. It keeps the study and candidate visible so an admin can inspect manifests, retry analysis, or run a no-change control trial.",
+    "",
+    "## optimizer_decision_record",
+    "",
+    "```json",
+    JSON.stringify({ optimizer_decision_record: decisionRecord }, null, 2),
+    "```",
     "",
     "```json",
     JSON.stringify({ roi_hypothesis: hypothesis }, null, 2),
@@ -2508,6 +2618,26 @@ function OptimisePanel({
   const datasetReadiness = intelligence?.dataset_readiness ?? null;
   const proofGate = roi?.proof_gate ?? study?.proof_gate ?? {};
   const validation = activeCandidate?.validation_results ?? {};
+  const optimizerAudit = optimizerAuditFromValidation(validation);
+  const optimizerAuditTopology = readOptimizerRecord(optimizerAudit.topology_decision);
+  const optimizerAuditResources = readOptimizerRecord(optimizerAudit.resources_used);
+  const optimizerAuditParsedBlocks = readOptimizerRecord(optimizerAudit.parsed_blocks);
+  const optimizerAuditDecisionRecord = readOptimizerRecord(optimizerAudit.decision_record);
+  const optimizerAuditCandidateGeneration = readOptimizerRecord(optimizerAudit.candidate_generation);
+  const optimizerVisibleResponse = activeCandidate?.optimizer_output || result?.response || "";
+  const optimizerAuditSkills = optimizerAuditList(
+    optimizerAudit.skills_used ?? optimizerAuditDecisionRecord.skills_used ?? optimizerAudit.skills_requested,
+    10,
+  );
+  const optimizerAuditRequestedSkills = optimizerAuditList(optimizerAudit.skills_requested, 10);
+  const optimizerAuditResourceRows = [
+    ["Workflow", optimizerAuditResources.source_workflow],
+    ["Candidate", optimizerAuditResources.candidate_workflow],
+    ["Baseline traces", optimizerAuditResources.baseline_trace_count],
+    ["Source agents", optimizerAuditResources.source_agent_refs],
+    ["Loaded manifests", optimizerAuditResources.loaded_agent_manifests],
+    ["Optimizer agent", optimizerAuditResources.optimizer_agent],
+  ] as Array<[string, unknown]>;
   const manifestDiff = activeCandidate?.manifest_diff ?? {};
   const validationErrors = Array.isArray(validation.errors) ? validation.errors.map(String) : [];
   const validationWarnings = Array.isArray(validation.warnings) ? validation.warnings.map(String) : [];
@@ -2873,8 +3003,8 @@ function OptimisePanel({
                 Evidence
               </TabsTrigger>
               <TabsTrigger value="agent" className="h-7 gap-1.5 px-3 text-xs">
-                <Bot className="h-3.5 w-3.5" />
-                Agent
+                <BrainCircuit className="h-3.5 w-3.5" />
+                Audit
               </TabsTrigger>
             </TabsList>
 
@@ -3557,6 +3687,122 @@ function OptimisePanel({
             </main>
 
             <aside className={cn("space-y-3", !showAgentTab && "hidden")}>
+              <section className="rounded-lg border border-primary/20 bg-primary/5 p-3">
+                <div className="mb-2 flex items-start justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                      <BrainCircuit className="h-4 w-4 text-primary" />
+                      Optimizer decision audit
+                    </div>
+                    <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground">
+                      Visible response, skills, resources, and topology decision. Private model chain-of-thought is not exposed.
+                    </p>
+                  </div>
+                  <Badge variant="outline" className={cn(
+                    "h-5 shrink-0 text-[9px]",
+                    optimizerAuditTopology.rewrite_produced === true
+                      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                      : allowTopologyRewrite
+                        ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                        : "border-border/50",
+                  )}>
+                    {optimizerAuditDisplay(optimizerAuditTopology.decision, activeCandidate ? "audit pending" : "no candidate")}
+                  </Badge>
+                </div>
+
+                {activeCandidate || optimizerVisibleResponse ? (
+                  <div className="space-y-2">
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <div className="rounded-md border border-border/40 bg-background/75 p-2">
+                        <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Topology</div>
+                        <div className="mt-1 text-xs font-semibold text-foreground">
+                          {optimizerAuditDisplay(optimizerAuditTopology.mode, topologyMode)}
+                        </div>
+                        <p className="mt-1 line-clamp-3 text-[10px] leading-4 text-muted-foreground">
+                          {optimizerAuditDisplay(optimizerAuditTopology.reason, allowTopologyRewrite ? "Topology rewrite was allowed for this run." : "Topology preservation was required.")}
+                        </p>
+                      </div>
+                      <div className="rounded-md border border-border/40 bg-background/75 p-2">
+                        <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Generation</div>
+                        <div className="mt-1 text-xs font-semibold text-foreground">
+                          {optimizerAuditDisplay(optimizerAuditCandidateGeneration.status, activeCandidate?.status ?? "--")}
+                        </div>
+                        <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+                          {optimizerAuditDisplay(optimizerAuditCandidateGeneration.effective_change_count ?? validation.effective_change_count, "0")} effective changes · {optimizerAuditDisplay(optimizerAudit.visible_response_available, optimizerVisibleResponse ? "yes" : "no")} visible response
+                        </p>
+                      </div>
+                    </div>
+
+                    <details className="rounded-md border border-border/40 bg-background/75 p-2" open>
+                      <summary className="cursor-pointer list-none text-xs font-semibold text-foreground">Skills and resources</summary>
+                      <div className="mt-2 space-y-2">
+                        <div>
+                          <div className="mb-1 text-[10px] font-medium text-muted-foreground">Skills used or referenced</div>
+                          <div className="flex flex-wrap gap-1">
+                            {(optimizerAuditSkills.length > 0 ? optimizerAuditSkills : optimizerAuditRequestedSkills).map((skill) => (
+                              <Badge key={skill} variant="outline" className="h-5 text-[9px]">{skill}</Badge>
+                            ))}
+                            {optimizerAuditSkills.length === 0 && optimizerAuditRequestedSkills.length === 0 && (
+                              <span className="text-[10px] text-muted-foreground">Run a study to capture skill usage.</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="grid gap-1.5 sm:grid-cols-2">
+                          {optimizerAuditResourceRows.map(([label, value]) => (
+                            <div key={label} className="rounded border border-border/35 bg-muted/20 px-2 py-1.5">
+                              <div className="text-[9px] uppercase tracking-wide text-muted-foreground">{label}</div>
+                              <div className="mt-0.5 truncate text-[10px] font-medium text-foreground">{optimizerAuditDisplay(value)}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </details>
+
+                    <details className="rounded-md border border-border/40 bg-background/75 p-2">
+                      <summary className="cursor-pointer list-none text-xs font-semibold text-foreground">Decision record</summary>
+                      <div className="mt-2 grid gap-2 text-[10px]">
+                        <div className="rounded border border-border/35 bg-muted/20 p-2">
+                          <div className="font-medium text-foreground">Candidate strategy</div>
+                          <div className="mt-1 text-muted-foreground">{optimizerAuditDisplay(optimizerAuditDecisionRecord.candidate_strategy, String(optimizerAudit.summary ?? "No structured strategy captured yet."))}</div>
+                        </div>
+                        <div className="rounded border border-border/35 bg-muted/20 p-2">
+                          <div className="font-medium text-foreground">Parsed output blocks</div>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {Object.entries(optimizerAuditParsedBlocks).length > 0 ? Object.entries(optimizerAuditParsedBlocks).map(([key, value]) => (
+                              <Badge key={key} variant="outline" className={cn("h-5 text-[9px]", value === true && "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300")}>
+                                {key.replace(/_/g, " ")} · {value ? "yes" : "no"}
+                              </Badge>
+                            )) : <span className="text-muted-foreground">No structured blocks captured yet.</span>}
+                          </div>
+                        </div>
+                        {Object.keys(optimizerAuditDecisionRecord).length > 0 && (
+                          <pre className="max-h-56 overflow-auto rounded border border-border/35 bg-background/90 p-2 text-[10px] leading-relaxed whitespace-pre-wrap text-foreground/90">
+                            {JSON.stringify(optimizerAuditDecisionRecord, null, 2)}
+                          </pre>
+                        )}
+                      </div>
+                    </details>
+
+                    <details className="rounded-md border border-border/40 bg-background/75 p-2">
+                      <summary className="cursor-pointer list-none text-xs font-semibold text-foreground">Visible optimizer response</summary>
+                      {optimizerVisibleResponse ? (
+                        <pre className="mt-2 max-h-[34rem] overflow-auto rounded-md border border-border/30 bg-background/90 p-2 text-[10px] leading-relaxed whitespace-pre-wrap text-foreground/90">
+                          {optimizerVisibleResponse}
+                        </pre>
+                      ) : (
+                        <div className="mt-2 rounded border border-dashed border-border/50 p-4 text-center text-[11px] text-muted-foreground">
+                          Run a study to capture the optimizer response.
+                        </div>
+                      )}
+                    </details>
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-dashed border-border/50 p-5 text-center text-xs text-muted-foreground">
+                    Run a study to capture the optimizer audit.
+                  </div>
+                )}
+              </section>
+
               <section className="rounded-lg border border-border/50 bg-card/45 p-3">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
@@ -3747,7 +3993,7 @@ function OptimisePanel({
               <details className="rounded-lg border border-border/50 bg-card/45 p-3">
                 <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold text-foreground">
                   <Sparkles className="h-4 w-4 text-primary" />
-                  Candidate reasoning
+                  Candidate analysis
                 </summary>
                 {running ? (
                   <div className="mt-3 flex items-center justify-center gap-2 rounded-md border border-border/40 bg-background/60 py-8 text-xs text-muted-foreground">
@@ -3776,7 +4022,7 @@ function OptimisePanel({
                   </div>
                 ) : (
                   <div className="mt-3 rounded-md border border-dashed border-border/50 p-4 text-center text-xs text-muted-foreground">
-                    Run the study to get candidate reasoning.
+                    Run the study to get candidate analysis.
                   </div>
                 )}
                 </details>

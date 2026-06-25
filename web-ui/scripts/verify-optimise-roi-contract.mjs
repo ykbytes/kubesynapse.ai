@@ -133,12 +133,30 @@ const checks = [
       source.includes("no-change control candidate"),
   },
   {
+    name: "optimizer prompt requires topology consolidation search and visible audit record",
+    pass:
+      source.includes("evaluate at least one fewer-step or fewer-agent candidate") &&
+      source.includes("optimizer_decision_record") &&
+      source.includes("do not include private chain-of-thought") &&
+      source.includes("topology_equivalence_map") &&
+      source.includes("do_not_emit_private_chain_of_thought"),
+  },
+  {
+    name: "optimizer UI exposes persisted decision audit",
+    pass:
+      source.includes("Optimizer decision audit") &&
+      source.includes("optimizerAuditFromValidation") &&
+      source.includes("Visible optimizer response") &&
+      source.includes("Private model chain-of-thought is not exposed") &&
+      source.includes("Skills and resources"),
+  },
+  {
     name: "optimizer UI keeps secondary analysis in collapsible panels",
     pass:
       source.includes("<details className=\"rounded-lg border border-border/50 bg-card/45 p-3\"") &&
       source.includes("Ranked optimization levers") &&
       source.includes("Execution economics") &&
-      source.includes("Candidate reasoning") &&
+      source.includes("Candidate analysis") &&
       source.includes("Inspectors"),
   },
   {

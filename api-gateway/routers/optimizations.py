@@ -32,6 +32,13 @@ _OPTIMIZER_META_PROMPT_RE = re.compile(
     r"\bexpected_metric_delta\b|\bbaseline-vs-candidate\b)",
     re.IGNORECASE,
 )
+_OPTIMIZER_SKILL_NAMES = (
+    "critical-path-roi",
+    "context-compression",
+    "tool-economy",
+    "topology-rewrite",
+    "regression-proof-gate",
+)
 
 
 class CreateStudyRequest(BaseModel):
@@ -1047,6 +1054,10 @@ def _validate_candidate_bundle(
     )
     if source_workflow and candidate_workflow and not topology_preserved and not allow_topology_rewrite:
         errors.append("workflow topology must preserve step names/order and step types")
+    if source_workflow and candidate_workflow and allow_topology_rewrite and topology_preserved:
+        validation_warnings.append(
+            "Topology rewrite was allowed but the candidate preserved the source step graph; review the optimizer audit for the consolidation decision."
+        )
 
     source_agents = source.get("agents") if isinstance(source.get("agents"), dict) else {}
     candidate_agents = {
@@ -1263,6 +1274,195 @@ def _extract_optimizer_manifest_documents(optimizer_output: str | None) -> list[
     if stripped.startswith(("{", "[")) or "kind:" in stripped[:512] or "manifest_bundle" in stripped[:512]:
         documents.extend(_parse_manifest_text(stripped))
     return documents
+
+
+def _redact_optimizer_text(value: str | None, *, max_length: int | None = None) -> str:
+    if not value:
+        return ""
+    redacted = _SECRET_VALUE_RE.sub("[REDACTED]", value)
+    if max_length is not None and len(redacted) > max_length:
+        return f"{redacted[:max_length]}..."
+    return redacted
+
+
+def _optimizer_json_objects(optimizer_output: str | None) -> list[dict[str, Any]]:
+    if not optimizer_output or not optimizer_output.strip():
+        return []
+
+    objects: list[dict[str, Any]] = []
+    for match in _FENCED_BLOCK_RE.finditer(optimizer_output):
+        body = match.group("body").strip()
+        if not body.startswith(("{", "[")):
+            continue
+        with suppress(Exception):
+            parsed = json.loads(body)
+            if isinstance(parsed, dict):
+                objects.append(parsed)
+            elif isinstance(parsed, list):
+                objects.extend(item for item in parsed if isinstance(item, dict))
+    return objects
+
+
+def _optimizer_decision_record(optimizer_output: str | None) -> dict[str, Any]:
+    for document in _optimizer_json_objects(optimizer_output):
+        nested = document.get("optimizer_decision_record")
+        if isinstance(nested, dict):
+            return _clone(nested)
+        if any(
+            key in document
+            for key in (
+                "skills_used",
+                "resources_used",
+                "topology_decision",
+                "topology_equivalence_map",
+                "candidate_strategy",
+            )
+        ):
+            return _clone(document)
+    return {}
+
+
+def _string_list(value: Any, *, limit: int = 12) -> list[str]:
+    if isinstance(value, list):
+        items = [str(item).strip() for item in value]
+    elif isinstance(value, str):
+        items = [item.strip() for item in re.split(r"[,\n]", value)]
+    elif isinstance(value, dict):
+        items = [str(item).strip() for item in value.values()]
+    else:
+        items = []
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _build_optimizer_audit(
+    study: dict[str, Any],
+    bundle: list[dict[str, Any]],
+    validation: dict[str, Any],
+    optimizer_output: str | None,
+    *,
+    allow_topology_rewrite: bool = False,
+) -> dict[str, Any]:
+    source = study.get("source_manifests") if isinstance(study.get("source_manifests"), dict) else {}
+    source_workflow = source.get("workflow") if isinstance(source.get("workflow"), dict) else None
+    candidate_workflow = _workflow_from_bundle(bundle)
+    source_signature = _step_signature(source_workflow) if source_workflow else []
+    candidate_signature = _step_signature(candidate_workflow) if candidate_workflow else []
+    topology_rewrite_produced = bool(source_signature and candidate_signature and source_signature != candidate_signature)
+    topology_decision = (
+        "rewritten"
+        if topology_rewrite_produced
+        else "preserved_required"
+        if not allow_topology_rewrite
+        else "fallback_control"
+        if validation.get("no_effective_changes")
+        else "preserved_after_review"
+    )
+
+    optimizer_text = optimizer_output or ""
+    lower_output = optimizer_text.lower()
+    decision_record = _optimizer_decision_record(optimizer_output)
+    record_skills = _string_list(decision_record.get("skills_used") if isinstance(decision_record, dict) else None)
+    skills_mentioned = [skill for skill in _OPTIMIZER_SKILL_NAMES if skill in lower_output]
+    skills_used = _string_list([*record_skills, *skills_mentioned])
+    if not skills_used and optimizer_output:
+        skills_used = ["optimizer-agent-visible-response"]
+
+    agent_refs = [
+        str(item).strip()
+        for item in (source.get("agent_refs") if isinstance(source.get("agent_refs"), list) else [])
+        if str(item).strip()
+    ]
+    agents = source.get("agents") if isinstance(source.get("agents"), dict) else {}
+    parsed_documents = _extract_optimizer_manifest_documents(optimizer_output)
+    parsed_blocks = {
+        "optimizer_decision_record": bool(decision_record),
+        "roi_hypothesis": "roi_hypothesis" in lower_output and "expected_metric_delta" in lower_output,
+        "change_log": "change_log" in lower_output or "| resource | path |" in lower_output,
+        "candidate_manifest_bundle": bool(parsed_documents),
+        "topology_equivalence_map": "topology_equivalence_map" in lower_output or "topology equivalence" in lower_output,
+    }
+
+    output_excerpt = _redact_optimizer_text(optimizer_output, max_length=5000)
+    requested_skills = list(_OPTIMIZER_SKILL_NAMES) if allow_topology_rewrite else [
+        skill for skill in _OPTIMIZER_SKILL_NAMES if skill != "topology-rewrite"
+    ]
+    if allow_topology_rewrite:
+        topology_reason = (
+            "Optimizer produced a topology-changing candidate; inspect equivalence map and trial gate before approval."
+            if topology_rewrite_produced
+            else "Topology rewrite was allowed, but the generated candidate preserved the source step graph. Review the visible decision record to confirm why consolidation was rejected or retry with stronger evidence."
+        )
+    else:
+        topology_reason = "Topology rewrite was disabled for this study, so the candidate must preserve the source step graph."
+
+    return {
+        "summary": (
+            "Topology-changing candidate generated"
+            if topology_rewrite_produced
+            else "Topology preserved; review prompt/tool optimizations or fallback status"
+        ),
+        "private_reasoning": "not_exposed",
+        "visible_response_available": bool(optimizer_output and optimizer_output.strip()),
+        "visible_response_excerpt": output_excerpt,
+        "skills_requested": requested_skills,
+        "skills_used": skills_used,
+        "resources_used": {
+            "source_workflow": _manifest_name(source_workflow or {}),
+            "candidate_workflow": _manifest_name(candidate_workflow or {}),
+            "source_agent_refs": agent_refs,
+            "loaded_agent_manifests": sorted(str(name) for name in agents.keys()),
+            "baseline_execution_ids": list(study.get("baseline_execution_ids") or []),
+            "baseline_trace_count": len(study.get("baseline_execution_ids") or []),
+            "optimizer_agent": study.get("optimizer_agent_name"),
+            "manifest_documents_from_optimizer": len(parsed_documents),
+        },
+        "topology_decision": {
+            "mode": "allow_topology_rewrite" if allow_topology_rewrite else "preserve_topology",
+            "decision": topology_decision,
+            "rewrite_produced": topology_rewrite_produced,
+            "source_signature": source_signature,
+            "candidate_signature": candidate_signature,
+            "reason": topology_reason,
+        },
+        "parsed_blocks": parsed_blocks,
+        "decision_record": decision_record,
+        "candidate_generation": {
+            "valid": validation.get("valid"),
+            "status": "safe_fallback" if validation.get("no_effective_changes") else "generated_candidate",
+            "effective_change_count": validation.get("effective_change_count", 0),
+            "warnings": list(validation.get("warnings") or []),
+            "errors": list(validation.get("errors") or []),
+        },
+    }
+
+
+def _attach_optimizer_audit(
+    study: dict[str, Any],
+    bundle: list[dict[str, Any]],
+    validation: dict[str, Any],
+    optimizer_output: str | None,
+    *,
+    allow_topology_rewrite: bool = False,
+) -> dict[str, Any]:
+    enriched = _clone(validation)
+    enriched["optimizer_audit"] = _build_optimizer_audit(
+        study,
+        bundle,
+        enriched,
+        optimizer_output,
+        allow_topology_rewrite=allow_topology_rewrite,
+    )
+    return enriched
 
 
 def _find_optimizer_document(
@@ -2820,6 +3020,13 @@ def create_candidate(study_id: str, body: CreateCandidateRequest, user: dict[str
     )
     if not validation["valid"]:
         raise HTTPException(status_code=422, detail="; ".join(validation["errors"]))
+    validation = _attach_optimizer_audit(
+        study,
+        manifest_bundle,
+        validation,
+        body.optimizer_output,
+        allow_topology_rewrite=body.allow_topology_rewrite,
+    )
     return optimization_store.create_candidate(
         study_id=study_id,
         namespace=str(study["namespace"]),
@@ -2898,6 +3105,13 @@ def generate_candidate(study_id: str, body: GenerateCandidateRequest, user: dict
         )
         if not validation["valid"]:
             raise HTTPException(status_code=422, detail="; ".join(validation["errors"]))
+    validation = _attach_optimizer_audit(
+        study,
+        bundle,
+        validation,
+        body.optimizer_output,
+        allow_topology_rewrite=body.allow_topology_rewrite,
+    )
     return optimization_store.create_candidate(
         study_id=study_id,
         namespace=str(study["namespace"]),

@@ -31,6 +31,9 @@ spec:
     - tool-economy for batching, caching, and tool-loop reduction.
     - topology-rewrite only when the request packet explicitly allows it.
     - regression-proof-gate for proof, trial, and promotion criteria.
+    - Emit a concise visible decision record for audit; do not expose private
+      chain-of-thought. The app records your visible response, skills used,
+      resources used, topology decision, and candidate generation result.
 
     Hard rules:
     - Never edit source resources in place. Return copied manifests only.
@@ -51,6 +54,10 @@ spec:
       split, or change workflow steps.
     - If topology-rewrite mode is active, you may change topology only when you
       prove behavior equivalence and list every preserved source capability.
+      You must evaluate at least one fewer-step or fewer-agent option before
+      deciding. If safe, return that topology-rewritten candidate. If not safe,
+      explain the exact blocker in optimizer_decision_record instead of silently
+      keeping the old topology.
       Include a source-step to candidate-responsibility map and a trial stop
       condition for latency, token, tool-call, and quality regressions.
     - Prefer one precise change on the dominant bottleneck over many broad,
@@ -60,6 +67,10 @@ spec:
 
     Required output:
     - Executive recommendation with expected ROI, confidence, and regression risk.
+    - A fenced JSON block headed optimizer_decision_record containing
+      skills_used, resources_used, topology_decision, topology_equivalence_map,
+      candidate_strategy, regression_budget, and rejected_options. Keep it
+      concise and audit-friendly; do not include hidden chain-of-thought.
     - A fenced JSON block headed roi_hypothesis containing expected_metric_delta,
       confidence, evidence_execution_ids, target_steps, target_tools,
       quality_gate, rollback_plan, and regression_budget.
@@ -144,6 +155,8 @@ spec:
 
         Rewrite criteria:
         - Preserve workflow purpose, output artifacts, schemas, workspace paths, approvals, security boundaries, and externally visible behavior.
+        - Always evaluate at least one consolidation option with fewer steps or fewer agents before choosing a topology-preserving candidate.
+        - Prefer a topology-changing candidate only when it reduces critical-path latency or tool/context churn without losing required artifacts, approvals, side-effect control, or independent retry semantics.
         - Merge steps only when handoff data is simple, deterministic, and the merged agent has the same tool access needed for all preserved capabilities.
         - Do not merge a step that exists for human approval, isolation, security boundary, external side effect control, or independent retry semantics.
         - Keep source models/provider family unchanged unless a separate explicit model-routing approval exists.
@@ -153,6 +166,7 @@ spec:
         Required explanation:
         - Why the topology is behavior-equivalent.
         - Which original outputs, side effects, and handoffs are preserved.
+        - Which topology-changing option was evaluated, selected, or rejected.
         - What quality checks must pass before promotion.
       skills/regression-proof-gate/SKILL.md: |
         ---
