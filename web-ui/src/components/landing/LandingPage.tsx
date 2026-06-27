@@ -617,6 +617,7 @@ function Navbar({
 
   const navLinks = [
     { label: "Features", id: "features" },
+    { label: "Optimize", id: "optimize" },
     { label: "Security", id: "security" },
     { label: "Architecture", id: "architecture" },
     { label: "Install", id: "install" },
@@ -802,7 +803,7 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[oklch(0.76_0.16_154)] opacity-75" />
             <span className="relative inline-flex h-2 w-2 rounded-full bg-[oklch(0.76_0.16_154)]" />
           </span>
-          Open Source &middot; Self-Hosted &middot; Hardened by Default &middot; Apache 2.0
+          Open Source &middot; Self-Hosted &middot; Kubernetes-Native &middot; Apache 2.0
         </motion.div>
 
         <motion.h1
@@ -810,10 +811,11 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.1 }}
           className="text-3xl font-extrabold tracking-tight text-[oklch(0.968_0.004_264)] sm:text-4xl md:text-5xl lg:text-6xl"
+          aria-label="Measured AI operations for Kubernetes"
         >
-          Kubernetes-native{" "}
+          Measured AI operations for{" "}
           <span className="bg-gradient-to-r from-[oklch(0.758_0.120_188)] via-[oklch(0.72_0.14_210)] to-[oklch(0.742_0.132_233)] bg-clip-text text-transparent">
-            AI agent infrastructure
+            Kubernetes
           </span>
         </motion.h1>
 
@@ -823,10 +825,7 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           transition={{ duration: 0.6, delay: 0.2 }}
           className="mx-auto mt-5 max-w-2xl text-base leading-relaxed text-[oklch(0.85_0.01_264)] sm:text-base md:text-lg"
         >
-          Self-hosted agent infrastructure for teams that want workflows, tools,
-          memory, and observability to live inside the cluster. Deploy AI agents
-          for incident response, infrastructure operations, and platform automation —
-          hardened by default, no security team required.
+          Self-hosted infrastructure to run agentic workflows, trace what happened, and prove whether changes save time, tokens, and tool calls. KubeSynapse keeps agents, policies, runtime evidence, and candidate workflow manifests close to the cluster where operations already happen.
         </motion.p>
 
         {/* Hero terminal */}
@@ -878,8 +877,8 @@ function HeroSection({ onOpenDocs }: { onOpenDocs: () => void }) {
           {[
             { label: "CRD Types", value: 13, suffix: "" },
             { label: "MCP Sidecars", value: 10, suffix: "" },
-            { label: "CLI Commands", value: 82, suffix: "" },
-            { label: "Security Layers", value: 4, suffix: "" },
+            { label: "ROI Study Stages", value: 6, suffix: "" },
+            { label: "Runtime Planes", value: 3, suffix: "" },
           ].map((stat) => (
             <div key={stat.label} className="flex flex-col">
               <span className="text-2xl font-bold text-[oklch(0.82_0.12_188)] sm:text-3xl">
@@ -958,25 +957,25 @@ function EcosystemCloud() {
 function ProblemSection() {
   const problems = [
     {
-      icon: AlertTriangle,
-      title: "Incidents Without Intelligence",
+      icon: BarChart3,
+      title: "AI Workflows Without Proof",
       description:
-        "Alert fatigue is real. Your on-call team manually correlates logs, checks pod status, and guesses at root causes at 3 AM.",
-      accent: "border-l-amber-400/60",
+        "Agent pilots often look impressive until teams ask what changed: tokens, latency, tool churn, retries, output quality, and operational risk need a baseline.",
+      accent: "border-l-sky-400/60",
     },
     {
       icon: Lock,
       title: "Ungoverned Automation",
       description:
-        "AI tools without guardrails are dangerous in production. Token budgets, approval gates, and audit trails are afterthoughts.",
+        "AI tools without runtime contracts are hard to approve in production. Model access, tool permissions, approval gates, and audit trails need to live with the workload.",
       accent: "border-l-red-400/60",
     },
     {
-      icon: ShieldCheck,
-      title: "AI Without Guardrails",
+      icon: AlertTriangle,
+      title: "Operational Context Is Fragmented",
       description:
-        "Agent runtimes that load arbitrary plugins, call unvetted APIs, and execute config-driven code are a compliance nightmare. Without platform-level enforcement, every agent is a potential breach vector.",
-      accent: "border-l-[oklch(0.708_0.101_188)/60]",
+        "Logs, manifests, traces, tool calls, and run outputs are scattered across systems. That makes debugging slow and makes optimization mostly guesswork.",
+      accent: "border-l-amber-400/60",
     },
   ];
 
@@ -996,7 +995,7 @@ function ProblemSection() {
             The Challenge
           </motion.p>
           <motion.h2 variants={itemVariants} className="mt-3 text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-4xl md:text-5xl">
-            Kubernetes Operations Deserve <span className="text-[oklch(0.72_0.01_264)]">Better</span>
+            Enterprise AI Agents Need <span className="text-[oklch(0.72_0.01_264)]">Evidence</span>
           </motion.h2>
         </motion.div>
 
@@ -1116,11 +1115,11 @@ function SecuritySection() {
             <span className="text-xs font-semibold tracking-wide text-[oklch(0.758_0.101_188)]">Security First</span>
           </motion.div>
           <motion.h2 variants={itemVariants} className="text-3xl font-bold tracking-tight text-[oklch(0.968_0.004_264)] sm:text-4xl">
-            Defense in{" "}
+            Runtime Guardrails in{" "}
             <span className="bg-gradient-to-r from-[oklch(0.758_0.120_188)] to-[oklch(0.742_0.132_233)] bg-clip-text text-transparent">Depth</span>
           </motion.h2>
           <motion.p variants={itemVariants} className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-[oklch(0.8_0.01_264)]">
-            Four independent layers protect every agent runtime — no single misconfiguration can compromise the platform.
+            Four control layers help teams keep agent execution reviewable: runtime isolation, immutable config, provider enforcement, and request-level audit trails.
           </motion.p>
         </motion.div>
 
@@ -2983,6 +2982,205 @@ function FaithfulIncidentsPanel() {
   );
 }
 
+// ─── Optimization ROI Lab ───
+
+function OptimizationSection() {
+  const ref = useRef(null);
+  const inView = useInView(ref, { once: true, margin: "-80px" });
+
+  const stages = [
+    { icon: Sigma, title: "Baseline", detail: "Pull recent traces, run stats, manifests, tool calls, and model usage." },
+    { icon: Lightbulb, title: "Opportunities", detail: "Rank bottlenecks such as repeated reads, token pressure, long quiet gaps, and slow steps." },
+    { icon: GitBranch, title: "Candidate", detail: "Create copied candidate manifests with suffixes, labels, and contract metadata." },
+    { icon: Activity, title: "Trial Runs", detail: "Run opt-in candidate trials and compare paired results against the baseline." },
+    { icon: ShieldCheck, title: "Verified ROI", detail: "Separate estimated savings from measured savings before promotion." },
+    { icon: Zap, title: "Promote", detail: "Require approval before replacing the source workflow or moving a winner forward." },
+  ];
+
+  const scorecards = [
+    { label: "Tokens", baseline: "41.2k", candidate: "candidate trial", delta: "estimate first, verify after" },
+    { label: "Wall-clock", baseline: "3m 29s", candidate: "paired run", delta: "time per successful run" },
+    { label: "Tool calls", baseline: "4.5/run", candidate: "step impact", delta: "read/write churn surfaced" },
+  ];
+
+  const guarantees = [
+    "source workflow is never edited in place",
+    "same namespace and allowed resource kinds",
+    "preserved step contracts unless topology rewrite is explicitly allowed",
+    "admin approval before apply, run, or promote",
+  ];
+
+  return (
+    <section id="optimize" ref={ref} className="relative overflow-hidden px-4 py-20 sm:px-6 md:py-28">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_10%,oklch(0.708_0.101_188/0.10),transparent_30%),linear-gradient(180deg,oklch(0.145_0.012_264),oklch(0.18_0.014_264))]" />
+      <div className="relative mx-auto max-w-7xl">
+        <motion.div
+          initial="hidden"
+          animate={inView ? "visible" : "hidden"}
+          variants={containerVariants}
+          className="grid gap-8 lg:grid-cols-[0.95fr_1.05fr]"
+        >
+          <div>
+            <motion.div variants={itemVariants} className="mb-4 inline-flex items-center gap-2 rounded-full border border-[oklch(0.708_0.101_188/0.35)] bg-[oklch(0.708_0.101_188/0.08)] px-4 py-1.5">
+              <Sigma className="h-3.5 w-3.5 text-[oklch(0.758_0.120_188)]" />
+              <span className="text-xs font-semibold tracking-wide text-[oklch(0.758_0.120_188)]">Optimize ROI Lab</span>
+            </motion.div>
+            <motion.h2 variants={itemVariants} className="max-w-xl text-3xl font-bold tracking-tight text-[oklch(0.968_0.004_264)] sm:text-4xl md:text-5xl">
+              Prove workflow changes before you trust them.
+            </motion.h2>
+            <motion.p variants={itemVariants} className="mt-4 max-w-2xl text-base leading-relaxed text-[oklch(0.82_0.01_264)]">
+              KubeSynapse turns workflow history into an optimization study: baseline vs candidate, estimated before trial, verified after paired runs. The optimizer can propose prompt, model routing, context, caching, timeout, and batching changes while keeping Kubernetes contracts visible.
+            </motion.p>
+
+            <motion.div variants={itemVariants} className="mt-8 grid gap-3 sm:grid-cols-3">
+              {scorecards.map((card) => (
+                <div key={card.label} className="rounded-2xl border border-[oklch(0.35_0.01_264)] bg-[oklch(0.206_0.009_264/0.78)] p-4 shadow-lg shadow-black/10">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-[oklch(0.66_0.01_264)]">{card.label}</p>
+                  <div className="mt-3 flex items-end justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-[oklch(0.58_0.01_264)]">Baseline</p>
+                      <p className="text-xl font-bold text-[oklch(0.958_0.004_264)]">{card.baseline}</p>
+                    </div>
+                    <ArrowRight className="mb-1 h-4 w-4 text-[oklch(0.708_0.101_188)]" />
+                    <div className="text-right">
+                      <p className="text-[10px] uppercase tracking-wider text-[oklch(0.58_0.01_264)]">Candidate</p>
+                      <p className="text-sm font-semibold text-[oklch(0.82_0.12_188)]">{card.candidate}</p>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-xs leading-relaxed text-[oklch(0.72_0.01_264)]">{card.delta}</p>
+                </div>
+              ))}
+            </motion.div>
+
+            <motion.div variants={itemVariants} className="mt-6 rounded-2xl border border-[oklch(0.708_0.101_188/0.25)] bg-[oklch(0.708_0.101_188/0.06)] p-5">
+              <div className="flex items-center gap-3">
+                <ShieldCheck className="h-5 w-5 text-[oklch(0.76_0.16_154)]" />
+                <h3 className="text-sm font-bold text-[oklch(0.958_0.004_264)]">Evidence before promotion</h3>
+              </div>
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                {guarantees.map((item) => (
+                  <div key={item} className="flex items-start gap-2 text-sm leading-relaxed text-[oklch(0.82_0.01_264)]">
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[oklch(0.76_0.16_154)]" />
+                    <span>{item}</span>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          </div>
+
+          <motion.div variants={itemVariants} className="rounded-3xl border border-[oklch(0.36_0.012_264)] bg-[oklch(0.17_0.012_264/0.92)] p-4 shadow-2xl shadow-black/35 backdrop-blur-sm sm:p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[oklch(0.32_0.01_264)] pb-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-widest text-[oklch(0.708_0.101_188)]">Study workspace</p>
+                <h3 className="mt-1 text-lg font-bold text-[oklch(0.958_0.004_264)]">Candidate manifest and ROI proof</h3>
+              </div>
+              <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-300">
+                Governed by Kubernetes
+              </span>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {stages.map((stage, i) => {
+                const Icon = stage.icon;
+                return (
+                  <motion.div
+                    key={stage.title}
+                    variants={itemVariants}
+                    transition={{ delay: i * 0.05 }}
+                    className="rounded-2xl border border-[oklch(0.32_0.01_264)] bg-[oklch(0.206_0.009_264/0.72)] p-3.5"
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[oklch(0.708_0.101_188/0.12)] text-[oklch(0.758_0.120_188)]">
+                        <Icon className="h-4 w-4" />
+                      </div>
+                      <span className="text-sm font-semibold text-[oklch(0.958_0.004_264)]">{stage.title}</span>
+                    </div>
+                    <p className="mt-2 text-xs leading-relaxed text-[oklch(0.72_0.01_264)]">{stage.detail}</p>
+                  </motion.div>
+                );
+              })}
+            </div>
+
+            <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_0.82fr]">
+              <div className="overflow-hidden rounded-2xl border border-[oklch(0.35_0.01_264)] bg-[oklch(0.13_0.008_264)]">
+                <div className="flex items-center justify-between border-b border-[oklch(0.32_0.01_264)] px-4 py-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider text-[oklch(0.66_0.01_264)]">Copied candidate manifests</p>
+                    <p className="text-sm font-semibold text-[oklch(0.958_0.004_264)]">side-by-side manifest diff</p>
+                  </div>
+                  <span className="rounded-full border border-[oklch(0.708_0.101_188/0.35)] bg-[oklch(0.708_0.101_188/0.08)] px-2.5 py-1 text-[10px] font-semibold text-[oklch(0.758_0.120_188)]">
+                    source preserved
+                  </span>
+                </div>
+                <div className="grid text-[11px] leading-5 sm:grid-cols-2">
+                  <pre className="min-h-[210px] overflow-hidden border-b border-[oklch(0.32_0.01_264)] p-4 text-[oklch(0.78_0.01_264)] sm:border-b-0 sm:border-r">
+{`kind: AgentWorkflow
+metadata:
+  name: daily-standup
+spec:
+  steps:
+    - name: summarize-git
+      agentRef: standup-git
+    - name: track-jira
+      agentRef: standup-jira
+    - name: compose-standup
+      agentRef: standup-scribe`}
+                  </pre>
+                  <pre className="min-h-[210px] overflow-hidden bg-emerald-400/5 p-4 text-[oklch(0.82_0.12_188)]">
+{`kind: AgentWorkflow
+metadata:
+  name: daily-standup-opt-94605
+  labels:
+    kubesynapse.ai/candidate: "true"
+spec:
+  steps:
+    - name: summarize-git
+      agentRef: standup-git-opt-94605
+    - name: track-jira
+      agentRef: standup-jira-opt-94605
+    - name: compose-standup
+      agentRef: standup-scribe-opt-94605`}
+                  </pre>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="rounded-2xl border border-[oklch(0.35_0.01_264)] bg-[oklch(0.206_0.009_264/0.72)] p-4">
+                  <div className="flex items-center gap-2">
+                    <History className="h-4 w-4 text-[oklch(0.758_0.120_188)]" />
+                    <h4 className="text-sm font-bold text-[oklch(0.958_0.004_264)]">Every run becomes reusable data</h4>
+                  </div>
+                  <p className="mt-2 text-xs leading-relaxed text-[oklch(0.72_0.01_264)]">
+                    Baseline traces, candidate manifests, trial outcomes, human reviews, and redaction state are retained for replay, regression tests, evaluator rubrics, and future routing rules.
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-[oklch(0.35_0.01_264)] bg-[oklch(0.206_0.009_264/0.72)] p-4">
+                  <div className="flex items-center gap-2">
+                    <BrainCircuit className="h-4 w-4 text-violet-300" />
+                    <h4 className="text-sm font-bold text-[oklch(0.958_0.004_264)]">Optimizer reasoning is inspectable</h4>
+                  </div>
+                  <p className="mt-2 text-xs leading-relaxed text-[oklch(0.72_0.01_264)]">
+                    The app records the dossier, selected skills, optimizer response, manifest changes, and proof-gate notes so teams can review why a candidate exists.
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-amber-400/25 bg-amber-400/8 p-4">
+                  <div className="flex items-center gap-2">
+                    <UserCheck className="h-4 w-4 text-amber-300" />
+                    <h4 className="text-sm font-bold text-[oklch(0.958_0.004_264)]">Topology rewrite is explicit</h4>
+                  </div>
+                  <p className="mt-2 text-xs leading-relaxed text-[oklch(0.72_0.01_264)]">
+                    Preserve topology by default. Allow merge, split, or reorder proposals only when an admin enables the option and the proof gate can explain the contract impact.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
+      </div>
+    </section>
+  );
+}
+
 // ─── Features Grid ───
 
 function FeaturesSection() {
@@ -3030,6 +3228,13 @@ function FeaturesSection() {
       tags: ["Traces", "Signal Watch", "Cost Tracking"],
     },
     {
+      icon: Sigma,
+      title: "Optimize ROI Lab",
+      description:
+        "Turn workflow run history into baseline studies, copied candidate manifests, trial runs, and measured comparisons for time, tokens, tool calls, and cost.",
+      tags: ["ROI", "Candidates", "Diffs"],
+    },
+    {
       icon: ShieldCheck,
       title: "Hardened OpenCode Runtime",
       description:
@@ -3049,7 +3254,7 @@ function FeaturesSection() {
   const inView = useInView(ref, { once: true, margin: "-80px" });
 
   return (
-    <section className="px-4 py-16 sm:px-6 md:py-24" ref={ref}>
+    <section id="features" className="px-4 py-16 sm:px-6 md:py-24" ref={ref}>
       <div className="mx-auto max-w-7xl">
         <motion.div
           initial="hidden"
@@ -3064,7 +3269,7 @@ function FeaturesSection() {
             Everything Your Cluster <span className="text-[oklch(0.708_0.101_188)]">Needs</span>
           </motion.h2>
           <motion.p variants={itemVariants} className="mx-auto mt-3 max-w-2xl text-base text-[oklch(0.8_0.01_264)]">
-            From incident triage to capacity planning. A complete AI operations layer for Kubernetes-native infrastructure.
+            From incident triage to workflow optimization: declarative agents, policy enforcement, trace evidence, and measurable run economics for Kubernetes teams.
           </motion.p>
         </motion.div>
 
@@ -3112,8 +3317,9 @@ function TrustBar() {
     { icon: ShieldCheck, label: "Immutable runtime config — plugin-free by default" },
     { icon: Lock, label: "RBAC + NetworkPolicy + provider enforcement" },
     { icon: Eye, label: "Request tracing with x-request-id propagation" },
+    { icon: Sigma, label: "Baseline and candidate ROI studies" },
     { icon: Code, label: "Apache 2.0 — open source" },
-    { icon: Terminal, label: "Kind quickstart in under 5 minutes" },
+    { icon: Terminal, label: "Repo-supported Kind quickstart" },
   ];
 
   const ref = useRef(null);
@@ -3162,10 +3368,10 @@ function UseCasesSection() {
     },
     {
       icon: BrainCircuit,
-      title: "Context Engineering for LLMs",
-      tags: ["RAG", "Memory"],
+      title: "Workflow Optimization Studies",
+      tags: ["ROI", "Traces"],
       description:
-        "Inject Kubernetes context — pod specs, events, logs, metrics — directly into agent prompts. Agents reason about your cluster with real-time, accurate context instead of hallucinating.",
+        "Use run history to compare baseline and candidate workflows, inspect manifest diffs, and decide whether a change actually saves time, tokens, and tool calls.",
     },
     {
       icon: Wrench,
@@ -3183,10 +3389,10 @@ function UseCasesSection() {
     },
     {
       icon: Layers,
-      title: "Policy-Enforced Automation",
-      tags: ["AgentPolicy", "Guardrails", "Audit"],
+      title: "Dataset-Ready Run Evidence",
+      tags: ["Replay", "Review", "Audit"],
       description:
-        "Define AgentPolicy CRDs that enforce model allowlists, PII masking, token budgets, tool whitelists, and output guardrails on every agent action — across workflows, invocations, and incident automation.",
+        "Keep trace dossiers, candidate manifests, trial outcomes, and human review decisions so teams can replay regressions and build better evaluator rubrics over time.",
     },
   ];
 
@@ -3209,7 +3415,7 @@ function UseCasesSection() {
             What You Can <span className="text-[oklch(0.708_0.101_188)]">Build</span>
           </motion.h2>
           <motion.p variants={itemVariants} className="mx-auto mt-3 max-w-2xl text-base text-[oklch(0.8_0.01_264)]">
-            KubeSynapse plugs into your existing Kubernetes deployments. No new infrastructure required.
+            KubeSynapse plugs into your Kubernetes deployments with a self-hosted control plane instead of a hosted SaaS dependency.
           </motion.p>
         </motion.div>
 
@@ -3543,8 +3749,8 @@ function WhySection() {
     },
     {
       icon: Lock,
-      title: "Self-Hosted, Zero Telemetry",
-      description: "Your cluster, your data. Deploy via Helm OCI in your own namespace with no external dependencies or phone-home behavior.",
+      title: "Self-Hosted Control Plane",
+      description: "Your cluster, your data. Deploy via Helm OCI in your own namespace, with runtime services and telemetry boundaries under your control.",
     },
     {
       icon: Shield,
@@ -3577,7 +3783,7 @@ function WhySection() {
             </span>
           </motion.h2>
           <motion.p variants={itemVariants} className="mx-auto mt-3 max-w-xl text-base text-[oklch(0.8_0.01_264)]">
-            Not a Python library with a deployment guide. A complete AI operations platform designed from day one for Kubernetes operators.
+            Not just a Python library with a deployment guide. KubeSynapse treats agents, policies, workflows, traces, and optimizer candidates as Kubernetes-facing operational assets.
           </motion.p>
         </motion.div>
 
@@ -3707,11 +3913,11 @@ function BottomCTA() {
               <KubeSynapseLogo className="h-12 w-12" />
             </div>
             <h2 className="text-2xl font-bold tracking-tight text-[oklch(0.958_0.004_264)] sm:text-3xl md:text-4xl">
-              Ready to <span className="text-[oklch(0.708_0.101_188)]">Automate</span>?
+              Ready to <span className="text-[oklch(0.708_0.101_188)]">Measure Your Agents</span>?
             </h2>
             <p className="mx-auto mt-3 max-w-xl text-base text-[oklch(0.8_0.01_264)]">
-              Deploy KubeSynapse on your cluster and let AI agents handle incident response,
-              infrastructure automation, and operational intelligence.
+              Deploy KubeSynapse on your cluster to run workflows, inspect execution traces,
+              and test optimizer candidates before promoting changes.
             </p>
 
             {/* Inline install command */}
@@ -3774,8 +3980,8 @@ function Footer() {
               <KubeSynapseLogo wordmark className="h-8" />
             </div>
             <p className="mt-2 max-w-sm text-xs leading-relaxed text-[oklch(0.72_0.01_264)]">
-              The AI-powered command center for Kubernetes operations.
-              Self-hosted, open source under Apache 2.0.
+              Self-hosted AI workflow operations for Kubernetes: agents, policies, traces, and ROI studies.
+              Open source under Apache 2.0.
             </p>
           </div>
 
@@ -3783,6 +3989,7 @@ function Footer() {
             <h4 className="text-xs font-bold uppercase tracking-wider text-[oklch(0.68_0.01_264)]">Platform</h4>
             <ul className="mt-3 space-y-2 text-sm text-[oklch(0.78_0.01_264)]">
               <li><a href="#features" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Features</a></li>
+              <li><a href="#optimize" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Optimize ROI Lab</a></li>
               <li><a href="#architecture" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Architecture</a></li>
               <li><a href="#install" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Quick Start</a></li>
               <li><a href="#docs" className="transition-colors hover:text-[oklch(0.708_0.101_188)]">Documentation</a></li>
@@ -3888,6 +4095,8 @@ export function LandingPage({ onLogin, showLogin }: LandingPageProps) {
             <SecuritySection />
             <SectionDivider />
             <UIPreviewSection />
+            <SectionDivider />
+            <OptimizationSection />
             <SectionDivider />
             <FeaturesSection />
             <TrustBar />
