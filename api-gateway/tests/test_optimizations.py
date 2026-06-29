@@ -480,6 +480,100 @@ def test_generate_candidate_does_not_copy_optimizer_output_into_manifest_annotat
     assert "token-like text" in candidate["optimizer_output"]
 
 
+def test_generate_candidate_persists_redacted_optimizer_trace(client, auth_headers) -> None:
+    base_id = _seed_execution(execution_id="exec-opt-trace")
+    with _optimization_api_context(manifests=True):
+        study = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={"namespace": "default", "workflow_name": "daily-standup", "baseline_execution_ids": [base_id]},
+        ).json()
+
+    optimizer_trace = {
+        "request_id": "optimise-exec-opt-trace",
+        "thread_id": "thread-opt-trace",
+        "agent_name": "workflow-optimizer",
+        "model": "opencode/deepseek-v4-flash-free",
+        "status": "completed",
+        "started_at": "2026-06-27T10:00:00Z",
+        "completed_at": "2026-06-27T10:00:03Z",
+        "duration_ms": 3000,
+        "events": [
+            {
+                "id": "evt-1",
+                "sequence": 1,
+                "timestamp": "2026-06-27T10:00:00Z",
+                "kind": "status",
+                "title": "Optimizer started",
+                "summary": "Loaded baseline dossier.",
+            },
+            {
+                "id": "evt-2",
+                "sequence": 2,
+                "timestamp": "2026-06-27T10:00:01Z",
+                "kind": "reasoning",
+                "title": "Reasoning summary",
+                "summary": "The slow step repeats deterministic reads.",
+            },
+            {
+                "id": "evt-3",
+                "sequence": 3,
+                "timestamp": "2026-06-27T10:00:02Z",
+                "kind": "tool",
+                "title": "read",
+                "summary": "Inspected source workflow.",
+                "payload": {"path": "/workspace/workflow.yaml", "api_key": "sk-should-not-survive"},
+            },
+            {
+                "id": "evt-4",
+                "sequence": 4,
+                "timestamp": "2026-06-27T10:00:03Z",
+                "kind": "completion",
+                "title": "Candidate ready",
+                "summary": "Returned a contract-preserving manifest bundle.",
+            },
+        ],
+        "tool_calls": [{"tool": "read", "args": {"authorization": "Bearer secret-value"}}],
+        "artifacts": [{"path": "/workspace/candidate.yaml"}],
+        "summary": {"event_count": 999, "tool_count": 999, "reasoning_event_count": 999},
+    }
+
+    with _optimization_api_context():
+        response = client.post(
+            f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
+            headers=auth_headers,
+            json={
+                "optimizer_output": "Trim repeated context and deterministic reads.",
+                "suffix": "opt-trace",
+                "optimizer_trace": optimizer_trace,
+            },
+        )
+
+    assert response.status_code == 201, response.json()
+    persisted = response.json()["optimizer_trace"]
+    assert persisted["request_id"] == "optimise-exec-opt-trace"
+    assert persisted["thread_id"] == "thread-opt-trace"
+    assert [event["sequence"] for event in persisted["events"]] == [1, 2, 3, 4]
+    assert persisted["summary"] == {
+        "event_count": 4,
+        "tool_count": 1,
+        "reasoning_event_count": 1,
+        "error_count": 0,
+    }
+    serialized = str(persisted)
+    assert "sk-should-not-survive" not in serialized
+    assert "Bearer secret-value" not in serialized
+    assert "[REDACTED]" in serialized
+
+    with _optimization_api_context():
+        reloaded_study = client.get(
+            f"/api/v1/optimizations/studies/{study['id']}",
+            headers=auth_headers,
+        ).json()
+    reloaded_candidate = next(item for item in reloaded_study["candidates"] if item["id"] == response.json()["id"])
+    assert reloaded_candidate["optimizer_trace"] == persisted
+
+
 def test_generate_candidate_fallback_copies_manifests_without_roi_prompt_injection(client, auth_headers) -> None:
     baseline_id = _seed_execution(execution_id="exec-opt-guided-fallback")
 
@@ -1530,7 +1624,7 @@ def test_promote_candidate_requires_verified_safe_trials(client, auth_headers) -
     assert payload["promotion"]["promoted_by"] == "shared-token-user"
 
 
-def test_optimization_schema_adds_proof_gate_to_existing_tables(monkeypatch) -> None:
+def test_optimization_schema_adds_trace_and_proof_gate_to_existing_tables(monkeypatch) -> None:
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as connection:
         connection.execute(
@@ -1550,6 +1644,26 @@ def test_optimization_schema_adds_proof_gate_to_existing_tables(monkeypatch) -> 
                 "VALUES ('opt-existing', 'default', 'daily-standup')"
             )
         )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE optimization_candidates (
+                    id VARCHAR(64) PRIMARY KEY,
+                    study_id VARCHAR(64) NOT NULL,
+                    namespace VARCHAR(128) NOT NULL,
+                    name VARCHAR(256) NOT NULL,
+                    candidate_workflow_name VARCHAR(256) NOT NULL
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO optimization_candidates "
+                "(id, study_id, namespace, name, candidate_workflow_name) "
+                "VALUES ('cand-existing', 'opt-existing', 'default', 'candidate', 'daily-standup-opt')"
+            )
+        )
 
     monkeypatch.setattr(optimization_store, "_AUTH_ENGINE", engine)
 
@@ -1560,6 +1674,15 @@ def test_optimization_schema_adds_proof_gate_to_existing_tables(monkeypatch) -> 
         assert "proof_gate" in columns
         stored = connection.execute(text("SELECT proof_gate FROM optimization_studies WHERE id = 'opt-existing'")).scalar_one()
         assert "requires_approval" in stored
+        candidate_columns = {
+            str(column["name"])
+            for column in inspect(connection).get_columns("optimization_candidates")
+        }
+        assert "optimizer_trace" in candidate_columns
+        trace = connection.execute(
+            text("SELECT optimizer_trace FROM optimization_candidates WHERE id = 'cand-existing'")
+        ).scalar_one()
+        assert trace == "{}"
 
 
 def test_dataset_export_redacts_secrets_and_keeps_trace_labels(client, auth_headers) -> None:

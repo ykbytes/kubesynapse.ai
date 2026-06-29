@@ -128,6 +128,7 @@ agentctl agents list -o name        # Just resource names
 |-------|-------------|
 | [`agents`](#agents) | Manage and inspect AI agents |
 | [`workflows`](#workflows) | Manage workflows, trigger executions, check status |
+| [`optimizations`](#optimizations) | ROI studies, copied candidates, and persisted optimizer traces |
 | [`runs`](#runs) | Approvals, policies, and `apply` |
 | [`observatory`](#observatory) | Metrics, traces, alerts, and platform health |
 | [`chat`](#chat) | Interactive agent chat sessions (including REPL) |
@@ -186,6 +187,22 @@ agentctl workflows status my-wf            # Step states + status
 agentctl workflows logs my-wf              # Workflow runtime logs
 agentctl workflows logs my-wf --run-id abc # Specific run logs
 ```
+
+---
+
+## Optimizations
+
+```bash
+agentctl optimizations studies                                  # List ROI studies in the active namespace
+agentctl optimizations studies --workflow daily-standup         # Filter by workflow
+agentctl optimizations show opt-study-123                       # Study summary + candidate inventory
+agentctl optimizations trace opt-study-123                      # Latest candidate's persisted optimizer trace
+agentctl optimizations trace opt-study-123 --candidate-id cand  # Specific candidate trace
+agentctl optimizations roi opt-study-123                        # Verified ROI + proof status
+agentctl optimizations comparison opt-study-123                 # Baseline vs candidate comparison payload
+```
+
+`agentctl optimizations trace` exposes the same observable optimizer trace that powers the candidate view in the web UI. It includes runtime status, tool activity, reasoning summaries, final response metadata, and any recorded skills/resources without claiming access to hidden chain-of-thought.
 
 ---
 
@@ -362,6 +379,13 @@ runs:
   runs policies                            List policies
   runs apply FILE                          Create/update resource
 
+optimizations:
+  optimizations studies                    List ROI studies
+  optimizations show ID                    Study detail + candidates
+  optimizations trace ID                   Persisted optimizer trace
+  optimizations roi ID                     ROI and proof gate detail
+  optimizations comparison ID              Baseline vs candidate comparison
+
 observatory:
   observatory health                       Platform health
   observatory metrics                      Agent/system metrics
@@ -461,6 +485,7 @@ cli/src/agentctl/
     _parsers.py       CRD/flat payload normalization
     agents.py         Agent CRUD, invoke, logs, live-events
     workflows.py      Workflow CRUD, trigger, cancel, status, logs
+    optimizations.py  ROI studies, candidate traces, ROI comparisons
     runs.py           Approvals, policies, apply
     auth.py           Login, register, sessions
     admin.py          User management

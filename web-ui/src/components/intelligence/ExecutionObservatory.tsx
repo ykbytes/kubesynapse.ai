@@ -86,6 +86,8 @@ import type {
   OptimizationManifestDiffSection,
   OptimizationRoi,
   OptimizationStudy,
+  OptimizerTrace,
+  OptimizerTraceEvent,
   StepTrace,
   ToolCallRecord,
 } from "@/types";
@@ -103,6 +105,7 @@ import { ExecutionTimelineView } from "../observatory/ExecutionTimelineView";
 import { LLMCallViewer } from "../observatory/LLMCallViewer";
 import { RunsRail } from "../observatory/RunsRail";
 import { LiveActivityStream, useWorkflowActivities } from "./LiveActivityStream";
+import { OptimizerTracePanel } from "./OptimizerTracePanel";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1940,6 +1943,9 @@ async function invokeOptimizerAgentForRoi({
   onStatus?: (detail: string) => void;
 }): Promise<InvokeResponse> {
   const abortController = new AbortController();
+  const startedAt = new Date().toISOString();
+  const startedAtMs = Date.now();
+  const optimizerTraceEvents: OptimizerTraceEvent[] = [];
   let streamFailure: Error | null = null;
   let completedPayload: Record<string, unknown> | null = null;
   let responseText = "";
@@ -1948,6 +1954,23 @@ async function invokeOptimizerAgentForRoi({
   let lastStatusChars = 0;
 
   const maybeString = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : "");
+  const appendOptimizerTraceEvent = (
+    kind: OptimizerTraceEvent["kind"],
+    title: string,
+    summary: string,
+    payload?: unknown,
+  ) => {
+    const sequence = optimizerTraceEvents.length + 1;
+    optimizerTraceEvents.push({
+      id: `${requestId}-${sequence}`,
+      sequence,
+      timestamp: new Date().toISOString(),
+      kind,
+      title,
+      summary,
+      ...(payload === undefined ? {} : { payload }),
+    });
+  };
   const updateText = (next: string) => {
     if (!next) return;
     responseText = next.startsWith(responseText)
@@ -1957,9 +1980,15 @@ async function invokeOptimizerAgentForRoi({
         : `${responseText}${next}`;
     if (responseText.length - lastStatusChars >= 1200) {
       lastStatusChars = responseText.length;
+      appendOptimizerTraceEvent(
+        "response",
+        "Response streaming",
+        `${responseText.length.toLocaleString()} characters received from the optimizer.`,
+      );
       onStatus?.(`Optimizer is streaming analysis (${responseText.length.toLocaleString()} characters received).`);
     }
   };
+  appendOptimizerTraceEvent("status", "Optimizer requested", `Opening a streamed run for ${agentName}.`);
 
   const deadlineId = window.setTimeout(() => {
     streamFailure = new Error("Optimizer stream exceeded 120 seconds; continuing with a safe fallback candidate.");
@@ -1978,6 +2007,7 @@ async function invokeOptimizerAgentForRoi({
         if (event === "response.started") {
           const nextThreadId = maybeString(eventPayload.thread_id);
           if (nextThreadId) threadId = nextThreadId;
+          appendOptimizerTraceEvent("status", "Optimizer started", "The runtime accepted the optimization request.", eventPayload);
           onStatus?.("Optimizer stream opened; waiting for model output.");
           return;
         }
@@ -1986,11 +2016,18 @@ async function invokeOptimizerAgentForRoi({
           const config = isPlainObject(eventPayload.config) ? eventPayload.config : eventPayload;
           const nextModel = maybeString(config.model);
           if (nextModel) model = nextModel;
+          appendOptimizerTraceEvent("status", "Runtime configured", `Using ${model}.`, config);
           onStatus?.(`Optimizer is streaming analysis with ${model}.`);
           return;
         }
 
         if (event === "response.reasoning") {
+          const reasoningSummary =
+            maybeString(eventPayload.reasoning) ||
+            maybeString(eventPayload.summary) ||
+            maybeString(eventPayload.delta) ||
+            "The runtime emitted an observable reasoning update.";
+          appendOptimizerTraceEvent("reasoning", "Reasoning summary", reasoningSummary, eventPayload);
           onStatus?.("Optimizer is reasoning over trace costs, tool churn, manifest safety, and candidate ROI.");
           return;
         }
@@ -2002,6 +2039,11 @@ async function invokeOptimizerAgentForRoi({
 
         if (event === "response.tool_call") {
           const tool = maybeString(eventPayload.tool) || "tool";
+          const toolSummary =
+            maybeString(eventPayload.summary) ||
+            maybeString(eventPayload.detail) ||
+            `The optimizer invoked ${tool}.`;
+          appendOptimizerTraceEvent("tool", tool, toolSummary, eventPayload);
           onStatus?.(`Optimizer is using ${tool} while preparing candidate guidance.`);
           return;
         }
@@ -2014,28 +2056,68 @@ async function invokeOptimizerAgentForRoi({
           if (nextThreadId) threadId = nextThreadId;
           const nextModel = maybeString(eventPayload.model);
           if (nextModel) model = nextModel;
+          appendOptimizerTraceEvent(
+            "completion",
+            "Optimizer completed",
+            `Analysis completed with ${responseText.length.toLocaleString()} response characters.`,
+            eventPayload,
+          );
           onStatus?.(`Optimizer completed analysis (${responseText.length.toLocaleString()} characters).`);
           return;
         }
 
         if (event === "response.error") {
           const message = maybeString(eventPayload.error) || "Optimizer stream failed.";
+          appendOptimizerTraceEvent("error", "Optimizer failed", message, eventPayload);
           streamFailure = new Error(message);
           throw streamFailure;
         }
       },
       onError: (error) => {
         streamFailure = error instanceof Error ? error : new Error(String(error));
+        appendOptimizerTraceEvent("error", "Stream error", streamFailure.message);
       },
       onClose: () => {
+        appendOptimizerTraceEvent("status", "Stream closed", "The runtime stream closed and candidate parsing started.");
         onStatus?.("Optimizer stream closed; preparing candidate manifest bundle.");
       },
     });
+  } catch (error) {
+    streamFailure = error instanceof Error ? error : new Error(String(error));
+    if (optimizerTraceEvents.at(-1)?.kind !== "error") {
+      appendOptimizerTraceEvent("error", "Optimizer interrupted", streamFailure.message);
+    }
   } finally {
     window.clearTimeout(deadlineId);
   }
 
-  if (streamFailure) throw streamFailure;
+  if (streamFailure) {
+    const failedTrace: OptimizerTrace = {
+      request_id: requestId,
+      thread_id: threadId,
+      agent_name: agentName,
+      model,
+      status: "failed",
+      started_at: startedAt,
+      completed_at: new Date().toISOString(),
+      duration_ms: Date.now() - startedAtMs,
+      fallback: true,
+      fallback_reason: streamFailure.message,
+      events: optimizerTraceEvents,
+      tool_calls: [],
+      artifacts: [],
+      skills: [],
+      resources: [],
+      summary: {
+        event_count: optimizerTraceEvents.length,
+        tool_count: optimizerTraceEvents.filter((event) => event.kind === "tool").length,
+        reasoning_event_count: optimizerTraceEvents.filter((event) => event.kind === "reasoning").length,
+        error_count: optimizerTraceEvents.filter((event) => event.kind === "error").length,
+      },
+    };
+    Object.assign(streamFailure, { optimizerTrace: failedTrace });
+    throw streamFailure;
+  }
   if (!responseText.trim()) {
     throw new Error("Optimizer stream closed without a candidate analysis response.");
   }
@@ -2053,6 +2135,30 @@ async function invokeOptimizerAgentForRoi({
   const metadata = isPlainObject(finalPayload.metadata)
     ? finalPayload.metadata
     : { streamed: true };
+  const completedAt = new Date().toISOString();
+  const optimizerTrace: OptimizerTrace = {
+    request_id: requestId,
+    thread_id: threadId,
+    agent_name: maybeString(finalPayload.agent_name) || agentName,
+    model,
+    status: maybeString(finalPayload.status) || "completed",
+    started_at: startedAt,
+    completed_at: completedAt,
+    duration_ms: Date.now() - startedAtMs,
+    fallback: false,
+    final_response: responseText,
+    events: optimizerTraceEvents,
+    tool_calls: toolCalls ?? [],
+    artifacts: artifacts ?? [],
+    skills: [],
+    resources: [],
+    summary: {
+      event_count: optimizerTraceEvents.length,
+      tool_count: (toolCalls ?? []).length || optimizerTraceEvents.filter((event) => event.kind === "tool").length,
+      reasoning_event_count: optimizerTraceEvents.filter((event) => event.kind === "reasoning").length,
+      error_count: optimizerTraceEvents.filter((event) => event.kind === "error").length,
+    },
+  };
 
   return {
     agent_name: maybeString(finalPayload.agent_name) || agentName,
@@ -2071,6 +2177,7 @@ async function invokeOptimizerAgentForRoi({
     artifacts,
     tool_calls: toolCalls,
     metadata,
+    optimizer_trace: optimizerTrace,
   };
 }
 
@@ -2881,7 +2988,10 @@ function OptimisePanel({
             size="sm"
             className="h-8 gap-1.5 text-xs"
             disabled={runDisabled}
-            onClick={onRun}
+            onClick={() => {
+              setOptimiseWorkspaceTab("agent");
+              onRun();
+            }}
           >
             {running ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
             {running ? "Running study..." : "Run ROI study"}
@@ -3004,16 +3114,11 @@ function OptimisePanel({
               </TabsTrigger>
               <TabsTrigger value="agent" className="h-7 gap-1.5 px-3 text-xs">
                 <BrainCircuit className="h-3.5 w-3.5" />
-                Audit
+                Optimizer trace
               </TabsTrigger>
             </TabsList>
 
-          <div className={cn(
-            "grid gap-3",
-            showAgentTab
-              ? "xl:grid-cols-[13rem_minmax(0,1fr)_minmax(22rem,0.72fr)]"
-              : "xl:grid-cols-[13rem_minmax(0,1fr)]",
-          )}>
+          <div className="grid gap-3 xl:grid-cols-[13rem_minmax(0,1fr)]">
             <aside className="space-y-3">
               <section className="rounded-lg border border-border/50 bg-card/45 p-2">
                 <div className="px-1 pb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Study stages</div>
@@ -3684,15 +3789,110 @@ function OptimisePanel({
                   </div>
                 )}
               </details>
+
+              {showAgentTab && (
+                <div className="space-y-3">
+                  {(running || runPhases.some((phase) => phase.status !== "pending")) && (
+                    <section className="rounded-lg border border-border/50 bg-card/45 p-3">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                          <Activity className="h-4 w-4 text-primary" />
+                          Live run pipeline
+                        </div>
+                        {running && <Badge variant="outline" className="gap-1 text-[10px]"><LoaderCircle className="h-3 w-3 animate-spin" /> running</Badge>}
+                      </div>
+                      <div className="grid gap-1.5 sm:grid-cols-2 xl:grid-cols-5">
+                        {runPhases.map((phase) => {
+                          const Icon =
+                            phase.status === "running" ? LoaderCircle :
+                            phase.status === "success" ? CheckCircle2 :
+                            phase.status === "error" ? ShieldAlert :
+                            Activity;
+                          return (
+                            <div
+                              key={phase.key}
+                              className={cn(
+                                "rounded-md border p-2",
+                                phase.status === "running" && "border-sky-500/30 bg-sky-500/8",
+                                phase.status === "success" && "border-emerald-500/25 bg-emerald-500/8",
+                                phase.status === "error" && "border-red-500/30 bg-red-500/10",
+                                phase.status === "pending" && "border-border/40 bg-background/60",
+                              )}
+                            >
+                              <div className="flex items-center gap-1.5">
+                                <Icon className={cn(
+                                  "h-3.5 w-3.5 shrink-0",
+                                  phase.status === "running" && "animate-spin text-sky-500",
+                                  phase.status === "success" && "text-emerald-600 dark:text-emerald-400",
+                                  phase.status === "error" && "text-red-500",
+                                  phase.status === "pending" && "text-muted-foreground",
+                                )} />
+                                <span className="min-w-0 flex-1 truncate text-[10px] font-semibold text-foreground">{phase.label}</span>
+                              </div>
+                              <p className="mt-1 line-clamp-2 text-[9px] leading-4 text-muted-foreground">{phase.detail || phase.description}</p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  )}
+
+                  <OptimizerTracePanel
+                    trace={activeCandidate?.optimizer_trace ?? result?.optimizer_trace}
+                    audit={optimizerAudit}
+                    visibleResponse={optimizerVisibleResponse}
+                    candidateName={activeCandidate?.candidate_workflow_name}
+                  />
+
+                  <details className="rounded-lg border border-border/50 bg-card/45 p-3">
+                    <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-2">
+                      <span className="flex items-center gap-2 text-xs font-semibold text-foreground">
+                        {deploymentCapable ? <ShieldAlert className="h-3.5 w-3.5 text-amber-500" /> : <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />}
+                        Optimizer execution context
+                      </span>
+                      <span className="text-[10px] text-muted-foreground">
+                        {selectedAgent?.name ?? "No agent selected"} · {accessLevel} · {accessScope}
+                      </span>
+                    </summary>
+                    <div className="mt-3 grid gap-2 text-[10px] sm:grid-cols-2 xl:grid-cols-4">
+                      <div className="rounded border border-border/40 bg-background/70 p-2">
+                        <div className="text-muted-foreground">Model</div>
+                        <div className="mt-0.5 truncate font-medium text-foreground">{selectedAgent?.model || "--"}</div>
+                      </div>
+                      <div className="rounded border border-border/40 bg-background/70 p-2">
+                        <div className="text-muted-foreground">Runtime</div>
+                        <div className="mt-0.5 truncate font-medium text-foreground">{selectedAgent?.runtime_kind || "opencode"}</div>
+                      </div>
+                      <div className="rounded border border-border/40 bg-background/70 p-2">
+                        <div className="text-muted-foreground">Apply/run</div>
+                        <div className="mt-0.5 truncate font-medium text-foreground">{deploymentCapable ? "admin approval gated" : "not allowed"}</div>
+                      </div>
+                      <div className="rounded border border-border/40 bg-background/70 p-2">
+                        <div className="text-muted-foreground">Input dossier</div>
+                        <div className="mt-0.5 truncate font-medium text-foreground">{packet?.trace_details.length ?? 0} traces · {Object.keys(packet?.source_manifests.agents ?? {}).length} agents</div>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-[10px] leading-4 text-muted-foreground">
+                      {accessGuard}. Candidate apply and run operations remain approval gated; source workflows are never edited.
+                    </p>
+                  </details>
+
+                  {(error || studyError) && (
+                    <div className="rounded-lg border border-red-500/25 bg-red-500/10 p-3 text-xs text-red-500">
+                      {error || studyError}
+                    </div>
+                  )}
+                </div>
+              )}
             </main>
 
-            <aside className={cn("space-y-3", !showAgentTab && "hidden")}>
+            <aside className="hidden">
               <section className="rounded-lg border border-primary/20 bg-primary/5 p-3">
                 <div className="mb-2 flex items-start justify-between gap-2">
                   <div>
                     <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                       <BrainCircuit className="h-4 w-4 text-primary" />
-                      Optimizer decision audit
+                      Legacy candidate audit
                     </div>
                     <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground">
                       Visible response, skills, resources, and topology decision. Private model chain-of-thought is not exposed.
@@ -4674,6 +4874,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
         optimisePacket,
         "Optimizer streaming analysis has not completed yet; using server-ranked ROI levers as a safe fallback seed.",
       );
+      let optimizerTrace: OptimizerTrace | null = null;
       updateOptimiseRunPhase("agent", "running", `Starting streamed optimizer analysis with ${optimiseAgentName}.`);
       try {
         const result = await invokeOptimizerAgentForRoi({
@@ -4694,12 +4895,48 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
           },
         });
         optimizerOutput = result.response ?? "";
+        optimizerTrace = result.optimizer_trace ?? null;
         setOptimiseResult(result);
         updateOptimiseRunPhase("agent", "success", `Optimizer returned ${optimizerOutput.length.toLocaleString()} characters of analysis and candidate material.`);
       } catch (error) {
         const message = `Optimizer agent invocation failed after the baseline study was created: ${error instanceof Error ? error.message : "unknown error"}`;
         updateOptimiseRunPhase("agent", "success", `${message}. Continuing with a safe fallback analysis so candidate validation can still run.`);
         optimizerOutput = buildGuardedOptimizerFallbackOutput(study, optimisePacket, message);
+        const capturedTrace = error instanceof Error
+          ? (error as Error & { optimizerTrace?: OptimizerTrace }).optimizerTrace
+          : undefined;
+        const fallbackEvent: OptimizerTraceEvent = {
+          id: `${capturedTrace?.request_id ?? `optimise-${detail.id}`}-fallback`,
+          sequence: (capturedTrace?.events.length ?? 0) + 1,
+          timestamp: new Date().toISOString(),
+          kind: "warning",
+          title: "Safe fallback candidate",
+          summary: "The streamed run did not complete, so ROI Lab generated a no-change copied candidate for review.",
+          payload: { reason: message },
+        };
+        const fallbackEvents = [...(capturedTrace?.events ?? []), fallbackEvent];
+        optimizerTrace = {
+          ...(capturedTrace ?? {}),
+          request_id: capturedTrace?.request_id ?? `optimise-${detail.id}-${Date.now()}`,
+          agent_name: optimiseAgentName,
+          model: capturedTrace?.model ?? selectedAgentForRun?.model ?? "unavailable",
+          status: "fallback",
+          completed_at: new Date().toISOString(),
+          fallback: true,
+          fallback_reason: message,
+          final_response: optimizerOutput,
+          events: fallbackEvents,
+          tool_calls: capturedTrace?.tool_calls ?? [],
+          artifacts: capturedTrace?.artifacts ?? [],
+          skills: capturedTrace?.skills ?? [],
+          resources: capturedTrace?.resources ?? [],
+          summary: {
+            event_count: fallbackEvents.length,
+            tool_count: capturedTrace?.summary.tool_count ?? 0,
+            reasoning_event_count: capturedTrace?.summary.reasoning_event_count ?? 0,
+            error_count: capturedTrace?.summary.error_count ?? 1,
+          },
+        };
         setOptimiseResult({
           agent_name: optimiseAgentName,
           response: optimizerOutput,
@@ -4710,6 +4947,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
           artifacts: null,
           tool_calls: null,
           metadata: { fallback: true, reason: message },
+          optimizer_trace: optimizerTrace,
         });
         toast.info("Optimizer stream did not finish; creating a safe copied candidate for review.");
       }
@@ -4719,6 +4957,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
       try {
         candidate = await generateOptimizationCandidate(token, study.id, {
           optimizer_output: optimizerOutput,
+          optimizer_trace: optimizerTrace,
           suffix: `opt-${study.id.slice(-5)}`,
           expected_savings: extractOptimiserExpectedSavings(optimizerOutput),
           allow_topology_rewrite: optimiseTopologyMode === "allow_topology_rewrite",

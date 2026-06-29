@@ -64,6 +64,7 @@ class CreateStudyRequest(BaseModel):
 class CreateCandidateRequest(BaseModel):
     name: str | None = Field(default=None, max_length=256)
     optimizer_output: str | None = None
+    optimizer_trace: dict[str, Any] | None = None
     manifest_bundle: list[dict[str, Any]] = Field(default_factory=list, min_length=1, max_length=20)
     expected_savings: dict[str, Any] = Field(default_factory=dict)
     allow_topology_rewrite: bool = False
@@ -71,6 +72,7 @@ class CreateCandidateRequest(BaseModel):
 
 class GenerateCandidateRequest(BaseModel):
     optimizer_output: str | None = None
+    optimizer_trace: dict[str, Any] | None = None
     suffix: str | None = Field(default=None, max_length=32)
     expected_savings: dict[str, Any] = Field(default_factory=dict)
     allow_topology_rewrite: bool = False
@@ -2433,6 +2435,107 @@ def _redact(value: Any) -> Any:
     return value
 
 
+def _bounded_optimizer_trace_value(value: Any, *, depth: int = 0) -> Any:
+    if depth >= 5:
+        return "[TRUNCATED]"
+    if isinstance(value, dict):
+        return {
+            str(key)[:120]: _bounded_optimizer_trace_value(nested, depth=depth + 1)
+            for key, nested in list(value.items())[:40]
+        }
+    if isinstance(value, list):
+        return [_bounded_optimizer_trace_value(item, depth=depth + 1) for item in value[:100]]
+    if isinstance(value, str):
+        return value[:8000]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:1000]
+
+
+def _normalise_optimizer_trace(value: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(value, dict) or not value:
+        return {}
+
+    scalar_fields = (
+        "request_id",
+        "thread_id",
+        "agent_name",
+        "model",
+        "status",
+        "started_at",
+        "completed_at",
+        "duration_ms",
+        "fallback",
+        "fallback_reason",
+        "final_response",
+    )
+    normalized = {
+        field: _bounded_optimizer_trace_value(value.get(field))
+        for field in scalar_fields
+        if value.get(field) is not None
+    }
+
+    events: list[dict[str, Any]] = []
+    for index, raw_event in enumerate(value.get("events") if isinstance(value.get("events"), list) else []):
+        if not isinstance(raw_event, dict):
+            continue
+        try:
+            sequence = int(raw_event.get("sequence", index + 1))
+        except (TypeError, ValueError):
+            sequence = index + 1
+        event = {
+            "id": str(raw_event.get("id") or f"optimizer-event-{index + 1}")[:160],
+            "sequence": sequence,
+            "timestamp": str(raw_event.get("timestamp") or "")[:80],
+            "kind": str(raw_event.get("kind") or "status")[:40],
+            "title": str(raw_event.get("title") or "Optimizer activity")[:240],
+            "summary": str(raw_event.get("summary") or "")[:4000],
+        }
+        if raw_event.get("payload") is not None:
+            event["payload"] = _bounded_optimizer_trace_value(raw_event.get("payload"))
+        events.append(event)
+        if len(events) >= 250:
+            break
+    events.sort(key=lambda event: (int(event["sequence"]), str(event["timestamp"])))
+
+    tool_calls = value.get("tool_calls") if isinstance(value.get("tool_calls"), list) else []
+    artifacts = value.get("artifacts") if isinstance(value.get("artifacts"), list) else []
+    skills = value.get("skills") if isinstance(value.get("skills"), list) else []
+    resources = value.get("resources") if isinstance(value.get("resources"), list) else []
+    normalized["events"] = events
+    normalized["tool_calls"] = _bounded_optimizer_trace_value(tool_calls[:100])
+    normalized["artifacts"] = _bounded_optimizer_trace_value(artifacts[:50])
+    normalized["skills"] = _bounded_optimizer_trace_value(skills[:50])
+    normalized["resources"] = _bounded_optimizer_trace_value(resources[:100])
+    normalized["summary"] = {
+        "event_count": len(events),
+        "tool_count": len(tool_calls[:100]),
+        "reasoning_event_count": sum(1 for event in events if event["kind"] == "reasoning"),
+        "error_count": sum(1 for event in events if event["kind"] == "error"),
+    }
+    return _redact(normalized)
+
+
+def _attach_optimizer_trace_audit(
+    trace: dict[str, Any],
+    validation: dict[str, Any],
+) -> dict[str, Any]:
+    if not trace:
+        return {}
+    audit = validation.get("optimizer_audit") if isinstance(validation.get("optimizer_audit"), dict) else {}
+    if not audit:
+        return trace
+    enriched = _clone(trace)
+    enriched["skills"] = _string_list(audit.get("skills_used") or audit.get("skills_requested"), limit=50)
+    resources = audit.get("resources_used") if isinstance(audit.get("resources_used"), dict) else {}
+    enriched["resources"] = [
+        f"{str(key).replace('_', ' ')}: {', '.join(map(str, value)) if isinstance(value, list) else value}"
+        for key, value in list(resources.items())[:100]
+        if value not in (None, "", [])
+    ]
+    return _redact(enriched)
+
+
 def _apply_manifest_bundle(
     bundle: list[dict[str, Any]],
     namespace: str,
@@ -3035,6 +3138,10 @@ def create_candidate(study_id: str, body: CreateCandidateRequest, user: dict[str
         manifest_bundle=manifest_bundle,
         manifest_diff=_manifest_diff(study, manifest_bundle),
         optimizer_output=body.optimizer_output,
+        optimizer_trace=_attach_optimizer_trace_audit(
+            _normalise_optimizer_trace(body.optimizer_trace),
+            validation,
+        ),
         validation_results=validation,
         expected_savings=_normalise_expected_savings(body.expected_savings, validation),
         created_by=_principal(user),
@@ -3120,6 +3227,10 @@ def generate_candidate(study_id: str, body: GenerateCandidateRequest, user: dict
         manifest_bundle=bundle,
         manifest_diff=_manifest_diff(study, bundle),
         optimizer_output=body.optimizer_output,
+        optimizer_trace=_attach_optimizer_trace_audit(
+            _normalise_optimizer_trace(body.optimizer_trace),
+            validation,
+        ),
         validation_results=validation,
         expected_savings=_normalise_expected_savings(body.expected_savings, validation),
         created_by=_principal(user),

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -6,9 +6,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 const sourcePath = resolve(here, "../src/components/intelligence/ExecutionObservatory.tsx");
 const apiPath = resolve(here, "../src/lib/api.ts");
 const typesPath = resolve(here, "../src/types.ts");
+const tracePanelPath = resolve(here, "../src/components/intelligence/OptimizerTracePanel.tsx");
 const source = readFileSync(sourcePath, "utf8");
 const apiSource = readFileSync(apiPath, "utf8");
 const typesSource = readFileSync(typesPath, "utf8");
+const tracePanelSource = existsSync(tracePanelPath) ? readFileSync(tracePanelPath, "utf8") : "";
 
 const checks = [
   {
@@ -142,13 +144,36 @@ const checks = [
       source.includes("do_not_emit_private_chain_of_thought"),
   },
   {
-    name: "optimizer UI exposes persisted decision audit",
+    name: "candidate API exposes a persisted optimizer trace",
     pass:
-      source.includes("Optimizer decision audit") &&
-      source.includes("optimizerAuditFromValidation") &&
-      source.includes("Visible optimizer response") &&
-      source.includes("Private model chain-of-thought is not exposed") &&
-      source.includes("Skills and resources"),
+      typesSource.includes("export interface OptimizerTrace") &&
+      typesSource.includes("export interface OptimizerTraceEvent") &&
+      typesSource.includes("optimizer_trace?: OptimizerTrace") &&
+      apiSource.includes("optimizer_trace: parseOptimizerTrace") &&
+      apiSource.includes("optimizer_trace?: OptimizerTrace"),
+  },
+  {
+    name: "optimizer stream captures observable reasoning, tools, completion, and errors",
+    pass:
+      source.includes("optimizerTraceEvents") &&
+      source.includes("appendOptimizerTraceEvent(\"reasoning\"") &&
+      source.includes("appendOptimizerTraceEvent(\"tool\"") &&
+      source.includes("\"completion\",") &&
+      source.includes("appendOptimizerTraceEvent(\"error\"") &&
+      source.includes("optimizer_trace: optimizerTrace"),
+  },
+  {
+    name: "candidate workspace provides a focused optimizer trace timeline and inspector",
+    pass:
+      source.includes("Optimizer trace") &&
+      source.includes("<OptimizerTracePanel") &&
+      tracePanelSource.includes("Trace chronology") &&
+      tracePanelSource.includes("Event inspector") &&
+      tracePanelSource.includes("Reasoning summaries") &&
+      tracePanelSource.includes("Skills & resources") &&
+      tracePanelSource.includes("Visible final response") &&
+      tracePanelSource.includes("Observable execution only") &&
+      !source.includes("Optimizer decision audit"),
   },
   {
     name: "optimizer UI keeps secondary analysis in collapsible panels",

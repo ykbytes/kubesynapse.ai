@@ -831,6 +831,7 @@ export interface InvokeResponse {
   artifacts?: Array<Record<string, unknown>> | null;
   tool_calls?: Array<Record<string, unknown>> | null;
   metadata?: Record<string, unknown> | null;
+  optimizer_trace?: OptimizerTrace | null;
 }
 
 export interface AgentLogsResponse {
@@ -1438,6 +1439,52 @@ export interface OptimizationStudy {
   trials?: OptimizationTrial[];
 }
 
+export type OptimizerTraceEventKind =
+  | "status"
+  | "reasoning"
+  | "tool"
+  | "response"
+  | "warning"
+  | "error"
+  | "completion";
+
+export interface OptimizerTraceEvent {
+  id: string;
+  sequence: number;
+  timestamp: string;
+  kind: OptimizerTraceEventKind;
+  title: string;
+  summary: string;
+  payload?: unknown;
+}
+
+export interface OptimizerTraceSummary {
+  event_count: number;
+  tool_count: number;
+  reasoning_event_count: number;
+  error_count: number;
+}
+
+export interface OptimizerTrace {
+  request_id?: string | null;
+  thread_id?: string | null;
+  agent_name?: string | null;
+  model?: string | null;
+  status?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  fallback?: boolean;
+  fallback_reason?: string | null;
+  final_response?: string | null;
+  events: OptimizerTraceEvent[];
+  tool_calls: Array<Record<string, unknown>>;
+  artifacts: Array<Record<string, unknown>>;
+  skills: string[];
+  resources: string[];
+  summary: OptimizerTraceSummary;
+}
+
 export interface OptimizationCandidate {
   id: string;
   study_id: string;
@@ -1449,6 +1496,7 @@ export interface OptimizationCandidate {
   manifest_bundle: Array<Record<string, unknown>>;
   manifest_diff: Record<string, unknown>;
   optimizer_output?: string | null;
+  optimizer_trace?: OptimizerTrace | null;
   validation_results: Record<string, unknown>;
   expected_savings?: Record<string, unknown>;
   created_by?: string | null;

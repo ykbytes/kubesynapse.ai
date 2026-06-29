@@ -20,6 +20,7 @@ def register_all(app: typer.Typer) -> None:
     from agentctl.commands.chat import chat_app
     from agentctl.commands.credentials import credentials_app
     from agentctl.commands.observatory import observatory_app
+    from agentctl.commands.optimizations import optimizations_app
     from agentctl.commands.profile import profile_app
     from agentctl.commands.providers import providers_app
     from agentctl.commands.runs import runs_app
@@ -32,6 +33,7 @@ def register_all(app: typer.Typer) -> None:
     app.add_typer(workflows_app, name="workflows", help="Manage workflows and DAGs.")
     app.add_typer(runs_app, name="runs", help="Approvals, policies, and apply.")
     app.add_typer(observatory_app, name="observatory", help="Observability -- metrics, traces, alerts.")
+    app.add_typer(optimizations_app, name="optimizations", help="ROI studies, candidates, and optimization traces.")
     app.add_typer(chat_app, name="chat", help="Interactive agent chat sessions.")
     app.add_typer(webhooks_app, name="webhooks", help="Manage webhooks and triggers.")
 

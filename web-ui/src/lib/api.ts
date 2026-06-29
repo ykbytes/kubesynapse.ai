@@ -77,6 +77,8 @@ import type {
   OptimizationStepRollup,
   OptimizationStudy,
   OptimizationToolRollup,
+  OptimizerTrace,
+  OptimizerTraceEvent,
   OptimizationTraceMetricSnapshot,
   OptimizationTrial,
   PolicyInfo,
@@ -3196,6 +3198,53 @@ function parseOptimizationIntelligence(payload: unknown, label = "OptimizationIn
   };
 }
 
+function parseOptimizerTrace(payload: unknown, label = "OptimizerTrace"): OptimizerTrace | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const record = payload as Record<string, unknown>;
+  const rawEvents = Array.isArray(record.events) ? record.events : [];
+  const allowedKinds = new Set(["status", "reasoning", "tool", "response", "warning", "error", "completion"]);
+  const events: OptimizerTraceEvent[] = rawEvents.flatMap((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const event = item as Record<string, unknown>;
+    const rawKind = typeof event.kind === "string" ? event.kind : "status";
+    const kind = allowedKinds.has(rawKind) ? rawKind as OptimizerTraceEvent["kind"] : "status";
+    return [{
+      id: typeof event.id === "string" ? event.id : `optimizer-event-${index + 1}`,
+      sequence: typeof event.sequence === "number" ? event.sequence : index + 1,
+      timestamp: typeof event.timestamp === "string" ? event.timestamp : "",
+      kind,
+      title: typeof event.title === "string" ? event.title : "Optimizer activity",
+      summary: typeof event.summary === "string" ? event.summary : "",
+      payload: event.payload,
+    }];
+  });
+  const summary = readOptionalRecord(record, "summary", label) ?? {};
+  return {
+    request_id: readOptionalString(record, "request_id", label),
+    thread_id: readOptionalString(record, "thread_id", label),
+    agent_name: readOptionalString(record, "agent_name", label),
+    model: readOptionalString(record, "model", label),
+    status: readOptionalString(record, "status", label),
+    started_at: readOptionalString(record, "started_at", label),
+    completed_at: readOptionalString(record, "completed_at", label),
+    duration_ms: readOptionalNumber(record, "duration_ms", label),
+    fallback: readOptionalBoolean(record, "fallback", label) ?? false,
+    fallback_reason: readOptionalString(record, "fallback_reason", label),
+    final_response: readOptionalString(record, "final_response", label),
+    events,
+    tool_calls: readRecordArray(record, "tool_calls", label),
+    artifacts: readRecordArray(record, "artifacts", label),
+    skills: readStringArray(record, "skills", label, []),
+    resources: readStringArray(record, "resources", label, []),
+    summary: {
+      event_count: readOptionalNumber(summary, "event_count", `${label}.summary`) ?? events.length,
+      tool_count: readOptionalNumber(summary, "tool_count", `${label}.summary`) ?? 0,
+      reasoning_event_count: readOptionalNumber(summary, "reasoning_event_count", `${label}.summary`) ?? 0,
+      error_count: readOptionalNumber(summary, "error_count", `${label}.summary`) ?? 0,
+    },
+  };
+}
+
 function parseOptimizationCandidate(payload: unknown, label = "OptimizationCandidate"): OptimizationCandidate {
   const record = expectRecord(payload, label);
   const manifestBundle = record.manifest_bundle;
@@ -3212,6 +3261,7 @@ function parseOptimizationCandidate(payload: unknown, label = "OptimizationCandi
       : [],
     manifest_diff: readOptionalRecord(record, "manifest_diff", label) ?? {},
     optimizer_output: readOptionalString(record, "optimizer_output", label),
+    optimizer_trace: parseOptimizerTrace(record.optimizer_trace, `${label}.optimizer_trace`),
     validation_results: readOptionalRecord(record, "validation_results", label) ?? {},
     expected_savings: readOptionalRecord(record, "expected_savings", label) ?? {},
     created_by: readOptionalString(record, "created_by", label),
@@ -3466,6 +3516,7 @@ export interface CreateOptimizationStudyPayload {
 
 export interface GenerateOptimizationCandidatePayload {
   optimizer_output?: string | null;
+  optimizer_trace?: OptimizerTrace | null;
   suffix?: string | null;
   expected_savings?: Record<string, unknown>;
   allow_topology_rewrite?: boolean;

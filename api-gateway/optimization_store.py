@@ -92,6 +92,7 @@ class OptimizationCandidateRow(Base):
     manifest_bundle = Column(JSON, nullable=False, default=list)
     manifest_diff = Column(JSON, nullable=False, default=dict)
     optimizer_output = Column(String, nullable=True)
+    optimizer_trace = Column(JSON, nullable=False, default=dict)
     validation_results = Column(JSON, nullable=False, default=dict)
     expected_savings = Column(JSON, nullable=False, default=dict)
     created_by = Column(String(256), nullable=True)
@@ -114,6 +115,7 @@ class OptimizationCandidateRow(Base):
             "manifest_bundle": _json_clone(self.manifest_bundle) or [],
             "manifest_diff": _json_clone(self.manifest_diff) or {},
             "optimizer_output": self.optimizer_output,
+            "optimizer_trace": _json_clone(self.optimizer_trace) or {},
             "validation_results": _json_clone(self.validation_results) or {},
             "expected_savings": _json_clone(self.expected_savings) or {},
             "created_by": self.created_by,
@@ -183,17 +185,32 @@ def _ensure_optimization_schema() -> None:
         if "optimization_studies" not in inspector.get_table_names():
             return
 
-        columns = {str(column.get("name") or "") for column in inspector.get_columns("optimization_studies")}
-        if "proof_gate" in columns:
-            return
+        study_columns = {str(column.get("name") or "") for column in inspector.get_columns("optimization_studies")}
+        if "proof_gate" not in study_columns:
+            proof_gate_type = _compile_type_sql(JSON(), connection.dialect)
+            connection.execute(text(f"ALTER TABLE optimization_studies ADD COLUMN proof_gate {proof_gate_type}"))
+            connection.execute(
+                text("UPDATE optimization_studies SET proof_gate = :proof_gate WHERE proof_gate IS NULL"),
+                {"proof_gate": json.dumps({"mode": "hybrid", "requires_approval": True})},
+            )
+            logger.info("Added optimization_studies.proof_gate column")
 
-        proof_gate_type = _compile_type_sql(JSON(), connection.dialect)
-        connection.execute(text(f"ALTER TABLE optimization_studies ADD COLUMN proof_gate {proof_gate_type}"))
-        connection.execute(
-            text("UPDATE optimization_studies SET proof_gate = :proof_gate WHERE proof_gate IS NULL"),
-            {"proof_gate": json.dumps({"mode": "hybrid", "requires_approval": True})},
-        )
-        logger.info("Added optimization_studies.proof_gate column")
+        if "optimization_candidates" not in inspector.get_table_names():
+            return
+        candidate_columns = {
+            str(column.get("name") or "")
+            for column in inspector.get_columns("optimization_candidates")
+        }
+        if "optimizer_trace" not in candidate_columns:
+            optimizer_trace_type = _compile_type_sql(JSON(), connection.dialect)
+            connection.execute(
+                text(f"ALTER TABLE optimization_candidates ADD COLUMN optimizer_trace {optimizer_trace_type}")
+            )
+            connection.execute(
+                text("UPDATE optimization_candidates SET optimizer_trace = :optimizer_trace WHERE optimizer_trace IS NULL"),
+                {"optimizer_trace": json.dumps({})},
+            )
+            logger.info("Added optimization_candidates.optimizer_trace column")
 
 
 def create_study(
@@ -270,6 +287,7 @@ def create_candidate(
     manifest_bundle: list[dict[str, Any]],
     manifest_diff: dict[str, Any],
     optimizer_output: str | None,
+    optimizer_trace: dict[str, Any] | None,
     validation_results: dict[str, Any],
     expected_savings: dict[str, Any],
     created_by: str | None,
@@ -286,6 +304,7 @@ def create_candidate(
         manifest_bundle=manifest_bundle,
         manifest_diff=manifest_diff,
         optimizer_output=optimizer_output,
+        optimizer_trace=optimizer_trace or {},
         validation_results=validation_results,
         expected_savings=expected_savings,
         created_by=created_by,

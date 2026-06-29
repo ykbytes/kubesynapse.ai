@@ -25,7 +25,7 @@ const checks = [
   ["trace chronology is narrower than inspector", observatory.includes("xl:grid-cols-[12rem_minmax(20rem,1fr)_minmax(24rem,1.1fr)]")],
   ["observatory renders optimisation cockpit", observatory.includes("OptimisePanel")],
   ["optimise tab can select platform agents", observatory.includes("listAgents") && observatory.includes("optimiseAgents")],
-  ["optimise tab can invoke selected agent", observatory.includes("invokeAgent") && observatory.includes("Run ROI study")],
+  ["optimise tab can invoke selected agent", observatory.includes("invokeOptimizerAgentForRoi") && observatory.includes("streamAgentInvoke") && observatory.includes("Run ROI study")],
   ["optimise tab builds trace optimisation packet", observatory.includes("buildOptimisationPacket")],
   ["optimise tab shows cost and latency opportunities", observatory.includes("opportunity_map") && observatory.includes("Token pressure")],
   ["optimise tab includes source Kubernetes manifests", observatory.includes("fetchWorkflowManifest") && observatory.includes("fetchAgentManifest") && observatory.includes("source_manifests")],

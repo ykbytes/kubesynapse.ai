@@ -125,9 +125,10 @@ The workflow is:
 1. Select baseline traces.
 2. Generate an optimized candidate manifest bundle.
 3. Review side-by-side manifest differences.
-4. Approve and run candidate trials.
-5. Compare baseline versus candidate tokens, wall-clock time, tool calls, cost, and quality status.
-6. Promote only after the proof gate passes.
+4. Inspect the persisted optimizer trace for the candidate to review observable reasoning summaries, tools, skills, and referenced resources.
+5. Approve and run candidate trials.
+6. Compare baseline versus candidate tokens, wall-clock time, tool calls, cost, and quality status.
+7. Promote only after the proof gate passes.
 
 Candidates preserve workflow topology and source model selection in v1. Prompt, context, timeout, caching, and tool-use guidance can be optimized without removing required behavior.
 
@@ -145,6 +146,8 @@ Login and use the local gateway:
 agentctl --gateway http://localhost:8080 auth login -u admin -p "ChangeMeStrong9!"
 agentctl agents list
 agentctl workflows list
+agentctl optimizations studies --workflow daily-standup
+agentctl optimizations trace <study-id> --candidate-id <candidate-id>
 agentctl observatory traces --limit 10
 ```
 

@@ -4,7 +4,7 @@ The `cli/` directory houses `agentctl` — a modern terminal client for KubeSyna
 
 ## Overview
 
-`agentctl` is a Python 3.11+ CLI that wraps the KubeSynapse API gateway. It provides full coverage of agents, workflows, observability, auth, admin, credentials, skills, chat, webhooks, artifacts, and providers.
+`agentctl` is a Python 3.11+ CLI that wraps the KubeSynapse API gateway. It provides full coverage of agents, workflows, optimization ROI studies, observability, auth, admin, credentials, skills, chat, webhooks, artifacts, and providers.
 
 **Key design goals:**
 - Modular package, no monoliths
@@ -28,6 +28,7 @@ cli/src/agentctl/
     _parsers.py        Shared CRD/flat payload normalization
     agents.py          Agent CRUD, invoke, logs, live-events
     workflows.py       Workflow CRUD, trigger, cancel, status, logs
+    optimizations.py   ROI study inventory, candidate traces, ROI/comparison views
     runs.py            Approvals, policies, apply
     auth.py            Login, register, sessions, password, config
     admin.py           User management (admin role)
@@ -81,6 +82,7 @@ Wraps `httpx.Client` with:
 - `paginate()` — fetches all pages from list endpoints
 - `iter_sse()` — parses Server-Sent Events from streaming endpoints
 - `_raise_for_status()` — extracts structured error messages from gateway responses (including Pydantic validation errors)
+- Optimization commands consume persisted `optimizer_trace` payloads so candidate reasoning can be audited from the terminal with the same observable data model used in the web UI
 
 ### `output.py`
 Unified rendering layer:
