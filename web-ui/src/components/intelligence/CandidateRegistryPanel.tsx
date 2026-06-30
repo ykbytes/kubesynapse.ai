@@ -4,12 +4,17 @@ import {
   CalendarClock,
   Check,
   ChevronRight,
+  Code2,
+  Download,
   FlaskConical,
   Search,
   Tag,
   X,
 } from "lucide-react";
+import { Highlight, type Language } from "prism-react-renderer";
 
+import { KubeSynapseTheme } from "@/components/docs/shared";
+import { CopyButton } from "@/components/shared/CopyButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,10 +36,13 @@ type CandidateRegistryPanelProps = {
   loading: boolean;
   includeArchived: boolean;
   actionLoading: string | null;
+  manifest: string;
+  manifestLoading: boolean;
   onIncludeArchivedChange: (value: boolean) => void;
   onSelect: (candidate: OptimizationCandidate) => void;
   onUpdateTags: (candidate: OptimizationCandidate, tags: string[]) => void;
   onArchive: (candidate: OptimizationCandidate) => void;
+  onDownload: () => void;
 };
 
 function expectedGain(candidate: OptimizationCandidate) {
@@ -74,10 +82,13 @@ export function CandidateRegistryPanel({
   loading,
   includeArchived,
   actionLoading,
+  manifest,
+  manifestLoading,
   onIncludeArchivedChange,
   onSelect,
   onUpdateTags,
   onArchive,
+  onDownload,
 }: CandidateRegistryPanelProps) {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
@@ -165,7 +176,7 @@ export function CandidateRegistryPanel({
         </Button>
       </header>
 
-      <div className="min-h-[16rem] overflow-auto">
+      <div className="min-h-[16rem] max-h-[24rem] overflow-auto">
         <div className="hidden grid-cols-[minmax(15rem,2fr)_7rem_minmax(11rem,1.2fr)_6rem_9rem_2rem] gap-3 border-b border-border/50 bg-muted/25 px-3 py-2 text-[10px] font-semibold uppercase text-muted-foreground lg:grid">
           <span>Candidate</span>
           <span>State</span>
@@ -327,6 +338,66 @@ export function CandidateRegistryPanel({
             )}
           </div>
         </footer>
+      )}
+
+      {selected && (
+        <section className="border-t border-border/60">
+          <header className="flex flex-wrap items-center gap-2 px-3 py-2">
+            <Code2 className="h-4 w-4 text-primary" />
+            <div className="min-w-0 flex-1">
+              <h5 className="text-xs font-semibold">Candidate manifest</h5>
+              <p className="truncate text-[10px] text-muted-foreground">
+                Exact validated bundle for {selected.candidate_workflow_name}
+              </p>
+            </div>
+            <Badge variant="outline" className="h-5 text-[9px]">
+              {selected.manifest_bundle.length} resources
+            </Badge>
+            <CopyButton value={manifest} className="h-7 w-7" />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1.5 px-2 text-[10px]"
+              disabled={!manifest || actionLoading === "manifest-download"}
+              onClick={onDownload}
+            >
+              <Download className="h-3.5 w-3.5" />
+              YAML
+            </Button>
+          </header>
+          <div className="max-h-[32rem] overflow-auto border-t border-border/50 bg-slate-950">
+            {manifestLoading ? (
+              <div className="flex min-h-40 items-center justify-center text-xs text-slate-400">
+                Loading validated manifest…
+              </div>
+            ) : manifest ? (
+              <Highlight theme={KubeSynapseTheme} code={manifest.trimEnd()} language={"yaml" as Language}>
+                {({ className, style, tokens, getLineProps, getTokenProps }) => (
+                  <pre
+                    className={cn(className, "min-w-max p-3 font-mono text-[11px] leading-5")}
+                    style={{ ...style, margin: 0, background: "transparent" }}
+                  >
+                    {tokens.map((line, index) => (
+                      <div key={index} {...getLineProps({ line })} className="table-row">
+                        <span className="table-cell select-none pr-4 text-right text-slate-600">{index + 1}</span>
+                        <span className="table-cell">
+                          {line.map((token, tokenIndex) => (
+                            <span key={tokenIndex} {...getTokenProps({ token })} />
+                          ))}
+                        </span>
+                      </div>
+                    ))}
+                  </pre>
+                )}
+              </Highlight>
+            ) : (
+              <div className="flex min-h-40 items-center justify-center px-4 text-center text-xs text-slate-400">
+                The persisted manifest could not be loaded. Refresh the registry to retry.
+              </div>
+            )}
+          </div>
+        </section>
       )}
 
       <Dialog open={Boolean(archiveTarget)} onOpenChange={(open) => { if (!open) setArchiveTarget(null); }}>

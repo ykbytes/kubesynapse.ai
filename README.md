@@ -142,7 +142,7 @@ The workflow is:
 3. Review side-by-side manifest differences.
 4. Inspect the persisted optimizer trace: runtime status, loaded skill files, observable reasoning summaries, tool calls, artifacts, referenced resources, final response, and candidate validation result.
 5. Download the exact persisted candidate bundle as multi-document YAML for external review.
-6. Manage candidates across studies in the candidate registry: search, select, tag, or archive candidates without losing lineage or audit history.
+6. Manage candidates across studies in the candidate registry: search, select, tag, archive, and inspect the exact syntax-highlighted YAML without losing lineage or audit history.
 7. Approve and run candidate trials.
 8. Compare baseline versus candidate tokens, wall-clock time, tool calls, cost, and quality status.
 9. Promote only after the proof gate passes.

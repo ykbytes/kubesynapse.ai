@@ -2143,6 +2143,11 @@ function OptimizationSection() {
         the gateway persists baseline evidence, validates a copied manifest bundle, and keeps estimates separate
         from results measured through candidate trials.
       </p>
+      <p className="text-sm leading-7 text-muted-foreground">
+        The Candidates workspace lists versions across every study for the selected workflow. Selecting a candidate
+        keeps the registry in view and opens its exact validated, syntax-highlighted YAML bundle. Tags support team
+        organization; archive removes a candidate from active lists while retaining manifests, traces, and trial audit.
+      </p>
 
       <div id="optimizer-flow">
         <h3 className="mb-3 text-lg font-bold text-[oklch(0.95_0.005_264)]">Study workflow</h3>

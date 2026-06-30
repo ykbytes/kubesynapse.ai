@@ -3340,7 +3340,17 @@ function parseOptimizationStudy(payload: unknown, label = "OptimizationStudy"): 
     created_at: readOptionalString(record, "created_at", label),
     updated_at: readOptionalString(record, "updated_at", label),
     candidates: Array.isArray(candidates)
-      ? candidates.map((item, index) => parseOptimizationCandidate(item, `${label}.candidates[${index}]`))
+      ? candidates.flatMap((item, index) => {
+          try {
+            return [parseOptimizationCandidate(item, `${label}.candidates[${index}]`)];
+          } catch (error) {
+            console.warn("Skipped an unreadable candidate in optimization study", {
+              index,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return [];
+          }
+        })
       : undefined,
     trials: Array.isArray(trials)
       ? trials.map((item, index) => parseOptimizationTrial(item, `${label}.trials[${index}]`))
@@ -3613,8 +3623,35 @@ export async function fetchOptimizationCandidates(
   return parseJsonResponse(response, (payload) => {
     const record = expectRecord(payload, "OptimizationCandidateListResponse");
     return readRecordArray(record, "items", "OptimizationCandidateListResponse")
-      .map((item, index) => parseOptimizationCandidate(item, `OptimizationCandidateListResponse.items[${index}]`));
+      .flatMap((item, index) => {
+        try {
+          return [parseOptimizationCandidate(item, `OptimizationCandidateListResponse.items[${index}]`)];
+        } catch (error) {
+          console.warn("Skipped an unreadable optimization candidate", {
+            index,
+            candidateId: typeof item.id === "string" ? item.id : "unknown",
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return [];
+        }
+      });
   });
+}
+
+export async function fetchOptimizationCandidateManifest(
+  token: string,
+  candidateId: string,
+): Promise<string> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/optimizations/candidates/${encodeURIComponent(candidateId)}/manifest`),
+    token,
+    { headers: { Accept: "application/yaml" } },
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, "Failed to load candidate manifest", text);
+  }
+  return response.text();
 }
 
 export async function fetchOptimizationCandidate(

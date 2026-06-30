@@ -251,6 +251,16 @@ const checks = [
       registryPanelSource.includes("Expected gain"),
   },
   {
+    name: "candidate registry tolerates legacy records and shows highlighted manifests",
+    pass:
+      apiSource.includes("Skipped an unreadable optimization candidate") &&
+      apiSource.includes("fetchOptimizationCandidateManifest") &&
+      source.includes("optimiseCandidateManifest") &&
+      registryPanelSource.includes("Candidate manifest") &&
+      registryPanelSource.includes("<Highlight") &&
+      registryPanelSource.includes('language={"yaml" as Language}'),
+  },
+  {
     name: "persisted candidate selection can cross study boundaries",
     pass:
       source.includes("refreshOptimizationCandidates") &&

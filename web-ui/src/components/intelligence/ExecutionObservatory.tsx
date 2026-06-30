@@ -61,6 +61,7 @@ import {
   fetchExecutionDetail,
   fetchOptimizationComparison,
   fetchOptimizationCandidate,
+  fetchOptimizationCandidateManifest,
   fetchOptimizationCandidates,
   fetchOptimizationRoi,
   fetchOptimizationStudy,
@@ -2685,6 +2686,8 @@ function OptimisePanel({
   studies,
   candidates,
   includeArchivedCandidates,
+  candidateManifest,
+  candidateManifestLoading,
   study,
   candidate,
   roi,
@@ -2732,6 +2735,8 @@ function OptimisePanel({
   studies: OptimizationStudy[];
   candidates: OptimizationCandidate[];
   includeArchivedCandidates: boolean;
+  candidateManifest: string;
+  candidateManifestLoading: boolean;
   study: OptimizationStudy | null;
   candidate: OptimizationCandidate | null;
   roi: OptimizationRoi | null;
@@ -3164,10 +3169,13 @@ function OptimisePanel({
               loading={studyLoading}
               includeArchived={includeArchivedCandidates}
               actionLoading={actionLoading}
+              manifest={candidateManifest}
+              manifestLoading={candidateManifestLoading}
               onIncludeArchivedChange={onIncludeArchivedCandidatesChange}
               onSelect={(item) => onSelectCandidate(item.id)}
               onUpdateTags={(item, tags) => onUpdateCandidateTags(item.id, tags)}
               onArchive={(item) => onArchiveCandidate(item.id)}
+              onDownload={onDownloadManifest}
             />
           </TabsContent>
 
@@ -4377,6 +4385,8 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
   const [optimiseCandidates, setOptimiseCandidates] = useState<OptimizationCandidate[]>([]);
   const [includeArchivedOptimiseCandidates, setIncludeArchivedOptimiseCandidates] = useState(false);
   const [optimiseCandidate, setOptimiseCandidate] = useState<OptimizationCandidate | null>(null);
+  const [optimiseCandidateManifest, setOptimiseCandidateManifest] = useState("");
+  const [optimiseCandidateManifestLoading, setOptimiseCandidateManifestLoading] = useState(false);
   const [optimiseRoi, setOptimiseRoi] = useState<OptimizationRoi | null>(null);
   const [optimiseComparison, setOptimiseComparison] = useState<OptimizationComparison | null>(null);
   const [optimiseStudyLoading, setOptimiseStudyLoading] = useState(false);
@@ -4797,11 +4807,23 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
     setOptimiseStudyLoading(true);
     setOptimiseStudyError("");
     try {
-      const [studies, candidates] = await Promise.all([
+      const [studiesResult, candidatesResult] = await Promise.allSettled([
         fetchOptimizationStudies(token, { namespace, workflowName: selectedWorkflowName, limit: 20 }),
         refreshOptimizationCandidates(),
       ]);
+      const studies = studiesResult.status === "fulfilled" ? studiesResult.value : [];
+      const candidates = candidatesResult.status === "fulfilled" ? candidatesResult.value : [];
       setOptimiseStudies(studies);
+      if (studiesResult.status === "rejected" && candidatesResult.status === "rejected") {
+        throw candidatesResult.reason ?? studiesResult.reason;
+      }
+      if (studiesResult.status === "rejected") {
+        setOptimiseStudyError(
+          studiesResult.reason instanceof Error
+            ? `Candidate registry loaded, but study history is unavailable: ${studiesResult.reason.message}`
+            : "Candidate registry loaded, but study history is unavailable.",
+        );
+      }
       const latestCandidate =
         candidates.find((candidate) => candidate.lifecycle_state === "active") ??
         candidates[0] ??
@@ -4850,7 +4872,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
     try {
       const detail = await fetchOptimizationCandidate(token, candidateId);
       await applyOptimisationStudySnapshot(detail.study, candidateId);
-      setOptimiseWorkspaceTab("candidate");
+      setOptimiseWorkspaceTab("candidates");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load optimization candidate";
       setOptimiseStudyError(message);
@@ -4859,6 +4881,31 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
       setOptimiseStudyLoading(false);
     }
   }, [applyOptimisationStudySnapshot, token]);
+
+  useEffect(() => {
+    const candidateId = optimiseCandidate?.id;
+    if (!candidateId) {
+      setOptimiseCandidateManifest("");
+      setOptimiseCandidateManifestLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setOptimiseCandidateManifestLoading(true);
+    fetchOptimizationCandidateManifest(token, candidateId)
+      .then((manifest) => {
+        if (!cancelled) setOptimiseCandidateManifest(manifest);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setOptimiseCandidateManifest("");
+          setOptimiseStudyError(error instanceof Error ? error.message : "Failed to load candidate manifest");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setOptimiseCandidateManifestLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [optimiseCandidate?.id, token]);
 
   const handleUpdateOptimisationCandidateTags = useCallback(async (candidateId: string, tags: string[]) => {
     setOptimiseActionLoading(`tags:${candidateId}`);
@@ -5483,6 +5530,8 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                   studies={optimiseStudies}
                   candidates={optimiseCandidates}
                   includeArchivedCandidates={includeArchivedOptimiseCandidates}
+                  candidateManifest={optimiseCandidateManifest}
+                  candidateManifestLoading={optimiseCandidateManifestLoading}
                   study={optimiseStudy}
                   candidate={optimiseCandidate}
                   roi={optimiseRoi}
