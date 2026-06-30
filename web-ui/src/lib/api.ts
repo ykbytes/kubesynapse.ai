@@ -3202,7 +3202,10 @@ function parseOptimizationIntelligence(payload: unknown, label = "OptimizationIn
 function parseOptimizerTrace(payload: unknown, label = "OptimizerTrace"): OptimizerTrace | null {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
   const record = payload as Record<string, unknown>;
+  if (Object.keys(record).length === 0) return null;
   const rawEvents = Array.isArray(record.events) ? record.events : [];
+  const rawToolCalls = Array.isArray(record.tool_calls) ? record.tool_calls : [];
+  const rawArtifacts = Array.isArray(record.artifacts) ? record.artifacts : [];
   const allowedKinds = new Set(["status", "reasoning", "tool", "response", "warning", "error", "completion"]);
   const events: OptimizerTraceEvent[] = rawEvents.flatMap((item, index) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return [];
@@ -3233,10 +3236,14 @@ function parseOptimizerTrace(payload: unknown, label = "OptimizerTrace"): Optimi
     fallback_reason: readOptionalString(record, "fallback_reason", label),
     final_response: readOptionalString(record, "final_response", label),
     events,
-    tool_calls: readRecordArray(record, "tool_calls", label),
-    artifacts: readRecordArray(record, "artifacts", label),
-    skills: readStringArray(record, "skills", label, []),
-    resources: readStringArray(record, "resources", label, []),
+    tool_calls: rawToolCalls.flatMap((item) => isRecord(item) ? [item] : []),
+    artifacts: rawArtifacts.flatMap((item) => isRecord(item) ? [item] : []),
+    skills: Array.isArray(record.skills)
+      ? record.skills.filter((item): item is string => typeof item === "string")
+      : [],
+    resources: Array.isArray(record.resources)
+      ? record.resources.filter((item): item is string => typeof item === "string")
+      : [],
     summary: {
       event_count: readOptionalNumber(summary, "event_count", `${label}.summary`) ?? events.length,
       tool_count: readOptionalNumber(summary, "tool_count", `${label}.summary`) ?? 0,

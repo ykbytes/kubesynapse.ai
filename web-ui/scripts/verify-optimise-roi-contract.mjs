@@ -254,6 +254,8 @@ const checks = [
     name: "candidate registry tolerates legacy records and shows highlighted manifests",
     pass:
       apiSource.includes("Skipped an unreadable optimization candidate") &&
+      apiSource.includes("Object.keys(record).length === 0") &&
+      apiSource.includes("const rawToolCalls = Array.isArray(record.tool_calls)") &&
       apiSource.includes("fetchOptimizationCandidateManifest") &&
       source.includes("optimiseCandidateManifest") &&
       registryPanelSource.includes("Candidate manifest") &&
