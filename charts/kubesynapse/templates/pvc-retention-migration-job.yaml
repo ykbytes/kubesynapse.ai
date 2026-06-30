@@ -31,12 +31,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: migrate
-          # §security-R6: pin to a specific version instead of
-          # 'latest'. A compromised upstream 'latest' tag would
-          # silently replace the image on every install. Update
-          # this version bump on each K8s upgrade.
-          image: bitnami/kubectl:1.31.2
-          imagePullPolicy: IfNotPresent
+          image: {{ include "kubesynapse.imageRef" .Values.operator.migrationImage | quote }}
+          imagePullPolicy: {{ .Values.operator.migrationImage.pullPolicy | default "IfNotPresent" }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

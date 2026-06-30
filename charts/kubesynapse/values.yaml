@@ -228,9 +228,9 @@ operator:
     digest: ""
     pullPolicy: Always
   migrationImage:
-    repository: bitnami/kubectl
-    tag: latest
-    digest: ""
+    repository: docker.io/bitnamilegacy/kubectl
+    tag: "1.31.2"
+    digest: "sha256:0eab9ec8f5e0f75271277467ebb7513b36dea0122bc68615d18c47fece4fd82c"
     pullPolicy: IfNotPresent
   resources:
     requests:
