@@ -202,7 +202,7 @@ agentctl optimizations roi opt-study-123                        # Verified ROI +
 agentctl optimizations comparison opt-study-123                 # Baseline vs candidate comparison payload
 ```
 
-`agentctl optimizations trace` exposes the same observable optimizer trace that powers the candidate view in the web UI. It includes runtime status, tool activity, reasoning summaries, final response metadata, and any recorded skills/resources without claiming access to hidden chain-of-thought.
+`agentctl optimizations trace` exposes the same observable optimizer trace that powers the candidate view in the web UI. It includes runtime status, tool activity, reasoning summaries, final response metadata, candidate validation, and recorded skills/resources. When the OpenCode runtime reports attached skills, the trace includes each materialized skill file and notes that it was delivered in system context. It does not claim access to hidden model chain-of-thought.
 
 ---
 

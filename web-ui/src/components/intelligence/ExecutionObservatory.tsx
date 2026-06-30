@@ -51,6 +51,7 @@ import {
   approveOptimizationCandidate,
   createOptimizationStudy,
   createOptimizationTrial,
+  downloadOptimizationCandidateManifest,
   exportOptimizationDataset,
   fetchWorkflowRuns,
   exportExecutionHtml,
@@ -1971,6 +1972,21 @@ async function invokeOptimizerAgentForRoi({
       ...(payload === undefined ? {} : { payload }),
     });
   };
+  const collectLoadedSkillContext = () => {
+    const loadedEvents = optimizerTraceEvents.filter((event) => event.kind === "skill");
+    return {
+      skills: Array.from(new Set(
+        loadedEvents
+          .map((event) => maybeString(isPlainObject(event.payload) ? event.payload.name : ""))
+          .filter(Boolean),
+      )),
+      files: Array.from(new Set(
+        loadedEvents
+          .map((event) => maybeString(isPlainObject(event.payload) ? event.payload.file : ""))
+          .filter(Boolean),
+      )),
+    };
+  };
   const updateText = (next: string) => {
     if (!next) return;
     responseText = next.startsWith(responseText)
@@ -2018,6 +2034,20 @@ async function invokeOptimizerAgentForRoi({
           if (nextModel) model = nextModel;
           appendOptimizerTraceEvent("status", "Runtime configured", `Using ${model}.`, config);
           onStatus?.(`Optimizer is streaming analysis with ${model}.`);
+          return;
+        }
+
+        if (event === "response.skill_loaded") {
+          const skillName = maybeString(eventPayload.name) || "optimizer skill";
+          const skillFile = maybeString(eventPayload.file);
+          const delivery = maybeString(eventPayload.delivery) || "runtime context";
+          appendOptimizerTraceEvent("skill", "Skill loaded",
+            skillFile
+              ? `${skillName} loaded from ${skillFile} and delivered through ${delivery.replace(/_/g, " ")}.`
+              : `${skillName} loaded into the optimizer context through ${delivery.replace(/_/g, " ")}.`,
+            eventPayload,
+          );
+          onStatus?.(`Loaded optimizer skill: ${skillName}.`);
           return;
         }
 
@@ -2092,6 +2122,7 @@ async function invokeOptimizerAgentForRoi({
   }
 
   if (streamFailure) {
+    const loadedSkillContext = collectLoadedSkillContext();
     const failedTrace: OptimizerTrace = {
       request_id: requestId,
       thread_id: threadId,
@@ -2106,8 +2137,8 @@ async function invokeOptimizerAgentForRoi({
       events: optimizerTraceEvents,
       tool_calls: [],
       artifacts: [],
-      skills: [],
-      resources: [],
+      skills: loadedSkillContext.skills,
+      resources: loadedSkillContext.files.map((file) => `skill file: ${file}`),
       summary: {
         event_count: optimizerTraceEvents.length,
         tool_count: optimizerTraceEvents.filter((event) => event.kind === "tool").length,
@@ -2123,6 +2154,7 @@ async function invokeOptimizerAgentForRoi({
   }
 
   const finalPayload = (completedPayload ?? {}) as Record<string, unknown>;
+  const loadedSkillContext = collectLoadedSkillContext();
   const warnings = Array.isArray(finalPayload.warnings)
     ? finalPayload.warnings.map((warning: unknown) => String(warning)).filter(Boolean)
     : [];
@@ -2150,8 +2182,8 @@ async function invokeOptimizerAgentForRoi({
     events: optimizerTraceEvents,
     tool_calls: toolCalls ?? [],
     artifacts: artifacts ?? [],
-    skills: [],
-    resources: [],
+    skills: loadedSkillContext.skills,
+    resources: loadedSkillContext.files.map((file) => `skill file: ${file}`),
     summary: {
       event_count: optimizerTraceEvents.length,
       tool_count: (toolCalls ?? []).length || optimizerTraceEvents.filter((event) => event.kind === "tool").length,
@@ -2653,6 +2685,8 @@ function OptimisePanel({
   studyLoading,
   studyError,
   actionLoading,
+  workspaceTab,
+  onWorkspaceTabChange,
   applyPreview,
   datasetPreview,
   onRun,
@@ -2661,6 +2695,7 @@ function OptimisePanel({
   onApproveCandidate,
   onDryRunApply,
   onRunCandidate,
+  onDownloadManifest,
   onRefreshStudy,
   onRecordTrial,
   onExportDataset,
@@ -2692,6 +2727,8 @@ function OptimisePanel({
   studyLoading: boolean;
   studyError: string;
   actionLoading: string | null;
+  workspaceTab: "summary" | "candidate" | "diff" | "evidence" | "agent";
+  onWorkspaceTabChange: (tab: "summary" | "candidate" | "diff" | "evidence" | "agent") => void;
   applyPreview: Record<string, unknown> | null;
   datasetPreview: Record<string, unknown> | null;
   onRun: () => void;
@@ -2700,6 +2737,7 @@ function OptimisePanel({
   onApproveCandidate: () => void;
   onDryRunApply: () => void;
   onRunCandidate: () => void;
+  onDownloadManifest: () => void;
   onRefreshStudy: () => void;
   onRecordTrial: () => void;
   onExportDataset: () => void;
@@ -2759,13 +2797,12 @@ function OptimisePanel({
     comparisonManifestSections.find((section) => section.id === selectedManifestSectionId) ??
     comparisonManifestSections[0] ??
     null;
-  const [optimiseWorkspaceTab, setOptimiseWorkspaceTab] = useState<"summary" | "candidate" | "diff" | "evidence" | "agent">("summary");
   const allowTopologyRewrite = topologyMode === "allow_topology_rewrite";
-  const showSummaryTab = optimiseWorkspaceTab === "summary";
-  const showCandidateTab = optimiseWorkspaceTab === "candidate";
-  const showDiffTab = optimiseWorkspaceTab === "diff";
-  const showEvidenceTab = optimiseWorkspaceTab === "evidence";
-  const showAgentTab = optimiseWorkspaceTab === "agent";
+  const showSummaryTab = workspaceTab === "summary";
+  const showCandidateTab = workspaceTab === "candidate";
+  const showDiffTab = workspaceTab === "diff";
+  const showEvidenceTab = workspaceTab === "evidence";
+  const showAgentTab = workspaceTab === "agent";
   const proofStatus = roi?.proof_status ?? (activeCandidate ? "pending_trials" : study ? "candidate_needed" : "baseline_needed");
   const isVerified = roi?.verified === true;
   const canApprove = Boolean(activeCandidate && activeCandidate.approval_status !== "approved" && activeCandidate.status !== "rejected");
@@ -2989,7 +3026,7 @@ function OptimisePanel({
             className="h-8 gap-1.5 text-xs"
             disabled={runDisabled}
             onClick={() => {
-              setOptimiseWorkspaceTab("agent");
+              onWorkspaceTabChange("agent");
               onRun();
             }}
           >
@@ -3091,8 +3128,8 @@ function OptimisePanel({
           )}
 
           <Tabs
-            value={optimiseWorkspaceTab}
-            onValueChange={(value) => setOptimiseWorkspaceTab(value as typeof optimiseWorkspaceTab)}
+            value={workspaceTab}
+            onValueChange={(value) => onWorkspaceTabChange(value as typeof workspaceTab)}
             className="space-y-3"
           >
             <TabsList className="h-9 w-full justify-start overflow-x-auto rounded-md border border-border/50 bg-card/60 p-1">
@@ -3221,6 +3258,10 @@ function OptimisePanel({
                   <Button type="button" size="sm" className="h-7 justify-start gap-1.5 text-[10px]" disabled={!canRunCandidate || actionLoading === "candidate-run"} onClick={onRunCandidate}>
                     {actionLoading === "candidate-run" ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <PlayCircle className="h-3 w-3" />}
                     Run candidate
+                  </Button>
+                  <Button type="button" size="sm" variant="outline" className="h-7 justify-start gap-1.5 text-[10px]" disabled={!activeCandidate || actionLoading === "manifest-download"} onClick={onDownloadManifest}>
+                    {actionLoading === "manifest-download" ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                    Download YAML
                   </Button>
                   <Button type="button" size="sm" variant="outline" className="h-7 justify-start gap-1.5 text-[10px]" disabled={!activeCandidate || actionLoading === "trial"} onClick={onRecordTrial}>
                     {actionLoading === "trial" ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
@@ -3450,9 +3491,15 @@ function OptimisePanel({
                         </div>
                       </div>
                       {comparisonManifest && (
-                        <Badge variant="outline" className={cn("h-5 text-[9px]", comparisonManifest.topology_preserved && "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300")}>
-                          topology {comparisonManifest.topology_preserved ? "preserved" : "changed"}
-                        </Badge>
+                        <div className="flex items-center gap-1.5">
+                          <Badge variant="outline" className={cn("h-5 text-[9px]", comparisonManifest.topology_preserved && "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300")}>
+                            topology {comparisonManifest.topology_preserved ? "preserved" : "changed"}
+                          </Badge>
+                          <Button type="button" size="sm" variant="outline" className="h-7 gap-1 px-2 text-[10px]" disabled={!activeCandidate || actionLoading === "manifest-download"} onClick={onDownloadManifest}>
+                            {actionLoading === "manifest-download" ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                            Download YAML
+                          </Button>
+                        </div>
                       )}
                     </div>
                     {selectedManifestSection ? (
@@ -3660,6 +3707,10 @@ function OptimisePanel({
                     <p className="text-[11px] text-muted-foreground">Copied manifests only. Topology, namespace, and secret expansion are checked server-side.</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
+                    <Button type="button" size="sm" variant="outline" className="h-7 gap-1 text-[10px]" disabled={!activeCandidate || actionLoading === "manifest-download"} onClick={onDownloadManifest}>
+                      {actionLoading === "manifest-download" ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                      Download YAML
+                    </Button>
                     <Button type="button" size="sm" variant="outline" className="h-7 gap-1 text-[10px]" disabled={!canApprove || actionLoading === "approve"} onClick={onApproveCandidate}>
                       {actionLoading === "approve" ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <ClipboardCheck className="h-3 w-3" />}
                       Approve
@@ -4336,6 +4387,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
   const [optimiseActionLoading, setOptimiseActionLoading] = useState<string | null>(null);
   const [optimiseApplyPreview, setOptimiseApplyPreview] = useState<Record<string, unknown> | null>(null);
   const [optimiseDatasetPreview, setOptimiseDatasetPreview] = useState<Record<string, unknown> | null>(null);
+  const [optimiseWorkspaceTab, setOptimiseWorkspaceTab] = useState<"summary" | "candidate" | "diff" | "evidence" | "agent">("summary");
   // Logs tab: JSON formatting, fullscreen, wrap, live stream
   const [logJsonFormat, setLogJsonFormat] = useState(false);
   const [logFullscreen, setLogFullscreen] = useState(false);
@@ -4770,6 +4822,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
     setOptimiseStudyError("");
     try {
       await applyOptimisationStudySnapshot(optimiseStudy, candidateId);
+      setOptimiseWorkspaceTab("agent");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load optimization candidate";
       setOptimiseStudyError(message);
@@ -4795,6 +4848,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
   const handleRunOptimisation = async () => {
     if (!optimiseAgentName || !optimisePrompt || !optimisePacket || !detail) return;
     setOptimiseRunning(true);
+    setOptimiseWorkspaceTab("agent");
     setOptimiseError("");
     setOptimiseResult(null);
     setOptimiseStudyError("");
@@ -4970,6 +5024,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
         return;
       }
       setOptimiseCandidate(candidate);
+      setOptimiseWorkspaceTab("agent");
       const studyWithCandidate = {
         ...study,
         candidates: [...(study.candidates ?? []), candidate],
@@ -5059,6 +5114,26 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
       toast.success(`Candidate workflow launched${runId}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to run candidate";
+      setOptimiseStudyError(message);
+      toast.error(message);
+    } finally {
+      setOptimiseActionLoading(null);
+    }
+  };
+
+  const handleDownloadOptimisationManifest = async () => {
+    if (!optimiseCandidate) return;
+    setOptimiseActionLoading("manifest-download");
+    setOptimiseStudyError("");
+    try {
+      const filename = await downloadOptimizationCandidateManifest(
+        token,
+        optimiseCandidate.id,
+        `${optimiseCandidate.candidate_workflow_name}.yaml`,
+      );
+      toast.success(`Downloaded ${filename}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to download candidate manifest";
       setOptimiseStudyError(message);
       toast.error(message);
     } finally {
@@ -5340,6 +5415,8 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                   studyLoading={optimiseStudyLoading}
                   studyError={optimiseStudyError}
                   actionLoading={optimiseActionLoading}
+                  workspaceTab={optimiseWorkspaceTab}
+                  onWorkspaceTabChange={setOptimiseWorkspaceTab}
                   applyPreview={optimiseApplyPreview}
                   datasetPreview={optimiseDatasetPreview}
                   onRun={() => { void handleRunOptimisation(); }}
@@ -5348,6 +5425,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                   onApproveCandidate={() => { void handleApproveOptimisationCandidate(); }}
                   onDryRunApply={() => { void handleDryRunOptimisationApply(); }}
                   onRunCandidate={() => { void handleRunOptimisationCandidate(); }}
+                  onDownloadManifest={() => { void handleDownloadOptimisationManifest(); }}
                   onRefreshStudy={() => { void refreshOptimisationStudy(); }}
                   onRecordTrial={() => { void handleRecordOptimisationTrial(); }}
                   onExportDataset={() => { void handleExportOptimisationDataset(); }}

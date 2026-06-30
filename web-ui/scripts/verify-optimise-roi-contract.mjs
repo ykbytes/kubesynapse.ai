@@ -163,17 +163,42 @@ const checks = [
       source.includes("optimizer_trace: optimizerTrace"),
   },
   {
-    name: "candidate workspace provides a focused optimizer trace timeline and inspector",
+    name: "candidate workspace provides a focused optimizer activity rail and conversation",
     pass:
       source.includes("Optimizer trace") &&
       source.includes("<OptimizerTracePanel") &&
-      tracePanelSource.includes("Trace chronology") &&
-      tracePanelSource.includes("Event inspector") &&
+      tracePanelSource.includes(">Activity<") &&
+      tracePanelSource.includes(">Conversation<") &&
       tracePanelSource.includes("Reasoning summaries") &&
-      tracePanelSource.includes("Skills & resources") &&
+      tracePanelSource.includes("Loaded context") &&
       tracePanelSource.includes("Visible final response") &&
       tracePanelSource.includes("Observable execution only") &&
       !source.includes("Optimizer decision audit"),
+  },
+  {
+    name: "optimizer trace surfaces tools and becomes the focus after candidate creation or selection",
+    pass:
+      source.includes("setOptimiseWorkspaceTab(\"agent\")") &&
+      tracePanelSource.includes("Tool calls & artifacts") &&
+      tracePanelSource.includes("effectiveTrace.tool_calls") &&
+      tracePanelSource.includes("effectiveTrace.artifacts"),
+  },
+  {
+    name: "optimizer trace renders readable conversation and explicit skill file loading",
+    pass:
+      source.includes('event === "response.skill_loaded"') &&
+      source.includes('"skill", "Skill loaded"') &&
+      tracePanelSource.includes("<MarkdownRenderer") &&
+      tracePanelSource.includes("Loaded context") &&
+      tracePanelSource.includes("delivery"),
+  },
+  {
+    name: "candidate manifests can be downloaded as canonical YAML",
+    pass:
+      apiSource.includes("downloadOptimizationCandidateManifest") &&
+      apiSource.includes("/manifest") &&
+      source.includes("onDownloadManifest") &&
+      source.includes("Download YAML"),
   },
   {
     name: "optimizer UI keeps secondary analysis in collapsible panels",

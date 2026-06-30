@@ -9,6 +9,7 @@ import re
 import time
 from collections import Counter
 from contextlib import suppress
+from datetime import UTC, datetime
 from typing import Any
 
 import optimization_store
@@ -16,7 +17,7 @@ import trace_store
 import yaml
 from _core import RESOURCE_GROUP, RESOURCE_KIND_BY_PLURAL, RESOURCE_VERSION, read_custom_resource
 from auth_middleware import ensure_namespace_access, verify_token
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, model_validator
 
 router = APIRouter(prefix="/optimizations", tags=["optimizations"])
@@ -1422,7 +1423,7 @@ def _build_optimizer_audit(
             "source_workflow": _manifest_name(source_workflow or {}),
             "candidate_workflow": _manifest_name(candidate_workflow or {}),
             "source_agent_refs": agent_refs,
-            "loaded_agent_manifests": sorted(str(name) for name in agents.keys()),
+            "loaded_agent_manifests": sorted(str(name) for name in agents),
             "baseline_execution_ids": list(study.get("baseline_execution_ids") or []),
             "baseline_trace_count": len(study.get("baseline_execution_ids") or []),
             "optimizer_agent": study.get("optimizer_agent_name"),
@@ -2519,20 +2520,82 @@ def _normalise_optimizer_trace(value: dict[str, Any] | None) -> dict[str, Any]:
 def _attach_optimizer_trace_audit(
     trace: dict[str, Any],
     validation: dict[str, Any],
+    *,
+    candidate_workflow_name: str | None = None,
+    resource_count: int | None = None,
 ) -> dict[str, Any]:
     if not trace:
         return {}
     audit = validation.get("optimizer_audit") if isinstance(validation.get("optimizer_audit"), dict) else {}
-    if not audit:
-        return trace
     enriched = _clone(trace)
-    enriched["skills"] = _string_list(audit.get("skills_used") or audit.get("skills_requested"), limit=50)
-    resources = audit.get("resources_used") if isinstance(audit.get("resources_used"), dict) else {}
-    enriched["resources"] = [
-        f"{str(key).replace('_', ' ')}: {', '.join(map(str, value)) if isinstance(value, list) else value}"
-        for key, value in list(resources.items())[:100]
-        if value not in (None, "", [])
-    ]
+    if audit:
+        enriched["skills"] = _string_list(
+            [
+                *(_string_list(enriched.get("skills"), limit=50)),
+                *(_string_list(audit.get("skills_used") or audit.get("skills_requested"), limit=50)),
+            ],
+            limit=50,
+        )
+        resources = audit.get("resources_used") if isinstance(audit.get("resources_used"), dict) else {}
+        audit_resources = [
+            f"{str(key).replace('_', ' ')}: {', '.join(map(str, value)) if isinstance(value, list) else value}"
+            for key, value in list(resources.items())[:100]
+            if value not in (None, "", [])
+        ]
+        enriched["resources"] = _string_list(
+            [*(_string_list(enriched.get("resources"), limit=100)), *audit_resources],
+            limit=100,
+        )
+    if candidate_workflow_name:
+        events = enriched.get("events") if isinstance(enriched.get("events"), list) else []
+        max_sequence = max(
+            (
+                int(event.get("sequence") or 0)
+                for event in events
+                if isinstance(event, dict)
+            ),
+            default=0,
+        )
+        contract_status = "passed" if validation.get("valid") is not False else "failed"
+        warning_count = len(validation.get("warnings") or [])
+        error_count = len(validation.get("errors") or [])
+        event = {
+            "id": f"{str(enriched.get('request_id') or 'optimizer-trace')[:120]}-candidate-persisted",
+            "sequence": max_sequence + 1,
+            "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "kind": "completion",
+            "title": "Candidate persisted",
+            "summary": (
+                f"{candidate_workflow_name} created with {int(resource_count or 0)} copied resource"
+                f"{'' if int(resource_count or 0) == 1 else 's'}; contract gate {contract_status}."
+            ),
+            "payload": {
+                "candidate_workflow_name": candidate_workflow_name,
+                "resource_count": int(resource_count or 0),
+                "contract_gate": contract_status,
+                "topology_preserved": bool(validation.get("topology_preserved")),
+                "warning_count": warning_count,
+                "error_count": error_count,
+            },
+        }
+        events.append(event)
+        events.sort(key=lambda item: (int(item.get("sequence") or 0), str(item.get("timestamp") or "")))
+        enriched["events"] = events
+        tool_count = len(enriched.get("tool_calls") or []) if isinstance(enriched.get("tool_calls"), list) else 0
+        enriched["summary"] = {
+            "event_count": len(events),
+            "tool_count": tool_count,
+            "reasoning_event_count": sum(
+                1
+                for event in events
+                if isinstance(event, dict) and str(event.get("kind") or "") == "reasoning"
+            ),
+            "error_count": sum(
+                1
+                for event in events
+                if isinstance(event, dict) and str(event.get("kind") or "") == "error"
+            ),
+        }
     return _redact(enriched)
 
 
@@ -3141,6 +3204,8 @@ def create_candidate(study_id: str, body: CreateCandidateRequest, user: dict[str
         optimizer_trace=_attach_optimizer_trace_audit(
             _normalise_optimizer_trace(body.optimizer_trace),
             validation,
+            candidate_workflow_name=_candidate_workflow_name(manifest_bundle),
+            resource_count=len(manifest_bundle),
         ),
         validation_results=validation,
         expected_savings=_normalise_expected_savings(body.expected_savings, validation),
@@ -3230,10 +3295,34 @@ def generate_candidate(study_id: str, body: GenerateCandidateRequest, user: dict
         optimizer_trace=_attach_optimizer_trace_audit(
             _normalise_optimizer_trace(body.optimizer_trace),
             validation,
+            candidate_workflow_name=_candidate_workflow_name(bundle),
+            resource_count=len(bundle),
         ),
         validation_results=validation,
         expected_savings=_normalise_expected_savings(body.expected_savings, validation),
         created_by=_principal(user),
+    )
+
+
+@router.get("/candidates/{candidate_id}/manifest")
+def download_candidate_manifest(
+    candidate_id: str,
+    user: dict[str, Any] = Depends(verify_token),
+) -> Response:
+    candidate = optimization_store.get_candidate(candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="Optimization candidate not found")
+    ensure_namespace_access(user, str(candidate["namespace"]))
+    bundle = candidate.get("manifest_bundle") if isinstance(candidate.get("manifest_bundle"), list) else []
+    if not bundle:
+        raise HTTPException(status_code=409, detail="Optimization candidate has no persisted manifest bundle")
+    workflow_name = str(candidate.get("candidate_workflow_name") or candidate.get("name") or "candidate")
+    safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "-", workflow_name).strip("-._") or "candidate"
+    content = yaml.safe_dump_all(bundle, sort_keys=False, allow_unicode=True, explicit_start=True)
+    return Response(
+        content=content,
+        media_type="application/yaml",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.yaml"'},
     )
 
 

@@ -613,7 +613,10 @@ spec:
         <SectionHeading icon={FileCode}>Skills (File-Backed)</SectionHeading>
         <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
           Skills are file-backed context packages attached to an agent. You can embed Markdown guides, JSON schemas,
-          or example conversations directly in the manifest.
+          or example conversations directly in the manifest. The OpenCode runtime materializes each file under its
+          managed skills directory, sanitizes the prompt-facing content, and injects attached skill guidance into the
+          system context before the model starts. Streamed runs emit <code>response.skill_loaded</code> events with
+          the skill name, materialized file path, delivery mode, and content size without exposing the skill body.
         </p>
         <CodeBlock
           code={`spec:
@@ -1600,6 +1603,24 @@ function ApiReferenceSection() {
         ]} />
       </div>
 
+      <div id="api-optimizations">
+        <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Optimization ROI Lab</h3>
+        <DocsTable headers={["Method", "Path", "Description"]} rows={[
+          ["GET", "/api/v1/optimizations/studies", "List persisted studies, candidates, and trial state."],
+          ["POST", "/api/v1/optimizations/studies", "Create a baseline study from workflow execution history."],
+          ["GET", "/api/v1/optimizations/studies/{id}", "Load one study with candidate history and trials."],
+          ["POST", "/api/v1/optimizations/studies/{id}/candidates/generate", "Generate and validate a copied candidate from optimizer output."],
+          ["GET", "/api/v1/optimizations/candidates/{id}/manifest", "Download persisted candidate manifests as YAML."],
+          ["POST", "/api/v1/optimizations/candidates/{id}/approval", "Approve or deny a candidate."],
+          ["POST", "/api/v1/optimizations/candidates/{id}/apply", "Dry-run or stage approved candidate resources."],
+          ["POST", "/api/v1/optimizations/candidates/{id}/run", "Launch an approved candidate and create trial evidence."],
+          ["GET", "/api/v1/optimizations/studies/{id}/comparison", "Compare baseline and candidate metrics, steps, tools, and manifests."],
+          ["GET", "/api/v1/optimizations/studies/{id}/roi", "Get proof status, deltas, and projected savings."],
+          ["GET", "/api/v1/optimizations/studies/{id}/dataset", "Export the study dataset with optional redaction."],
+          ["POST", "/api/v1/optimizations/candidates/{id}/promotion", "Promote a proof-gated winner."],
+        ]} />
+      </div>
+
       <div id="api-chat">
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Chat Sessions & Memory</h3>
         <DocsTable headers={["Method", "Path", "Description"]} rows={[
@@ -2046,11 +2067,11 @@ function TracesSection() {
       <div id="traces-observatory-ui">
         <h3 className="text-lg font-bold text-[oklch(0.95_0.005_264)] mb-3">Execution Observatory UI</h3>
         <DocsTable headers={["Surface", "Behavior"]} rows={[
-          ["Overview", "Run metrics, waterfall timing, cost, token totals, and signal warnings, plus run-level insight charts: Recent Run Trend (duration sparkline across the workflow's last runs, color-toned by phase), Step Contribution (share bars showing which steps dominate total runtime), Step Variability (min/median/max range per step with a current-run marker), Tool Mix (time-weighted MCP tool usage with failure counts, weighted by per-tool duration_ms from OpenCode's state.time), Model Efficiency (token-vs-latency scatter, bubble by cost), and Quality Flags (warning/error events, tool failures, longest quiet gap, missing token data; runs can complete green but still be flagged shaky)"],
-          ["Token Breakdown", "Stacked token bar per LLM call showing prompt, completion, cache_read, cache_write, and reasoning tokens, plus a cache hit ratio indicator"],
-          ["Steps", "Per-step inspector with LLM calls, tool rows, latency, and status"],
+          ["Timeline", "Compact run chronology with step boundaries, LLM calls, tool calls, reasoning summaries, status changes, and a selected-event inspector."],
+          ["Analytics", "Waterfall timing, recent-run trend, step contribution and variability, token breakdown, cache use, tool mix, model efficiency, and quality flags."],
+          ["Trace", "Filterable execution records joined by workflow step and agent, with raw payloads behind expandable inspectors."],
+          ["Optimise", "ROI Lab for baseline selection, candidate generation, manifest diff, optimizer audit, trial evidence, and measured baseline-versus-candidate savings."],
           ["Logs", "Live or archived worker logs with filters, JSON formatting, wrapping, and fullscreen mode"],
-          ["Models & Tools", "Expandable tool calls with icon mapping, ArgsCard field extraction, Prism JSON highlighting, per-tool duration, and diff-aware rendering for patch output"],
           ["Compare", "Side-by-side execution comparison across status, duration, and tool or LLM counts"],
         ]} />
       </div>
@@ -2104,6 +2125,71 @@ function TracesSection() {
           <code>opencode-runtime/analysis.py</code> before forwarding into the trace pipeline — this prevents
           single tool calls from flooding the trace store.
         </Callout>
+      </div>
+    </div>
+  );
+}
+
+function OptimizationSection() {
+  return (
+    <div className="space-y-8">
+      <SectionHeading icon={Cpu}>Optimization ROI Lab</SectionHeading>
+      <p className="mt-2 text-base leading-7 text-[oklch(0.80_0.01_264)]">
+        ROI Lab turns workflow history into an isolated candidate study. It never edits the source workflow:
+        the gateway persists baseline evidence, validates a copied manifest bundle, and keeps estimates separate
+        from results measured through candidate trials.
+      </p>
+
+      <div id="optimizer-flow">
+        <h3 className="mb-3 text-lg font-bold text-[oklch(0.95_0.005_264)]">Study workflow</h3>
+        <DocsTable headers={["Stage", "What happens"]} rows={[
+          ["Baseline", "Select historical runs and aggregate duration, tokens, LLM calls, tool calls, failures, retries, cache use, and step-level bottlenecks."],
+          ["Candidate", "Invoke a dedicated optimizer agent and persist one copied AgentWorkflow/AIAgent bundle with expected savings and a structured decision record."],
+          ["Review", "Inspect safety checks, side-by-side line diffs, changed paths, expected metric deltas, optimizer trace, and the downloadable YAML bundle."],
+          ["Trial", "After admin approval, run the copied candidate and link its result trace to a baseline execution."],
+          ["Proof", "Compare paired wall-clock, tokens, tool calls, cost, quality status, and regressions. Estimates stay labeled until trials provide measured data."],
+          ["Promote", "Promotion is blocked until the configured safe-trial and quality gates pass."],
+        ]} />
+      </div>
+
+      <div id="optimizer-trace">
+        <h3 className="mb-3 text-lg font-bold text-[oklch(0.95_0.005_264)]">Candidate audit trace</h3>
+        <p className="mb-3 text-[oklch(0.80_0.01_264)]">
+          Each new candidate stores the observable execution that produced it. The Optimizer trace tab presents this
+          as a readable conversation with a narrow activity rail and expandable raw event data.
+        </p>
+        <DocsTable headers={["Record", "Captured detail"]} rows={[
+          ["Skill load", "Attached skill name, materialized SKILL.md path, system-prompt delivery mode, and content length."],
+          ["Reasoning summary", "Runtime-emitted visible reasoning summary rendered as Markdown. Hidden chain-of-thought is not exposed."],
+          ["Tool call", "Tool name, status, arguments or path preview, and bounded output supplied by the OpenCode runtime."],
+          ["Response", "Visible final optimizer response, artifacts, referenced resources, and structured decision fields."],
+          ["Candidate validation", "Persisted candidate name, resource count, contract-gate result, topology status, warnings, and errors."],
+        ]} />
+      </div>
+
+      <div id="optimizer-safety">
+        <h3 className="mb-3 text-lg font-bold text-[oklch(0.95_0.005_264)]">Safety and topology</h3>
+        <DocsTable headers={["Control", "Behavior"]} rows={[
+          ["Copied resources", "Source AgentWorkflow and AIAgent resources are never edited in place."],
+          ["Model contract", "Candidate agents keep the source provider and model."],
+          ["Preserve topology", "Default mode keeps step names, order, types, handoffs, outputs, schemas, and workspace paths."],
+          ["Allow topology rewrite", "Explicit admin choice permits consolidation or reordering only with behavior equivalence, preserved capabilities, and trial stop conditions."],
+          ["Privilege guard", "Validation rejects namespace changes, unsupported kinds, secret/env expansion, service-account or RBAC expansion, and unapproved privilege changes."],
+          ["Approval gate", "Apply, trial run, and promotion are admin-controlled and audit-linked."],
+        ]} />
+      </div>
+
+      <div id="optimizer-api">
+        <h3 className="mb-3 text-lg font-bold text-[oklch(0.95_0.005_264)]">Key endpoints</h3>
+        <DocsTable headers={["Method", "Path", "Purpose"]} rows={[
+          ["POST", "/api/v1/optimizations/studies", "Persist a baseline study from selected execution IDs."],
+          ["POST", "/api/v1/optimizations/studies/{id}/candidates/generate", "Parse, validate, label, and persist a copied candidate bundle and optimizer trace."],
+          ["GET", "/api/v1/optimizations/candidates/{id}/manifest", "Download the exact persisted candidate as multi-document YAML."],
+          ["POST", "/api/v1/optimizations/candidates/{id}/approval", "Approve or deny candidate apply and trial execution."],
+          ["POST", "/api/v1/optimizations/candidates/{id}/run", "Apply candidate agents, trigger the copied workflow, and create a pending trial."],
+          ["GET", "/api/v1/optimizations/studies/{id}/comparison", "Return scorecard, trials, step/tool impact, and manifest diff."],
+          ["GET", "/api/v1/optimizations/studies/{id}/roi", "Return proof status, measured deltas, and projected savings."],
+        ]} />
       </div>
     </div>
   );
@@ -2714,6 +2800,7 @@ export const SECTIONS: DocSection[] = [
       { id: "api-agents", title: "Agents" },
       { id: "api-workflows", title: "Workflows" },
       { id: "api-traces", title: "Traces & Run History" },
+      { id: "api-optimizations", title: "Optimization ROI Lab" },
       { id: "api-chat", title: "Chat Sessions & Memory" },
       { id: "api-auth", title: "Auth" },
       { id: "api-providers", title: "LLM Providers" },
@@ -2764,6 +2851,19 @@ export const SECTIONS: DocSection[] = [
       { id: "traces-runtime", title: "Runtime Events" },
     ],
     content: <TracesSection />,
+  },
+  {
+    id: "optimization",
+    title: "Optimization ROI Lab",
+    icon: Cpu,
+    searchText: "optimization optimise roi lab candidate baseline trials proof gate manifest diff yaml download optimizer trace reasoning skills topology rewrite savings tokens time tools cost",
+    subsections: [
+      { id: "optimizer-flow", title: "Study Workflow" },
+      { id: "optimizer-trace", title: "Candidate Audit Trace" },
+      { id: "optimizer-safety", title: "Safety & Topology" },
+      { id: "optimizer-api", title: "Key Endpoints" },
+    ],
+    content: <OptimizationSection />,
   },
   {
     id: "intelligence",

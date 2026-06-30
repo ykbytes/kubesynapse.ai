@@ -510,14 +510,27 @@ def test_generate_candidate_persists_redacted_optimizer_trace(client, auth_heade
             {
                 "id": "evt-2",
                 "sequence": 2,
+                "timestamp": "2026-06-27T10:00:00.500Z",
+                "kind": "skill",
+                "title": "Skill loaded",
+                "summary": "critical-path-roi loaded from its materialized SKILL.md file.",
+                "payload": {
+                    "name": "critical-path-roi",
+                    "file": "/app/state/home/.config/opencode/skills/critical-path-roi/SKILL.md",
+                    "delivery": "system_prompt",
+                },
+            },
+            {
+                "id": "evt-3",
+                "sequence": 3,
                 "timestamp": "2026-06-27T10:00:01Z",
                 "kind": "reasoning",
                 "title": "Reasoning summary",
                 "summary": "The slow step repeats deterministic reads.",
             },
             {
-                "id": "evt-3",
-                "sequence": 3,
+                "id": "evt-4",
+                "sequence": 4,
                 "timestamp": "2026-06-27T10:00:02Z",
                 "kind": "tool",
                 "title": "read",
@@ -525,8 +538,8 @@ def test_generate_candidate_persists_redacted_optimizer_trace(client, auth_heade
                 "payload": {"path": "/workspace/workflow.yaml", "api_key": "sk-should-not-survive"},
             },
             {
-                "id": "evt-4",
-                "sequence": 4,
+                "id": "evt-5",
+                "sequence": 5,
                 "timestamp": "2026-06-27T10:00:03Z",
                 "kind": "completion",
                 "title": "Candidate ready",
@@ -535,6 +548,8 @@ def test_generate_candidate_persists_redacted_optimizer_trace(client, auth_heade
         ],
         "tool_calls": [{"tool": "read", "args": {"authorization": "Bearer secret-value"}}],
         "artifacts": [{"path": "/workspace/candidate.yaml"}],
+        "skills": ["critical-path-roi"],
+        "resources": ["skill file: /app/state/home/.config/opencode/skills/critical-path-roi/SKILL.md"],
         "summary": {"event_count": 999, "tool_count": 999, "reasoning_event_count": 999},
     }
 
@@ -553,13 +568,17 @@ def test_generate_candidate_persists_redacted_optimizer_trace(client, auth_heade
     persisted = response.json()["optimizer_trace"]
     assert persisted["request_id"] == "optimise-exec-opt-trace"
     assert persisted["thread_id"] == "thread-opt-trace"
-    assert [event["sequence"] for event in persisted["events"]] == [1, 2, 3, 4]
+    assert [event["sequence"] for event in persisted["events"]] == [1, 2, 3, 4, 5, 6]
+    assert persisted["events"][1]["kind"] == "skill"
+    assert persisted["events"][-1]["title"] == "Candidate persisted"
     assert persisted["summary"] == {
-        "event_count": 4,
+        "event_count": 6,
         "tool_count": 1,
         "reasoning_event_count": 1,
         "error_count": 0,
     }
+    assert "critical-path-roi" in persisted["skills"]
+    assert any("SKILL.md" in resource for resource in persisted["resources"])
     serialized = str(persisted)
     assert "sk-should-not-survive" not in serialized
     assert "Bearer secret-value" not in serialized
@@ -572,6 +591,105 @@ def test_generate_candidate_persists_redacted_optimizer_trace(client, auth_heade
         ).json()
     reloaded_candidate = next(item for item in reloaded_study["candidates"] if item["id"] == response.json()["id"])
     assert reloaded_candidate["optimizer_trace"] == persisted
+
+
+def test_generate_candidate_appends_persisted_candidate_trace_event(client, auth_headers) -> None:
+    baseline_id = _seed_execution(execution_id="exec-opt-trace-persisted")
+    with _optimization_api_context(manifests=True):
+        study = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={"namespace": "default", "workflow_name": "daily-standup", "baseline_execution_ids": [baseline_id]},
+        ).json()
+
+    optimizer_trace = {
+        "request_id": "optimise-exec-opt-trace-persisted",
+        "thread_id": "thread-opt-trace-persisted",
+        "agent_name": "workflow-optimizer",
+        "model": "opencode/deepseek-v4-flash-free",
+        "status": "completed",
+        "events": [
+            {
+                "id": "evt-1",
+                "sequence": 1,
+                "timestamp": "2026-06-27T10:00:00Z",
+                "kind": "status",
+                "title": "Optimizer started",
+                "summary": "Loaded the baseline dossier.",
+            }
+        ],
+    }
+    optimizer_output = """
+```json
+{
+  "optimizer_decision_record": {
+    "skills_used": ["critical-path-roi", "tool-economy"],
+    "resources_used": ["baseline traces", "AgentWorkflow/daily-standup"],
+    "topology_decision": {"decision": "preserve", "reason": "prompt-only change"},
+    "topology_equivalence_map": [],
+    "candidate_strategy": "Trim repeated reads while preserving workflow structure.",
+    "regression_budget": {"duration_regression_percent": 0},
+    "rejected_options": ["No safe topology rewrite needed."]
+  }
+}
+```
+"""
+
+    with _optimization_api_context():
+        response = client.post(
+            f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
+            headers=auth_headers,
+            json={
+                "optimizer_output": optimizer_output,
+                "suffix": "opt-trace-persisted",
+                "optimizer_trace": optimizer_trace,
+            },
+        )
+
+    assert response.status_code == 201, response.json()
+    persisted = response.json()["optimizer_trace"]
+    assert any(event["title"] == "Candidate persisted" for event in persisted["events"])
+    persisted_event = next(event for event in persisted["events"] if event["title"] == "Candidate persisted")
+    assert persisted_event["kind"] == "completion"
+    assert "daily-standup-opt-trace-persisted" in persisted_event["summary"]
+    assert "critical-path-roi" in persisted["skills"]
+    assert any("candidate workflow" in resource.lower() for resource in persisted["resources"])
+
+
+def test_download_candidate_manifest_returns_persisted_yaml_bundle(client, auth_headers) -> None:
+    baseline_id = _seed_execution(execution_id="exec-opt-manifest-download")
+    with _optimization_api_context(manifests=True):
+        study = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={"namespace": "default", "workflow_name": "daily-standup", "baseline_execution_ids": [baseline_id]},
+        ).json()
+
+    with _optimization_api_context():
+        candidate_response = client.post(
+            f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
+            headers=auth_headers,
+            json={
+                "optimizer_output": "Create a conservative copied candidate.",
+                "suffix": "opt-download",
+            },
+        )
+
+    assert candidate_response.status_code == 201, candidate_response.json()
+    candidate = candidate_response.json()
+    response = client.get(
+        f"/api/v1/optimizations/candidates/{candidate['id']}/manifest",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/yaml")
+    assert "attachment;" in response.headers["content-disposition"]
+    assert "daily-standup-opt-download.yaml" in response.headers["content-disposition"]
+    documents = list(yaml.safe_load_all(response.text))
+    assert documents == candidate["manifest_bundle"]
+    assert any(document["kind"] == "AgentWorkflow" for document in documents)
+    assert any(document["kind"] == "AIAgent" for document in documents)
 
 
 def test_generate_candidate_fallback_copies_manifests_without_roi_prompt_injection(client, auth_headers) -> None:

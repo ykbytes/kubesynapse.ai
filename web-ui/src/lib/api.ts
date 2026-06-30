@@ -3587,6 +3587,28 @@ export async function generateOptimizationCandidate(
   return parseJsonResponse(response, parseOptimizationCandidate);
 }
 
+export async function downloadOptimizationCandidateManifest(
+  token: string,
+  candidateId: string,
+  suggestedFilename?: string,
+): Promise<string> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/optimizations/candidates/${encodeURIComponent(candidateId)}/manifest`),
+    token,
+    { headers: { Accept: "application/yaml" } },
+  );
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, "Failed to download candidate manifest", text);
+  }
+  const filename = extractFilenameFromDisposition(
+    response.headers.get("content-disposition"),
+    suggestedFilename || "optimization-candidate.yaml",
+  );
+  triggerBrowserDownload(await response.blob(), filename);
+  return filename;
+}
+
 export async function approveOptimizationCandidate(
   token: string,
   candidateId: string,

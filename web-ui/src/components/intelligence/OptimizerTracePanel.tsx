@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
-  Bot,
+  BookOpen,
   BrainCircuit,
   CheckCircle2,
   CircleDot,
@@ -13,10 +13,11 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { MarkdownRenderer } from "@/components/shared/MarkdownRenderer";
 import { cn } from "@/lib/utils";
 import type { OptimizerTrace, OptimizerTraceEvent } from "@/types";
 
-type TraceFilter = "all" | "reasoning" | "tools" | "decisions" | "errors";
+type TraceFilter = "all" | "context" | "reasoning" | "tools" | "decisions" | "errors";
 
 interface OptimizerTracePanelProps {
   trace?: OptimizerTrace | null;
@@ -27,6 +28,7 @@ interface OptimizerTracePanelProps {
 
 const FILTERS: Array<{ value: TraceFilter; label: string }> = [
   { value: "all", label: "All activity" },
+  { value: "context", label: "Loaded context" },
   { value: "reasoning", label: "Reasoning summaries" },
   { value: "tools", label: "Tools" },
   { value: "decisions", label: "Decisions" },
@@ -69,7 +71,35 @@ function formatTime(value: string): string {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+function summarizeToolCall(call: Record<string, unknown>): { title: string; summary: string } {
+  const payload = record(call);
+  const title = display(payload.tool_name ?? payload.tool ?? payload.name, "tool");
+  const summary = display(
+    payload.summary ??
+    payload.path ??
+    payload.args_preview ??
+    payload.detail ??
+    payload.status,
+    "No tool detail captured.",
+  );
+  return { title, summary };
+}
+
+function summarizeArtifact(artifact: Record<string, unknown>): { title: string; summary: string } {
+  const payload = record(artifact);
+  const title = display(payload.name ?? payload.path ?? payload.uri, "artifact");
+  const summary = display(
+    payload.type ??
+    payload.preview ??
+    payload.status ??
+    payload.description,
+    "Captured during candidate generation.",
+  );
+  return { title, summary };
+}
+
 function eventIcon(kind: OptimizerTraceEvent["kind"]) {
+  if (kind === "skill") return BookOpen;
   if (kind === "reasoning") return BrainCircuit;
   if (kind === "tool") return Wrench;
   if (kind === "error" || kind === "warning") return AlertTriangle;
@@ -79,6 +109,7 @@ function eventIcon(kind: OptimizerTraceEvent["kind"]) {
 }
 
 function eventTone(kind: OptimizerTraceEvent["kind"]): string {
+  if (kind === "skill") return "border-cyan-500/35 bg-cyan-500/8 text-cyan-700 dark:text-cyan-300";
   if (kind === "reasoning") return "border-violet-500/35 bg-violet-500/8 text-violet-700 dark:text-violet-300";
   if (kind === "tool") return "border-sky-500/35 bg-sky-500/8 text-sky-700 dark:text-sky-300";
   if (kind === "error") return "border-red-500/35 bg-red-500/8 text-red-700 dark:text-red-300";
@@ -89,6 +120,7 @@ function eventTone(kind: OptimizerTraceEvent["kind"]): string {
 
 function matchesFilter(event: OptimizerTraceEvent, filter: TraceFilter): boolean {
   if (filter === "all") return true;
+  if (filter === "context") return event.kind === "skill";
   if (filter === "reasoning") return event.kind === "reasoning";
   if (filter === "tools") return event.kind === "tool";
   if (filter === "errors") return event.kind === "error" || event.kind === "warning";
@@ -180,16 +212,20 @@ export function OptimizerTracePanel({
     [effectiveTrace?.events, filter],
   );
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-  const selectedEvent =
-    filteredEvents.find((event) => event.id === selectedEventId) ??
+  const preferredEvent =
+    filteredEvents.find((event) => event.kind === "reasoning") ??
+    filteredEvents.find((event) => event.kind === "skill") ??
     filteredEvents[0] ??
     null;
+  const selectedEvent =
+    filteredEvents.find((event) => event.id === selectedEventId) ??
+    preferredEvent;
 
   useEffect(() => {
     if (!filteredEvents.some((event) => event.id === selectedEventId)) {
-      setSelectedEventId(filteredEvents[0]?.id ?? null);
+      setSelectedEventId(preferredEvent?.id ?? null);
     }
-  }, [filteredEvents, selectedEventId]);
+  }, [filteredEvents, preferredEvent, selectedEventId]);
 
   if (!effectiveTrace) {
     return (
@@ -205,7 +241,11 @@ export function OptimizerTracePanel({
 
   const skills = effectiveTrace.skills ?? [];
   const resources = effectiveTrace.resources ?? [];
+  const toolCalls = effectiveTrace.tool_calls ?? [];
+  const artifacts = effectiveTrace.artifacts ?? [];
+  const loadedSkillEvents = effectiveTrace.events.filter((event) => event.kind === "skill");
   const finalResponse = effectiveTrace.final_response || visibleResponse || "";
+  const selectedPayload = record(selectedEvent?.payload);
   const statusTone = effectiveTrace.status === "failed"
     ? "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300"
     : effectiveTrace.fallback
@@ -234,20 +274,17 @@ export function OptimizerTracePanel({
           </div>
         </div>
 
-        <div className="mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border/45 bg-border/45 sm:grid-cols-3 xl:grid-cols-6">
-          {[
-            ["Duration", formatDuration(effectiveTrace.duration_ms)],
-            ["Model", display(effectiveTrace.model, "--")],
-            ["Events", effectiveTrace.summary.event_count],
-            ["Tools", effectiveTrace.summary.tool_count],
-            ["Reasoning", effectiveTrace.summary.reasoning_event_count],
-            ["Skills", skills.length],
-          ].map(([label, value]) => (
-            <div key={String(label)} className="min-w-0 bg-background/85 px-2 py-1.5">
-              <div className="text-[9px] uppercase tracking-wide text-muted-foreground">{label}</div>
-              <div className="mt-0.5 truncate text-[11px] font-semibold text-foreground">{value}</div>
-            </div>
-          ))}
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[10px] text-muted-foreground">
+          <span className="flex items-center gap-1.5">
+            <Clock3 className="h-3.5 w-3.5" />
+            <strong className="font-semibold text-foreground">{formatDuration(effectiveTrace.duration_ms)}</strong>
+          </span>
+          <span className="min-w-0 truncate">
+            Model <strong className="font-semibold text-foreground">{display(effectiveTrace.model, "--")}</strong>
+          </span>
+          <span><strong className="font-semibold text-foreground">{effectiveTrace.summary.event_count}</strong> events</span>
+          <span><strong className="font-semibold text-foreground">{effectiveTrace.summary.tool_count}</strong> tools</span>
+          <span><strong className="font-semibold text-foreground">{loadedSkillEvents.length || skills.length}</strong> skills loaded</span>
         </div>
       </header>
 
@@ -273,15 +310,15 @@ export function OptimizerTracePanel({
         </div>
       </div>
 
-      <div className="grid min-h-[30rem] lg:grid-cols-[minmax(18rem,0.72fr)_minmax(28rem,1.28fr)]">
-        <div className="border-b border-border/50 lg:border-b-0 lg:border-r">
+      <div className="grid min-h-[32rem] lg:grid-cols-[15.5rem_minmax(0,1fr)]">
+        <div className="border-b border-border/50 bg-muted/10 lg:border-b-0 lg:border-r">
           <div className="flex items-center justify-between border-b border-border/40 px-3 py-2">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Trace chronology</div>
-            <div className="text-[10px] text-muted-foreground">{filteredEvents.length} events</div>
+            <div className="text-[10px] font-semibold uppercase text-muted-foreground">Activity</div>
+            <div className="text-[10px] text-muted-foreground">{filteredEvents.length}</div>
           </div>
-          <div className="max-h-[36rem] overflow-y-auto p-2">
+          <div className="max-h-[42rem] overflow-y-auto px-2 py-2">
             {filteredEvents.length > 0 ? (
-              <div className="space-y-1">
+              <div className="relative space-y-1 before:absolute before:bottom-4 before:left-[1.08rem] before:top-4 before:w-px before:bg-border/50">
                 {filteredEvents.map((event) => {
                   const Icon = eventIcon(event.kind);
                   const selected = selectedEvent?.id === event.id;
@@ -290,22 +327,25 @@ export function OptimizerTracePanel({
                       key={event.id}
                       type="button"
                       className={cn(
-                        "grid w-full grid-cols-[1.5rem_minmax(0,1fr)_auto] gap-2 rounded-md border px-2 py-2 text-left transition-colors",
-                        selected ? "border-primary/45 bg-primary/8" : "border-transparent hover:border-border/60 hover:bg-muted/25",
+                        "relative grid w-full grid-cols-[1.75rem_minmax(0,1fr)] gap-2 rounded-md border px-1.5 py-2 text-left transition-colors",
+                        selected
+                          ? "border-primary/35 bg-background shadow-sm"
+                          : "border-transparent hover:border-border/50 hover:bg-background/65",
                       )}
                       onClick={() => setSelectedEventId(event.id)}
                     >
-                      <span className={cn("mt-0.5 flex h-6 w-6 items-center justify-center rounded border", eventTone(event.kind))}>
+                      <span className={cn("z-10 flex h-7 w-7 items-center justify-center rounded-full border bg-background", eventTone(event.kind))}>
                         <Icon className="h-3.5 w-3.5" />
                       </span>
                       <span className="min-w-0">
-                        <span className="flex items-center gap-1.5">
+                        <span className="flex items-center justify-between gap-2">
                           <span className="truncate text-[11px] font-semibold text-foreground">{event.title}</span>
-                          <span className="text-[9px] uppercase text-muted-foreground">{event.kind}</span>
+                          <span className="shrink-0 text-[9px] tabular-nums text-muted-foreground">{formatTime(event.timestamp)}</span>
                         </span>
-                        <span className="mt-0.5 block line-clamp-2 text-[10px] leading-4 text-muted-foreground">{event.summary || "No summary emitted."}</span>
+                        <span className="mt-0.5 block line-clamp-2 text-[10px] leading-4 text-muted-foreground">
+                          {event.summary || "No summary emitted."}
+                        </span>
                       </span>
-                      <span className="pt-0.5 text-[9px] tabular-nums text-muted-foreground">{formatTime(event.timestamp)}</span>
                     </button>
                   );
                 })}
@@ -316,46 +356,82 @@ export function OptimizerTracePanel({
           </div>
         </div>
 
-        <div>
-          <div className="flex items-center justify-between border-b border-border/40 px-3 py-2">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Event inspector</div>
-            {selectedEvent && <Badge variant="outline" className="h-5 text-[9px]">{selectedEvent.kind}</Badge>}
+        <div className="min-w-0 bg-background/45">
+          <div className="flex items-center justify-between border-b border-border/40 px-4 py-2">
+            <div className="text-[10px] font-semibold uppercase text-muted-foreground">Conversation</div>
+            {selectedEvent && (
+              <span className="text-[10px] text-muted-foreground">
+                #{selectedEvent.sequence} · {formatTime(selectedEvent.timestamp)}
+              </span>
+            )}
           </div>
-          <div className="max-h-[36rem] overflow-y-auto p-3">
+          <div className="max-h-[42rem] overflow-y-auto px-3 py-4 sm:px-5">
             {selectedEvent ? (
-              <div className="space-y-3">
-                <div>
-                  <h3 className="text-base font-semibold text-foreground">{selectedEvent.title}</h3>
-                  <p className="mt-1 text-xs leading-5 text-muted-foreground">{selectedEvent.summary || "No summary was emitted for this event."}</p>
+              <article className="mx-auto max-w-4xl">
+                <div className="flex items-start gap-3">
+                  <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-full border", eventTone(selectedEvent.kind))}>
+                    {(() => {
+                      const Icon = eventIcon(selectedEvent.kind);
+                      return <Icon className="h-4 w-4" />;
+                    })()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="text-sm font-semibold text-foreground">
+                        {selectedEvent.kind === "reasoning" || selectedEvent.kind === "response"
+                          ? display(effectiveTrace.agent_name, "optimizer")
+                          : selectedEvent.title}
+                      </span>
+                      <Badge variant="outline" className="h-5 text-[9px]">{selectedEvent.kind}</Badge>
+                    </div>
+                    <div className={cn(
+                      "mt-2 rounded-lg border px-4 py-3 shadow-sm",
+                      selectedEvent.kind === "reasoning"
+                        ? "border-violet-500/20 bg-violet-500/5"
+                        : selectedEvent.kind === "skill"
+                          ? "border-cyan-500/20 bg-cyan-500/5"
+                          : "border-border/50 bg-card",
+                    )}>
+                      <div className="mb-2 text-sm font-semibold text-foreground">{selectedEvent.title}</div>
+                      <MarkdownRenderer
+                        content={selectedEvent.summary || "No summary was emitted for this event."}
+                        className="text-[13px] leading-6 text-foreground/85 [&_p]:my-2 [&_li]:text-[13px]"
+                      />
+
+                      {selectedEvent.kind === "skill" && (
+                        <div className="mt-3 grid gap-2 border-t border-cyan-500/15 pt-3 text-[10px] sm:grid-cols-2">
+                          <div className="rounded-md border border-border/40 bg-background/70 p-2">
+                            <div className="text-muted-foreground">Skill</div>
+                            <div className="mt-0.5 font-semibold text-foreground">{display(selectedPayload.name, "unnamed skill")}</div>
+                          </div>
+                          <div className="rounded-md border border-border/40 bg-background/70 p-2">
+                            <div className="text-muted-foreground">Delivery</div>
+                            <div className="mt-0.5 font-semibold text-foreground">{display(selectedPayload.delivery, "runtime context").replace(/_/g, " ")}</div>
+                          </div>
+                          <div className="rounded-md border border-border/40 bg-background/70 p-2 sm:col-span-2">
+                            <div className="text-muted-foreground">Materialized file</div>
+                            <div className="mt-0.5 break-all font-mono text-foreground">{display(selectedPayload.file, "path unavailable")}</div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {selectedEvent.kind === "reasoning" && (
+                      <div className="mt-2 text-[10px] leading-4 text-muted-foreground">
+                        Observable reasoning summary emitted by the runtime. Hidden model chain-of-thought is not exposed.
+                      </div>
+                    )}
+                    {selectedEvent.payload !== undefined && (
+                      <details className="mt-3 rounded-md border border-border/45 bg-card/60 p-2">
+                        <summary className="cursor-pointer list-none text-[11px] font-semibold text-foreground">Raw event data</summary>
+                        <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-zinc-950 p-3 font-mono text-[10px] leading-4 text-zinc-100">
+                          {JSON.stringify(selectedEvent.payload, null, 2)}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
                 </div>
-                <div className="grid gap-2 sm:grid-cols-3">
-                  <div className="rounded-md border border-border/40 bg-background/70 p-2">
-                    <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Sequence</div>
-                    <div className="mt-1 text-xs font-semibold text-foreground">#{selectedEvent.sequence}</div>
-                  </div>
-                  <div className="rounded-md border border-border/40 bg-background/70 p-2">
-                    <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Time</div>
-                    <div className="mt-1 text-xs font-semibold text-foreground">{formatTime(selectedEvent.timestamp)}</div>
-                  </div>
-                  <div className="rounded-md border border-border/40 bg-background/70 p-2">
-                    <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Source</div>
-                    <div className="mt-1 truncate text-xs font-semibold text-foreground">{display(effectiveTrace.agent_name, "optimizer")}</div>
-                  </div>
-                </div>
-                {selectedEvent.kind === "reasoning" && (
-                  <div className="rounded-md border border-violet-500/25 bg-violet-500/8 p-2 text-[10px] leading-4 text-violet-800 dark:text-violet-200">
-                    This is an observable runtime reasoning summary, not hidden model chain-of-thought.
-                  </div>
-                )}
-                {selectedEvent.payload !== undefined && (
-                  <details className="rounded-md border border-border/45 bg-background/70 p-2" open>
-                    <summary className="cursor-pointer list-none text-[11px] font-semibold text-foreground">Event payload</summary>
-                    <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded bg-zinc-950 p-2 font-mono text-[10px] leading-4 text-zinc-100">
-                      {JSON.stringify(selectedEvent.payload, null, 2)}
-                    </pre>
-                  </details>
-                )}
-              </div>
+              </article>
             ) : (
               <div className="flex min-h-64 items-center justify-center text-center text-[11px] text-muted-foreground">
                 Select an event to inspect its details.
@@ -366,21 +442,43 @@ export function OptimizerTracePanel({
       </div>
 
       <div className="grid border-t border-border/50 lg:grid-cols-2">
-        <details className="border-b border-border/45 p-3 lg:border-b-0 lg:border-r">
+        <details className="border-b border-border/45 p-3 lg:border-r">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-xs font-semibold text-foreground">
-            <span className="flex items-center gap-2"><Bot className="h-3.5 w-3.5 text-primary" />Skills & resources</span>
+            <span className="flex items-center gap-2"><BookOpen className="h-3.5 w-3.5 text-primary" />Loaded context</span>
             <span className="text-[10px] font-normal text-muted-foreground">{skills.length} skills · {resources.length} resources</span>
           </summary>
-          <div className="mt-2 space-y-2">
+          <div className="mt-2 space-y-2.5">
+            {loadedSkillEvents.length > 0 ? (
+              <div className="space-y-1.5">
+                {loadedSkillEvents.map((event) => {
+                  const payload = record(event.payload);
+                  return (
+                    <div key={event.id} className="rounded-md border border-cyan-500/20 bg-cyan-500/5 px-2.5 py-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold text-foreground">{display(payload.name, event.title)}</span>
+                        <Badge variant="outline" className="h-5 border-cyan-500/25 text-[9px]">
+                          {display(payload.delivery, "loaded").replace(/_/g, " ")}
+                        </Badge>
+                      </div>
+                      <div className="mt-1 break-all font-mono text-[9px] leading-4 text-muted-foreground">
+                        {display(payload.file, "Materialized file path unavailable")}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="rounded-md border border-dashed border-border/50 p-2 text-[10px] text-muted-foreground">
+                This candidate predates explicit runtime skill-load events. Reported skill use is shown below.
+              </div>
+            )}
             <div className="flex flex-wrap gap-1">
-              {skills.length > 0
-                ? skills.map((skill) => <Badge key={skill} variant="outline" className="h-5 text-[9px]">{skill}</Badge>)
-                : <span className="text-[10px] text-muted-foreground">No explicit skill usage was reported.</span>}
+              {skills.map((skill) => <Badge key={skill} variant="outline" className="h-5 text-[9px]">{skill}</Badge>)}
             </div>
             {resources.length > 0 && (
-              <div className="grid gap-1 sm:grid-cols-2">
+              <div className="space-y-1">
                 {resources.map((resource) => (
-                  <div key={resource} className="truncate rounded border border-border/35 bg-muted/20 px-2 py-1 text-[10px] text-foreground">
+                  <div key={resource} className="break-all rounded border border-border/35 bg-muted/20 px-2 py-1 text-[10px] text-foreground">
                     {resource}
                   </div>
                 ))}
@@ -389,7 +487,52 @@ export function OptimizerTracePanel({
           </div>
         </details>
 
-        <details className="p-3">
+        <details className="border-b border-border/45 p-3">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-xs font-semibold text-foreground">
+            <span className="flex items-center gap-2"><Wrench className="h-3.5 w-3.5 text-primary" />Tool calls & artifacts</span>
+            <span className="text-[10px] font-normal text-muted-foreground">{toolCalls.length} tools · {artifacts.length} artifacts</span>
+          </summary>
+          <div className="mt-2 space-y-3">
+            <div>
+              <div className="text-[10px] font-medium text-muted-foreground">Tools used</div>
+              {toolCalls.length > 0 ? (
+                <div className="mt-1 space-y-1.5">
+                  {toolCalls.slice(0, 8).map((call, index) => {
+                    const { title, summary } = summarizeToolCall(record(call));
+                    return (
+                      <div key={`${title}-${index}`} className="rounded border border-border/35 bg-muted/20 px-2 py-1.5">
+                        <div className="truncate text-[10px] font-semibold text-foreground">{title}</div>
+                        <div className="mt-0.5 line-clamp-2 text-[10px] leading-4 text-muted-foreground">{summary}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="mt-1 text-[10px] text-muted-foreground">No explicit tool calls were persisted.</div>
+              )}
+            </div>
+            <div>
+              <div className="text-[10px] font-medium text-muted-foreground">Artifacts returned</div>
+              {artifacts.length > 0 ? (
+                <div className="mt-1 space-y-1.5">
+                  {artifacts.slice(0, 8).map((artifact, index) => {
+                    const { title, summary } = summarizeArtifact(record(artifact));
+                    return (
+                      <div key={`${title}-${index}`} className="rounded border border-border/35 bg-muted/20 px-2 py-1.5">
+                        <div className="truncate text-[10px] font-semibold text-foreground">{title}</div>
+                        <div className="mt-0.5 line-clamp-2 text-[10px] leading-4 text-muted-foreground">{summary}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="mt-1 text-[10px] text-muted-foreground">No optimizer artifacts were persisted.</div>
+              )}
+            </div>
+          </div>
+        </details>
+
+        <details className="p-3 lg:col-span-2">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-xs font-semibold text-foreground">
             <span className="flex items-center gap-2"><FileJson className="h-3.5 w-3.5 text-primary" />Visible final response</span>
             <span className="flex items-center gap-1 text-[10px] font-normal text-muted-foreground">
@@ -397,9 +540,12 @@ export function OptimizerTracePanel({
             </span>
           </summary>
           {finalResponse ? (
-            <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded bg-zinc-950 p-2 font-mono text-[10px] leading-4 text-zinc-100">
-              {finalResponse}
-            </pre>
+            <div className="mt-2 max-h-[34rem] overflow-auto rounded-md border border-border/40 bg-background/70 px-4 py-3">
+              <MarkdownRenderer
+                content={finalResponse}
+                className="text-[12px] leading-5 text-foreground/85 [&_p]:my-2 [&_li]:text-[12px]"
+              />
+            </div>
           ) : (
             <div className="mt-2 text-[10px] text-muted-foreground">No final response was persisted.</div>
           )}

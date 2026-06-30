@@ -95,12 +95,17 @@ Shared services include PostgreSQL for durable platform data, Redis for cache/se
 | `AgentWorkflow` | Multi-step workflow definition with dependencies, approvals, retries, and step contracts. |
 | `AgentPolicy` | Guardrails, runtime constraints, tool ceilings, and outbound access rules. |
 | `AgentApproval` | Human approval records for gated actions. |
+| `AgentTenant` | Cluster-scoped namespace ownership, quotas, model allow-lists, and tenant administrators. |
 | `McpConnection` | Saved MCP connection metadata and credential binding. |
+| `ConnectorPlugin` | Collection plugin image, protocol, capabilities, and health contract. |
+| `ObservationTarget` | Infrastructure or service target to collect and evaluate. |
+| `ObservationPolicy` | Retention, alert rules, anomaly settings, and notification policy. |
+| `ObservationReport` | Reconciled health score, findings, and alert summary for an observation target. |
 | `WebhookReceiver` | Signed inbound webhook configuration. |
 | `WorkflowTrigger` | Trigger state and workflow dispatch lineage. |
 | `AgentIncident` | Incident lifecycle records and remediation workflow links. |
 
-Additional observability and tenant CRDs are installed by the Helm chart.
+The Helm chart installs these 13 CRDs from [`charts/kubesynapse/crds/`](charts/kubesynapse/crds/).
 
 ## Security Model
 
@@ -112,7 +117,9 @@ KubeSynapse is built around copied, auditable, least-privilege execution:
 - MCP credentials are namespace-scoped and attached explicitly.
 - Network policies can restrict agent egress by namespace and workload.
 - Workflow optimization never edits the source workflow in place; it creates candidate manifests and requires approval before apply or trial runs.
-- Promotion requires preserved workflow topology, namespace safety, no secret expansion, approval, and verified trial evidence.
+- Candidate validation enforces namespace safety, allowed resource kinds, no secret or privilege expansion, source-model preservation, and output-contract checks.
+- Topology is preserved by default. An admin can explicitly allow a topology rewrite, which requires a capability-equivalence map and still passes the same validation, approval, and trial gates.
+- Promotion requires approval and verified trial evidence; estimated savings alone are never treated as proof.
 
 See [`docs/architecture-overview.md`](docs/architecture-overview.md) and [`docs/secrets-management.md`](docs/secrets-management.md) for deployment guidance.
 
@@ -125,12 +132,15 @@ The workflow is:
 1. Select baseline traces.
 2. Generate an optimized candidate manifest bundle.
 3. Review side-by-side manifest differences.
-4. Inspect the persisted optimizer trace for the candidate to review observable reasoning summaries, tools, skills, and referenced resources.
-5. Approve and run candidate trials.
-6. Compare baseline versus candidate tokens, wall-clock time, tool calls, cost, and quality status.
-7. Promote only after the proof gate passes.
+4. Inspect the persisted optimizer trace: runtime status, loaded skill files, observable reasoning summaries, tool calls, artifacts, referenced resources, final response, and candidate validation result.
+5. Download the exact persisted candidate bundle as multi-document YAML for external review.
+6. Approve and run candidate trials.
+7. Compare baseline versus candidate tokens, wall-clock time, tool calls, cost, and quality status.
+8. Promote only after the proof gate passes.
 
-Candidates preserve workflow topology and source model selection in v1. Prompt, context, timeout, caching, and tool-use guidance can be optimized without removing required behavior.
+Candidates always preserve source model selection. Prompt, context, timeout, caching, and tool-use guidance can be optimized without removing required behavior. Topology changes are disabled by default and require an explicit per-study admin choice.
+
+Optimizer traces expose only observable runtime data. They do not expose hidden model chain-of-thought. Attached optimizer skills are materialized by the OpenCode runtime, injected into the system context, and recorded as skill-load events with file provenance for candidate audit.
 
 ## CLI
 

@@ -639,7 +639,7 @@ If a workflow shows high run-to-run variance:
 1. **Open the Observatory Overview → Tool Mix.** Look for the same
    tool at the top of the chart with wildly different `duration_ms`
    across recent runs.
-2. **Open the same run's Models & Tools tab.** Count how many times
+2. **Open the same run's Trace tab and filter to tools.** Count how many times
    the same `tool.query` appears. If a tool is called 8+ times for
    one step, the model is looping.
 3. **Check the step's `execution.maxTurns`.** If `maxTurns` is > 2×

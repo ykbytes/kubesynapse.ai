@@ -1081,6 +1081,24 @@ def invoke_opencode(request: InvokeRequest, stream_callback: StreamCallback = No
             with contextlib.suppress(Exception):
                 stream_callback(event_type, data)
 
+    for skill in SKILL_RUNTIME_CONFIG.get("skillMeta") or []:
+        if not isinstance(skill, dict):
+            continue
+        skill_name = str(skill.get("name") or "unnamed-skill").strip() or "unnamed-skill"
+        skill_file = str(skill.get("file") or "").strip()
+        skill_content = str(skill.get("content") or "")
+        _emit(
+            "response.skill_loaded",
+            {
+                "name": skill_name,
+                "description": str(skill.get("description") or "").strip(),
+                "file": skill_file,
+                "delivery": "system_prompt",
+                "content_chars": len(skill_content),
+                "source": "opencode-runtime",
+            },
+        )
+
     for turn in range(effective_max_turns):
         _emit("response.turn_started", {"turn": turn + 1, "max_turns": effective_max_turns, "agent": current_agent})
         use_system = system_prompt if turn == 0 else None

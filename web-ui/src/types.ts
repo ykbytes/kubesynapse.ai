@@ -1441,6 +1441,7 @@ export interface OptimizationStudy {
 
 export type OptimizerTraceEventKind =
   | "status"
+  | "skill"
   | "reasoning"
   | "tool"
   | "response"

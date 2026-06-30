@@ -15,6 +15,7 @@
 - [Agents](#agents)
 - [Chat Sessions](#chat-sessions)
 - [Workflows](#workflows)
+- [Optimization ROI Lab](#optimization-roi-lab)
 - [Webhooks & Triggers](#webhooks--triggers)
 - [MCP Connections](#mcp-connections)
 - [Policies](#policies)
@@ -903,6 +904,32 @@ Send a JSON-RPC message to an agent.
 | `tasks/get` | Retrieve task status by ID |
 
 ---
+
+## Optimization ROI Lab
+
+Optimization studies use historical workflow traces and source manifests to create a separate candidate bundle. The source `AgentWorkflow` and its agents are never edited. Estimated gains are hypotheses; verified gains come only from candidate trial runs that pass the proof gate.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/optimizations/studies` | Persist a baseline study from selected workflow runs and server-ranked opportunities. |
+| `GET` | `/api/v1/optimizations/studies` | List studies, optionally filtered by namespace or workflow. |
+| `GET` | `/api/v1/optimizations/studies/{study_id}` | Retrieve a study, candidates, trials, optimizer audit, and proof state. |
+| `POST` | `/api/v1/optimizations/studies/{study_id}/candidates/generate` | Generate, validate, and persist a copied candidate manifest bundle. |
+| `GET` | `/api/v1/optimizations/candidates/{candidate_id}/manifest` | Download the exact persisted candidate bundle as multi-document YAML. |
+| `POST` | `/api/v1/optimizations/candidates/{candidate_id}/approval` | Record the administrator approval decision. |
+| `POST` | `/api/v1/optimizations/candidates/{candidate_id}/apply` | Dry-run or apply only the copied candidate resources. |
+| `POST` | `/api/v1/optimizations/candidates/{candidate_id}/run` | Trigger a candidate trial and retain its run linkage. |
+| `POST` | `/api/v1/optimizations/candidates/{candidate_id}/trials` | Record or link trial evidence. |
+| `GET` | `/api/v1/optimizations/studies/{study_id}/comparison` | Return baseline, estimate, candidate, per-step, and per-tool comparisons. |
+| `GET` | `/api/v1/optimizations/studies/{study_id}/roi` | Return proof status and measured cost, token, time, and tool-call deltas. |
+| `GET` | `/api/v1/optimizations/studies/{study_id}/dataset` | Export the study's redacted replay/evaluation dataset. |
+| `POST` | `/api/v1/optimizations/candidates/{candidate_id}/promotion` | Promote a candidate after approval and proof requirements pass. |
+
+Candidate generation accepts a topology mode. Preserve mode keeps step names, order, types, contracts, and agent references. An explicit administrator-approved topology rewrite may consolidate or reorder work only when the request contains a capability-equivalence map and the generated bundle passes contract, privilege, secret, namespace, and output checks.
+
+Each generated candidate stores an observable optimizer trace: runtime status, explicit skill-file load events, reasoning summaries exposed by the runtime, tool activity, artifacts, referenced resources, visible final response, and candidate validation outcome. This audit data does not expose hidden model chain-of-thought.
+
+The manifest download response uses `Content-Type: application/yaml` and `Content-Disposition: attachment`. It is the persisted candidate submitted to validation, not a regenerated preview.
 
 ## Webhooks & Triggers
 

@@ -2551,6 +2551,43 @@ class InvokeOpenCodeLoopTests(unittest.TestCase):
         self.assertEqual(resp.status, "completed")
         self.assertIn("All done!", resp.response)
 
+    def test_stream_reports_attached_skill_files_before_model_turn(self) -> None:
+        payload = self._make_payload("All done!", "stop")
+        request = opencode_runtime_main.InvokeRequest(prompt="Optimize this workflow")
+        events: list[tuple[str, dict]] = []
+        skill_meta = [
+            {
+                "name": "critical-path-roi",
+                "description": "Rank the dominant workflow bottleneck.",
+                "file": "/app/state/home/.config/opencode/skills/critical-path-roi/SKILL.md",
+                "content": "Use critical-path evidence before proposing a candidate.",
+            }
+        ]
+
+        with (
+            self._patch_server_running(),
+            self._patch_create_session(),
+            self._patch_send_prompt([payload]),
+            patch.dict(invoke_mod.SKILL_RUNTIME_CONFIG, {"skillMeta": skill_meta}, clear=False),
+        ):
+            patches = self._patch_session_helpers()
+            with patches[0], patches[1], patches[2], patches[3], patches[4]:
+                opencode_runtime_main.invoke_opencode(
+                    request,
+                    stream_callback=lambda event_type, data: events.append((event_type, data)),
+                )
+
+        loaded = [data for event_type, data in events if event_type == "response.skill_loaded"]
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(loaded[0]["name"], "critical-path-roi")
+        self.assertTrue(loaded[0]["file"].endswith("/critical-path-roi/SKILL.md"))
+        self.assertEqual(loaded[0]["delivery"], "system_prompt")
+        self.assertGreater(loaded[0]["content_chars"], 0)
+        self.assertLess(
+            next(index for index, (event_type, _) in enumerate(events) if event_type == "response.skill_loaded"),
+            next(index for index, (event_type, _) in enumerate(events) if event_type == "response.turn_started"),
+        )
+
     def test_multi_turn_continuation(self) -> None:
         """If first turn is incomplete, the loop should continue."""
         payloads = [

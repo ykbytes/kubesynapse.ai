@@ -108,7 +108,10 @@ The Observatory workspace provides rich inspection of execution traces:
 |---|---|
 | **Syntax Highlighting** | JSON results and arguments are rendered with Prism-based syntax highlighting (line numbers, color-coded keys/values) |
 | **Diff Highlighting** | `apply_patch` and `edit` tool call arguments and results are rendered with GitHub-style diff coloring — green for additions, red for removals, purple for hunk headers, blue for file headers |
-| **Expandable Tool Calls** | Each tool call in the Models & Tools tab expands inline to show ArgsCard (key-value cards with primary field highlighting) and ResultBlock (auto-detects JSON, diff, or plain text) |
+| **Execution Timeline** | Correlates steps, LLM calls, tools, reasoning summaries, and runtime events in chronological order with a detail inspector |
+| **Trace Filters** | Filters one execution by step, agent, model, tool, status, or free-text search without losing chronology |
+| **Expandable Tool Calls** | Tool activity in the Trace view expands to show ArgsCard (key-value cards with primary field highlighting) and ResultBlock (auto-detects JSON, diff, or plain text) |
+| **Optimization Audit** | The Optimise view records the optimizer runtime status, explicit skill-file loads, observable reasoning summaries, tools, artifacts, resources, final response, and candidate validation result |
 | **Tool Call Icons** | Each tool type (search, bash, read, write, skill, etc.) has a distinct icon and color mapping for quick visual scanning |
 | **Truncated JSON Handling** | If a tool result is truncated at the source (e.g., by the runtime's 40,000-char limit), the UI auto-closes the JSON by counting bracket balance and appending missing `}`/`]` before rendering |
 | **ArgsCard** | Visual key-value card for parsed JSON arguments — highlights primary fields (URL, command, filePath, etc.) for each tool type |
@@ -435,7 +438,8 @@ Open the **Execution Observatory** workspace in the UI. Select the completed exe
   - *Quality Flags* — warnings, error events, tool failures, longest quiet gap, and missing token data; runs can complete green but still be flagged "shaky".
 - **Steps tab**: Per-step drilldown with LLM/tool counts and latency per step
 - **Logs tab**: Worker logs (live or archived fallback) with filter modes (all, activity, errors, tooling)
-- **Models & Tools tab**: All LLM calls and tool calls with syntax-highlighted JSON results, diff-colored patches, and expandable detail rows
+- **Trace tab**: Chronological LLM, tool, reasoning-summary, and runtime events with syntax-highlighted payloads and a wide event inspector
+- **Optimise tab**: Baseline studies, copied candidates, expected versus measured savings, side-by-side manifest diff, trial evidence, and the persisted optimizer audit trace
 - **Compare tab**: Side-by-side execution diff with execution selector
 
 The Overview charts are pure CSS (no charting library) and derive from the same payload fetched for the rest of the Observatory: `ExecutionListItem[]` for trends and the selected `ExecutionTrace` for per-run charts. No new backend endpoints are required for Phase 1.
