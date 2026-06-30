@@ -1500,13 +1500,28 @@ export interface OptimizationCandidate {
   optimizer_trace?: OptimizerTrace | null;
   validation_results: Record<string, unknown>;
   expected_savings?: Record<string, unknown>;
+  tags: string[];
+  lifecycle_state: "active" | "archived";
+  workflow_name?: string | null;
+  baseline_execution_count?: number;
+  trial_count?: number;
+  study_status?: string | null;
+  study_created_at?: string | null;
   created_by?: string | null;
   approved_by?: string | null;
   approval_reason?: string | null;
   approved_at?: string | null;
   applied_at?: string | null;
+  archived_by?: string | null;
+  archived_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+}
+
+export interface OptimizationCandidateDetail {
+  candidate: OptimizationCandidate;
+  study: OptimizationStudy;
+  trials: OptimizationTrial[];
 }
 
 export interface OptimizationTrial {

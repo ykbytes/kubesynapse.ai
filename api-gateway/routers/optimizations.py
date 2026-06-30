@@ -120,6 +120,32 @@ class CreateTrialRequest(BaseModel):
         return self
 
 
+class UpdateCandidateRequest(BaseModel):
+    tags: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def normalize(self) -> UpdateCandidateRequest:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw_tag in self.tags:
+            tag = raw_tag.strip()
+            if not tag:
+                continue
+            if len(tag) > 40:
+                raise ValueError("candidate tags must be 40 characters or fewer")
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/-]*", tag):
+                raise ValueError(
+                    "candidate tags may contain letters, numbers, dots, underscores, colons, slashes, and hyphens"
+                )
+            key = tag.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(tag)
+        self.tags = normalized
+        return self
+
+
 def _principal(user: dict[str, Any]) -> str:
     return str(user.get("sub") or user.get("username") or user.get("id") or "unknown")
 
@@ -147,6 +173,11 @@ def _get_traces(execution_ids: list[str]) -> list[dict[str, Any]]:
     if missing:
         raise HTTPException(status_code=404, detail=f"Execution '{missing[0]}' not found")
     return [traces_by_id[execution_id] for execution_id in execution_ids]
+
+
+def _ensure_candidate_active(candidate: dict[str, Any]) -> None:
+    if str(candidate.get("lifecycle_state") or "active") != "active":
+        raise HTTPException(status_code=409, detail="Archived candidates are read-only")
 
 
 def _aggregate_metrics(traces: list[dict[str, Any]]) -> dict[str, Any]:
@@ -3304,6 +3335,96 @@ def generate_candidate(study_id: str, body: GenerateCandidateRequest, user: dict
     )
 
 
+@router.get("/candidates")
+def list_candidate_registry(
+    namespace: str,
+    workflow_name: str | None = None,
+    status: str | None = None,
+    approval_status: str | None = None,
+    tag: str | None = None,
+    search: str | None = None,
+    include_archived: bool = False,
+    limit: int = 100,
+    offset: int = 0,
+    user: dict[str, Any] = Depends(verify_token),
+) -> dict[str, Any]:
+    normalized_namespace = namespace.strip()
+    if not normalized_namespace:
+        raise HTTPException(status_code=422, detail="namespace is required")
+    ensure_namespace_access(user, normalized_namespace)
+    safe_limit = max(1, min(limit, 200))
+    safe_offset = max(0, offset)
+    items = optimization_store.list_candidate_registry(
+        namespace=normalized_namespace,
+        workflow_name=workflow_name.strip() if workflow_name else None,
+        status=status.strip() if status else None,
+        approval_status=approval_status.strip() if approval_status else None,
+        tag=tag.strip() if tag else None,
+        search=search.strip() if search else None,
+        include_archived=include_archived,
+        limit=safe_limit,
+        offset=safe_offset,
+    )
+    return {"items": items, "limit": safe_limit, "offset": safe_offset}
+
+
+@router.get("/candidates/{candidate_id}")
+def get_candidate_detail(
+    candidate_id: str,
+    user: dict[str, Any] = Depends(verify_token),
+) -> dict[str, Any]:
+    candidate = optimization_store.get_candidate(candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="Optimization candidate not found")
+    ensure_namespace_access(user, str(candidate["namespace"]))
+    study = optimization_store.get_study(str(candidate["study_id"]))
+    if study is None:
+        raise HTTPException(status_code=404, detail="Optimization study not found")
+    _sync_candidate_trial_results(study)
+    trials = optimization_store.list_trials(str(study["id"]), candidate_id)
+    study["candidates"] = optimization_store.list_candidates(str(study["id"]))
+    study["trials"] = optimization_store.list_trials(str(study["id"]))
+    return {
+        "candidate": candidate,
+        "study": _expose_optimizer_intelligence(study),
+        "trials": trials,
+    }
+
+
+@router.patch("/candidates/{candidate_id}")
+def update_candidate(
+    candidate_id: str,
+    body: UpdateCandidateRequest,
+    user: dict[str, Any] = Depends(verify_token),
+) -> dict[str, Any]:
+    candidate = optimization_store.get_candidate(candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="Optimization candidate not found")
+    ensure_namespace_access(user, str(candidate["namespace"]), "operator")
+    _ensure_candidate_active(candidate)
+    updated = optimization_store.update_candidate_tags(candidate_id, body.tags)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Optimization candidate not found")
+    return updated
+
+
+@router.delete("/candidates/{candidate_id}")
+def delete_candidate(
+    candidate_id: str,
+    user: dict[str, Any] = Depends(verify_token),
+) -> dict[str, Any]:
+    candidate = optimization_store.get_candidate(candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="Optimization candidate not found")
+    ensure_namespace_access(user, str(candidate["namespace"]), "admin")
+    if str(candidate.get("lifecycle_state") or "active") == "archived":
+        return candidate
+    archived = optimization_store.archive_candidate(candidate_id, archived_by=_principal(user))
+    if archived is None:
+        raise HTTPException(status_code=404, detail="Optimization candidate not found")
+    return archived
+
+
 @router.get("/candidates/{candidate_id}/manifest")
 def download_candidate_manifest(
     candidate_id: str,
@@ -3332,6 +3453,7 @@ def approve_candidate(candidate_id: str, body: ApprovalRequest, user: dict[str, 
     if candidate is None:
         raise HTTPException(status_code=404, detail="Optimization candidate not found")
     ensure_namespace_access(user, str(candidate["namespace"]), "admin")
+    _ensure_candidate_active(candidate)
     decision = optimization_store.decide_candidate(
         candidate_id=candidate_id,
         decision=body.decision,
@@ -3355,6 +3477,7 @@ def apply_candidate(
     if candidate is None:
         raise HTTPException(status_code=404, detail="Optimization candidate not found")
     ensure_namespace_access(user, str(candidate["namespace"]), "admin")
+    _ensure_candidate_active(candidate)
     if candidate.get("approval_status") != "approved":
         raise HTTPException(status_code=409, detail="Candidate must be approved before apply or trial execution")
     if body.dry_run:
@@ -3374,6 +3497,7 @@ def run_candidate(
     if candidate is None:
         raise HTTPException(status_code=404, detail="Optimization candidate not found")
     ensure_namespace_access(user, str(candidate["namespace"]), "admin")
+    _ensure_candidate_active(candidate)
     if candidate.get("approval_status") != "approved":
         raise HTTPException(status_code=409, detail="Candidate must be approved before apply or trial execution")
     study = optimization_store.get_study(str(candidate["study_id"]))
@@ -3436,6 +3560,7 @@ def promote_candidate(
     if candidate is None:
         raise HTTPException(status_code=404, detail="Optimization candidate not found")
     ensure_namespace_access(user, str(candidate["namespace"]), "admin")
+    _ensure_candidate_active(candidate)
     if candidate.get("approval_status") != "approved":
         raise HTTPException(status_code=409, detail="Candidate must be approved before promotion")
     study = optimization_store.get_study(str(candidate["study_id"]))
@@ -3469,6 +3594,7 @@ def create_trial(candidate_id: str, body: CreateTrialRequest, user: dict[str, An
     if candidate is None:
         raise HTTPException(status_code=404, detail="Optimization candidate not found")
     ensure_namespace_access(user, str(candidate["namespace"]), "admin")
+    _ensure_candidate_active(candidate)
     if candidate.get("approval_status") != "approved":
         raise HTTPException(status_code=409, detail="Candidate must be approved before trial proof can be recorded")
     study = optimization_store.get_study(str(candidate["study_id"]))

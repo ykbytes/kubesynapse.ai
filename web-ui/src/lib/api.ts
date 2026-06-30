@@ -67,6 +67,7 @@ import type {
   McpStats,
   McpSupportLevel,
   OptimizationCandidate,
+  OptimizationCandidateDetail,
   OptimizationCandidateRunResult,
   OptimizationComparisonResponse,
   OptimizationIntelligence,
@@ -3264,11 +3265,20 @@ function parseOptimizationCandidate(payload: unknown, label = "OptimizationCandi
     optimizer_trace: parseOptimizerTrace(record.optimizer_trace, `${label}.optimizer_trace`),
     validation_results: readOptionalRecord(record, "validation_results", label) ?? {},
     expected_savings: readOptionalRecord(record, "expected_savings", label) ?? {},
+    tags: readStringArray(record, "tags", label, []),
+    lifecycle_state: readString(record, "lifecycle_state", label, "active") === "archived" ? "archived" : "active",
+    workflow_name: readOptionalString(record, "workflow_name", label),
+    baseline_execution_count: readOptionalNumber(record, "baseline_execution_count", label) ?? undefined,
+    trial_count: readOptionalNumber(record, "trial_count", label) ?? undefined,
+    study_status: readOptionalString(record, "study_status", label),
+    study_created_at: readOptionalString(record, "study_created_at", label),
     created_by: readOptionalString(record, "created_by", label),
     approved_by: readOptionalString(record, "approved_by", label),
     approval_reason: readOptionalString(record, "approval_reason", label),
     approved_at: readOptionalString(record, "approved_at", label),
     applied_at: readOptionalString(record, "applied_at", label),
+    archived_by: readOptionalString(record, "archived_by", label),
+    archived_at: readOptionalString(record, "archived_at", label),
     created_at: readOptionalString(record, "created_at", label),
     updated_at: readOptionalString(record, "updated_at", label),
   };
@@ -3572,6 +3582,89 @@ export async function fetchOptimizationStudies(
 export async function fetchOptimizationStudy(token: string, studyId: string): Promise<OptimizationStudy> {
   const response = await fetchAuthenticated(buildUrl(`/api/optimizations/studies/${studyId}`), token);
   return parseJsonResponse(response, parseOptimizationStudy);
+}
+
+export async function fetchOptimizationCandidates(
+  token: string,
+  options: {
+    namespace: string;
+    workflowName?: string;
+    status?: string;
+    approvalStatus?: string;
+    tag?: string;
+    search?: string;
+    includeArchived?: boolean;
+    limit?: number;
+    offset?: number;
+  },
+): Promise<OptimizationCandidate[]> {
+  const url = new URL(buildUrl("/api/optimizations/candidates"), API_BASE_URL || window.location.origin);
+  url.searchParams.set("namespace", options.namespace);
+  if (options.workflowName) url.searchParams.set("workflow_name", options.workflowName);
+  if (options.status) url.searchParams.set("status", options.status);
+  if (options.approvalStatus) url.searchParams.set("approval_status", options.approvalStatus);
+  if (options.tag) url.searchParams.set("tag", options.tag);
+  if (options.search) url.searchParams.set("search", options.search);
+  if (options.includeArchived) url.searchParams.set("include_archived", "true");
+  url.searchParams.set("limit", String(options.limit ?? 100));
+  if (options.offset) url.searchParams.set("offset", String(options.offset));
+  const target = API_BASE_URL ? url.toString() : `${url.pathname}${url.search}`;
+  const response = await fetchAuthenticated(target, token);
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "OptimizationCandidateListResponse");
+    return readRecordArray(record, "items", "OptimizationCandidateListResponse")
+      .map((item, index) => parseOptimizationCandidate(item, `OptimizationCandidateListResponse.items[${index}]`));
+  });
+}
+
+export async function fetchOptimizationCandidate(
+  token: string,
+  candidateId: string,
+): Promise<OptimizationCandidateDetail> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/optimizations/candidates/${encodeURIComponent(candidateId)}`),
+    token,
+  );
+  return parseJsonResponse(response, (payload) => {
+    const record = expectRecord(payload, "OptimizationCandidateDetail");
+    const trials = record.trials;
+    return {
+      candidate: parseOptimizationCandidate(record.candidate, "OptimizationCandidateDetail.candidate"),
+      study: parseOptimizationStudy(record.study, "OptimizationCandidateDetail.study"),
+      trials: Array.isArray(trials)
+        ? trials.map((item, index) => parseOptimizationTrial(item, `OptimizationCandidateDetail.trials[${index}]`))
+        : [],
+    };
+  });
+}
+
+export async function updateOptimizationCandidate(
+  token: string,
+  candidateId: string,
+  tags: string[],
+): Promise<OptimizationCandidate> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/optimizations/candidates/${encodeURIComponent(candidateId)}`),
+    token,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tags }),
+    },
+  );
+  return parseJsonResponse(response, parseOptimizationCandidate);
+}
+
+export async function archiveOptimizationCandidate(
+  token: string,
+  candidateId: string,
+): Promise<OptimizationCandidate> {
+  const response = await fetchAuthenticated(
+    buildUrl(`/api/optimizations/candidates/${encodeURIComponent(candidateId)}`),
+    token,
+    { method: "DELETE" },
+  );
+  return parseJsonResponse(response, parseOptimizationCandidate);
 }
 
 export async function generateOptimizationCandidate(

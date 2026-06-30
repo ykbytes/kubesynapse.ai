@@ -16,7 +16,7 @@ The platform is designed for teams that want agent workloads to follow the same 
 
 ## Quickstart: Local Kind Cluster
 
-Prerequisites: Docker, kind, kubectl, Helm, and PowerShell 7 on Windows.
+Prerequisites: Docker, kind, kubectl, and Helm. Use PowerShell 7 on Windows or Bash on Linux/macOS.
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
@@ -24,6 +24,12 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/deploy-kind.ps1 `
   -Namespace kubesynapse `
   -ReleaseName kubesynapse `
   -AdminPassword "ChangeMeStrong9!"
+```
+
+Linux/macOS:
+
+```bash
+ADMIN_PASSWORD="ChangeMeStrong9!" ./scripts/install.sh
 ```
 
 Port-forward the API gateway and UI:
@@ -39,10 +45,12 @@ Open the console:
 Start-Process http://localhost:3000
 ```
 
-Log in with:
+### Default Credentials
+
+The local installer creates the bootstrap administrator:
 
 - Username: `admin`
-- Password: the value passed to `-AdminPassword`
+- Password: the value passed through `-AdminPassword` or `ADMIN_PASSWORD`
 
 Configure model provider credentials from the UI under Settings, or patch the platform secret for local development:
 
@@ -134,9 +142,10 @@ The workflow is:
 3. Review side-by-side manifest differences.
 4. Inspect the persisted optimizer trace: runtime status, loaded skill files, observable reasoning summaries, tool calls, artifacts, referenced resources, final response, and candidate validation result.
 5. Download the exact persisted candidate bundle as multi-document YAML for external review.
-6. Approve and run candidate trials.
-7. Compare baseline versus candidate tokens, wall-clock time, tool calls, cost, and quality status.
-8. Promote only after the proof gate passes.
+6. Manage candidates across studies in the candidate registry: search, select, tag, or archive candidates without losing lineage or audit history.
+7. Approve and run candidate trials.
+8. Compare baseline versus candidate tokens, wall-clock time, tool calls, cost, and quality status.
+9. Promote only after the proof gate passes.
 
 Candidates always preserve source model selection. Prompt, context, timeout, caching, and tool-use guidance can be optimized without removing required behavior. Topology changes are disabled by default and require an explicit per-study admin choice.
 

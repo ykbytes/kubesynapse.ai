@@ -692,6 +692,134 @@ def test_download_candidate_manifest_returns_persisted_yaml_bundle(client, auth_
     assert any(document["kind"] == "AIAgent" for document in documents)
 
 
+def test_candidate_registry_lists_across_studies_with_lineage(client, auth_headers) -> None:
+    baseline_id = _seed_execution(execution_id="exec-opt-registry")
+    created: list[tuple[dict, dict]] = []
+
+    with _optimization_api_context(manifests=True):
+        for suffix in ("registry-a", "registry-b"):
+            study = client.post(
+                "/api/v1/optimizations/studies",
+                headers=auth_headers,
+                json={
+                    "namespace": "default",
+                    "workflow_name": "daily-standup",
+                    "baseline_execution_ids": [baseline_id],
+                },
+            ).json()
+            candidate = client.post(
+                f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
+                headers=auth_headers,
+                json={"optimizer_output": f"candidate {suffix}", "suffix": suffix},
+            ).json()
+            created.append((study, candidate))
+
+    with _optimization_api_context():
+        response = client.get(
+            "/api/v1/optimizations/candidates",
+            headers=auth_headers,
+            params={"namespace": "default", "workflow_name": "daily-standup", "limit": 100},
+        )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    ids = [item["id"] for item in payload["items"]]
+    assert created[0][1]["id"] in ids
+    assert created[1][1]["id"] in ids
+    selected = next(item for item in payload["items"] if item["id"] == created[1][1]["id"])
+    assert selected["workflow_name"] == "daily-standup"
+    assert selected["study_id"] == created[1][0]["id"]
+    assert selected["baseline_execution_count"] == 1
+    assert selected["trial_count"] == 0
+    assert selected["tags"] == []
+    assert selected["lifecycle_state"] == "active"
+
+
+def test_candidate_registry_updates_tags_and_returns_detail(client, auth_headers) -> None:
+    baseline_id = _seed_execution(execution_id="exec-opt-registry-tags")
+    with _optimization_api_context(manifests=True):
+        study = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={
+                "namespace": "default",
+                "workflow_name": "daily-standup",
+                "baseline_execution_ids": [baseline_id],
+            },
+        ).json()
+        candidate = client.post(
+            f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
+            headers=auth_headers,
+            json={"optimizer_output": "taggable candidate", "suffix": "registry-tags"},
+        ).json()
+
+    with _optimization_api_context():
+        updated = client.patch(
+            f"/api/v1/optimizations/candidates/{candidate['id']}",
+            headers=auth_headers,
+            json={"tags": ["challenger", "team:platform", "challenger", "  cost-focus  "]},
+        )
+        detail = client.get(
+            f"/api/v1/optimizations/candidates/{candidate['id']}",
+            headers=auth_headers,
+        )
+
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["tags"] == ["challenger", "team:platform", "cost-focus"]
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["candidate"]["id"] == candidate["id"]
+    assert detail.json()["candidate"]["tags"] == ["challenger", "team:platform", "cost-focus"]
+    assert detail.json()["study"]["id"] == study["id"]
+    assert detail.json()["trials"] == []
+
+
+def test_candidate_registry_delete_archives_and_hides_candidate(client, auth_headers) -> None:
+    baseline_id = _seed_execution(execution_id="exec-opt-registry-archive")
+    with _optimization_api_context(manifests=True):
+        study = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={
+                "namespace": "default",
+                "workflow_name": "daily-standup",
+                "baseline_execution_ids": [baseline_id],
+            },
+        ).json()
+        candidate = client.post(
+            f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
+            headers=auth_headers,
+            json={"optimizer_output": "archive candidate", "suffix": "registry-archive"},
+        ).json()
+
+    with _optimization_api_context():
+        archived = client.delete(
+            f"/api/v1/optimizations/candidates/{candidate['id']}",
+            headers=auth_headers,
+        )
+        active = client.get(
+            "/api/v1/optimizations/candidates",
+            headers=auth_headers,
+            params={"namespace": "default", "workflow_name": "daily-standup", "limit": 100},
+        )
+        including_archived = client.get(
+            "/api/v1/optimizations/candidates",
+            headers=auth_headers,
+            params={
+                "namespace": "default",
+                "workflow_name": "daily-standup",
+                "include_archived": "true",
+                "limit": 100,
+            },
+        )
+
+    assert archived.status_code == 200, archived.text
+    assert archived.json()["lifecycle_state"] == "archived"
+    assert archived.json()["archived_at"]
+    assert candidate["id"] not in {item["id"] for item in active.json()["items"]}
+    restored_item = next(item for item in including_archived.json()["items"] if item["id"] == candidate["id"])
+    assert restored_item["lifecycle_state"] == "archived"
+
+
 def test_generate_candidate_fallback_copies_manifests_without_roi_prompt_injection(client, auth_headers) -> None:
     baseline_id = _seed_execution(execution_id="exec-opt-guided-fallback")
 
@@ -1797,10 +1925,16 @@ def test_optimization_schema_adds_trace_and_proof_gate_to_existing_tables(monkey
             for column in inspect(connection).get_columns("optimization_candidates")
         }
         assert "optimizer_trace" in candidate_columns
+        assert {"tags", "lifecycle_state", "archived_by", "archived_at"} <= candidate_columns
         trace = connection.execute(
             text("SELECT optimizer_trace FROM optimization_candidates WHERE id = 'cand-existing'")
         ).scalar_one()
         assert trace == "{}"
+        tags, lifecycle_state = connection.execute(
+            text("SELECT tags, lifecycle_state FROM optimization_candidates WHERE id = 'cand-existing'")
+        ).one()
+        assert tags == "[]"
+        assert lifecycle_state == "active"
 
 
 def test_dataset_export_redacts_secrets_and_keeps_trace_labels(client, auth_headers) -> None:

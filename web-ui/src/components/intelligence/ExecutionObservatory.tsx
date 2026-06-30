@@ -48,6 +48,7 @@ import { useConnection } from "@/contexts/ConnectionContext";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import {
   applyOptimizationCandidate,
+  archiveOptimizationCandidate,
   approveOptimizationCandidate,
   createOptimizationStudy,
   createOptimizationTrial,
@@ -59,6 +60,8 @@ import {
   fetchAgentManifest,
   fetchExecutionDetail,
   fetchOptimizationComparison,
+  fetchOptimizationCandidate,
+  fetchOptimizationCandidates,
   fetchOptimizationRoi,
   fetchOptimizationStudy,
   fetchOptimizationStudies,
@@ -70,6 +73,7 @@ import {
   promoteOptimizationCandidate,
   runOptimizationCandidate,
   streamAgentInvoke,
+  updateOptimizationCandidate,
   type WorkflowRunRecord,
   type WorkflowRunTraceResponse,
 } from "@/lib/api";
@@ -107,6 +111,7 @@ import { LLMCallViewer } from "../observatory/LLMCallViewer";
 import { RunsRail } from "../observatory/RunsRail";
 import { LiveActivityStream, useWorkflowActivities } from "./LiveActivityStream";
 import { OptimizerTracePanel } from "./OptimizerTracePanel";
+import { CandidateRegistryPanel } from "./CandidateRegistryPanel";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -2678,6 +2683,8 @@ function OptimisePanel({
   result,
   error,
   studies,
+  candidates,
+  includeArchivedCandidates,
   study,
   candidate,
   roi,
@@ -2692,6 +2699,9 @@ function OptimisePanel({
   onRun,
   onSelectStudy,
   onSelectCandidate,
+  onIncludeArchivedCandidatesChange,
+  onUpdateCandidateTags,
+  onArchiveCandidate,
   onApproveCandidate,
   onDryRunApply,
   onRunCandidate,
@@ -2720,6 +2730,8 @@ function OptimisePanel({
   result: InvokeResponse | null;
   error: string;
   studies: OptimizationStudy[];
+  candidates: OptimizationCandidate[];
+  includeArchivedCandidates: boolean;
   study: OptimizationStudy | null;
   candidate: OptimizationCandidate | null;
   roi: OptimizationRoi | null;
@@ -2727,13 +2739,16 @@ function OptimisePanel({
   studyLoading: boolean;
   studyError: string;
   actionLoading: string | null;
-  workspaceTab: "summary" | "candidate" | "diff" | "evidence" | "agent";
-  onWorkspaceTabChange: (tab: "summary" | "candidate" | "diff" | "evidence" | "agent") => void;
+  workspaceTab: "candidates" | "summary" | "candidate" | "diff" | "evidence" | "agent";
+  onWorkspaceTabChange: (tab: "candidates" | "summary" | "candidate" | "diff" | "evidence" | "agent") => void;
   applyPreview: Record<string, unknown> | null;
   datasetPreview: Record<string, unknown> | null;
   onRun: () => void;
   onSelectStudy: (studyId: string) => void;
   onSelectCandidate: (candidateId: string) => void;
+  onIncludeArchivedCandidatesChange: (value: boolean) => void;
+  onUpdateCandidateTags: (candidateId: string, tags: string[]) => void;
+  onArchiveCandidate: (candidateId: string) => void;
   onApproveCandidate: () => void;
   onDryRunApply: () => void;
   onRunCandidate: () => void;
@@ -2799,16 +2814,18 @@ function OptimisePanel({
     null;
   const allowTopologyRewrite = topologyMode === "allow_topology_rewrite";
   const showSummaryTab = workspaceTab === "summary";
+  const showCandidatesTab = workspaceTab === "candidates";
   const showCandidateTab = workspaceTab === "candidate";
   const showDiffTab = workspaceTab === "diff";
   const showEvidenceTab = workspaceTab === "evidence";
   const showAgentTab = workspaceTab === "agent";
   const proofStatus = roi?.proof_status ?? (activeCandidate ? "pending_trials" : study ? "candidate_needed" : "baseline_needed");
   const isVerified = roi?.verified === true;
-  const canApprove = Boolean(activeCandidate && activeCandidate.approval_status !== "approved" && activeCandidate.status !== "rejected");
-  const canDryRun = Boolean(activeCandidate && activeCandidate.approval_status === "approved");
-  const canRunCandidate = Boolean(activeCandidate && activeCandidate.approval_status === "approved" && activeCandidate.status !== "rejected");
-  const canPromote = Boolean(activeCandidate && activeCandidate.approval_status === "approved" && activeCandidate.status !== "promoted" && isVerified);
+  const candidateIsActive = activeCandidate?.lifecycle_state !== "archived";
+  const canApprove = Boolean(activeCandidate && candidateIsActive && activeCandidate.approval_status !== "approved" && activeCandidate.status !== "rejected");
+  const canDryRun = Boolean(activeCandidate && candidateIsActive && activeCandidate.approval_status === "approved");
+  const canRunCandidate = Boolean(activeCandidate && candidateIsActive && activeCandidate.approval_status === "approved" && activeCandidate.status !== "rejected");
+  const canPromote = Boolean(activeCandidate && candidateIsActive && activeCandidate.approval_status === "approved" && activeCandidate.status !== "promoted" && isVerified);
   const deploymentCapable = selectedAgent?.cluster_access?.deployment_capable === true || selectedAgentLooksOptimiser;
   const accessLevel = selectedAgent?.cluster_access?.level ?? (deploymentCapable ? "elevated" : "standard");
   const accessScope = selectedAgent?.cluster_access?.scope ?? selectedAgent?.namespace ?? "namespace";
@@ -2911,28 +2928,8 @@ function OptimisePanel({
     const parsed = Date.parse(value ?? "");
     return Number.isFinite(parsed) ? parsed : 0;
   };
-  const candidateHistory = [...(study?.candidates ?? [])].sort((a, b) => timestampValue(b.created_at) - timestampValue(a.created_at));
+  const candidateHistory = [...candidates].sort((a, b) => timestampValue(b.created_at) - timestampValue(a.created_at));
   const studyHistory = [...studies].sort((a, b) => timestampValue(b.created_at) - timestampValue(a.created_at));
-  const expectedGainItems = (item: OptimizationCandidate | null) => {
-    const expected = item?.expected_savings ?? {};
-    const metricPairs: Array<[string, string]> = [
-      ["Time", "duration_saved_percent"],
-      ["Tokens", "tokens_saved_percent"],
-      ["Tools", "tool_calls_saved_percent"],
-      ["Cost", "cost_saved_percent"],
-    ];
-    return metricPairs.flatMap(([label, key]) => {
-      const value = expected[key];
-      return typeof value === "number" && Number.isFinite(value)
-        ? [{ label, value }]
-        : [];
-    });
-  };
-  const expectedGainSummary = (item: OptimizationCandidate | null) => {
-    const gains = expectedGainItems(item);
-    if (gains.length === 0) return "Expected gain pending";
-    return gains.slice(0, 3).map((entry) => `${entry.label} ${entry.value.toFixed(0)}%`).join(" · ");
-  };
   const stepRegressions = comparisonSteps.filter((step) => (step.deltas.duration_saved_percent ?? 0) < 0 || (step.deltas.tokens_saved_percent ?? 0) < 0 || (step.deltas.tool_calls_saved_percent ?? 0) < 0);
   const stageItems = [
     { key: "baseline", label: "Baseline", icon: Database, done: Boolean(study), hint: `${baselineMetrics?.sample_count ?? 0} traces` },
@@ -3133,6 +3130,11 @@ function OptimisePanel({
             className="space-y-3"
           >
             <TabsList className="h-9 w-full justify-start overflow-x-auto rounded-md border border-border/50 bg-card/60 p-1">
+              <TabsTrigger value="candidates" className="h-7 gap-1.5 px-3 text-xs">
+                <FlaskConical className="h-3.5 w-3.5" />
+                Candidates
+                <Badge variant="secondary" className="ml-0.5 h-4 px-1 text-[9px]">{candidateHistory.length}</Badge>
+              </TabsTrigger>
               <TabsTrigger value="summary" className="h-7 gap-1.5 px-3 text-xs">
                 <TrendingDown className="h-3.5 w-3.5" />
                 Summary
@@ -3155,7 +3157,21 @@ function OptimisePanel({
               </TabsTrigger>
             </TabsList>
 
-          <div className="grid gap-3 xl:grid-cols-[13rem_minmax(0,1fr)]">
+          <TabsContent value="candidates" className="mt-0">
+            <CandidateRegistryPanel
+              candidates={candidateHistory}
+              selectedCandidateId={activeCandidate?.id ?? null}
+              loading={studyLoading}
+              includeArchived={includeArchivedCandidates}
+              actionLoading={actionLoading}
+              onIncludeArchivedChange={onIncludeArchivedCandidatesChange}
+              onSelect={(item) => onSelectCandidate(item.id)}
+              onUpdateTags={(item, tags) => onUpdateCandidateTags(item.id, tags)}
+              onArchive={(item) => onArchiveCandidate(item.id)}
+            />
+          </TabsContent>
+
+          <div className={cn("grid gap-3 xl:grid-cols-[13rem_minmax(0,1fr)]", showCandidatesTab && "hidden")}>
             <aside className="space-y-3">
               <section className="rounded-lg border border-border/50 bg-card/45 p-2">
                 <div className="px-1 pb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Study stages</div>
@@ -3181,45 +3197,24 @@ function OptimisePanel({
 
               <section className="rounded-lg border border-border/50 bg-card/45 p-2">
                 <div className="flex items-center justify-between px-1 pb-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Candidate history</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Candidate actions</span>
                   <Badge variant="outline" className="h-5 text-[10px]">{candidateHistory.length}</Badge>
                 </div>
-                {candidateHistory.length > 0 ? (
-                  <div className="space-y-1.5">
-                    {candidateHistory.slice(0, 5).map((item) => {
-                      const selected = activeCandidate?.id === item.id;
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => onSelectCandidate(item.id)}
-                          className={cn(
-                            "w-full rounded-md border p-2 text-left transition-colors",
-                            selected ? "border-primary/45 bg-primary/10" : "border-border/40 bg-background/60 hover:border-primary/25",
-                          )}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">{item.candidate_workflow_name}</span>
-                            {selected && <CheckCircle2 className="h-3.5 w-3.5 text-primary" />}
-                          </div>
-                          <div className="mt-1 flex flex-wrap gap-1">
-                            <Badge variant="outline" className="h-5 text-[9px]">{item.status}</Badge>
-                            <Badge variant="outline" className={cn("h-5 text-[9px]", item.approval_status === "approved" && "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300")}>
-                              {item.approval_status}
-                            </Badge>
-                          </div>
-                          <div className="mt-1 text-[10px] font-medium text-foreground">Expected gain</div>
-                          <div className="line-clamp-2 text-[10px] text-muted-foreground">{expectedGainSummary(item)}</div>
-                          <div className="mt-1 text-[9px] text-muted-foreground">{formatCompactDate(item.created_at)}</div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="rounded-md border border-dashed border-border/50 p-4 text-center text-[11px] text-muted-foreground">
-                    Run a study to create a copied candidate.
-                  </div>
-                )}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  className="h-8 w-full justify-between gap-2 px-2 text-[10px]"
+                  onClick={() => onWorkspaceTabChange("candidates")}
+                >
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <FlaskConical className="h-3.5 w-3.5" />
+                    <span className="truncate">
+                      {activeCandidate ? activeCandidate.candidate_workflow_name : "Open candidate registry"}
+                    </span>
+                  </span>
+                  <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+                </Button>
                 {studyHistory.length > 1 && (
                   <details className="mt-2 rounded-md border border-border/40 bg-background/55 p-2">
                     <summary className="cursor-pointer list-none text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -4379,6 +4374,8 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
   const [optimiseError, setOptimiseError] = useState("");
   const [optimiseStudy, setOptimiseStudy] = useState<OptimizationStudy | null>(null);
   const [optimiseStudies, setOptimiseStudies] = useState<OptimizationStudy[]>([]);
+  const [optimiseCandidates, setOptimiseCandidates] = useState<OptimizationCandidate[]>([]);
+  const [includeArchivedOptimiseCandidates, setIncludeArchivedOptimiseCandidates] = useState(false);
   const [optimiseCandidate, setOptimiseCandidate] = useState<OptimizationCandidate | null>(null);
   const [optimiseRoi, setOptimiseRoi] = useState<OptimizationRoi | null>(null);
   const [optimiseComparison, setOptimiseComparison] = useState<OptimizationComparison | null>(null);
@@ -4387,7 +4384,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
   const [optimiseActionLoading, setOptimiseActionLoading] = useState<string | null>(null);
   const [optimiseApplyPreview, setOptimiseApplyPreview] = useState<Record<string, unknown> | null>(null);
   const [optimiseDatasetPreview, setOptimiseDatasetPreview] = useState<Record<string, unknown> | null>(null);
-  const [optimiseWorkspaceTab, setOptimiseWorkspaceTab] = useState<"summary" | "candidate" | "diff" | "evidence" | "agent">("summary");
+  const [optimiseWorkspaceTab, setOptimiseWorkspaceTab] = useState<"candidates" | "summary" | "candidate" | "diff" | "evidence" | "agent">("candidates");
   // Logs tab: JSON formatting, fullscreen, wrap, live stream
   const [logJsonFormat, setLogJsonFormat] = useState(false);
   const [logFullscreen, setLogFullscreen] = useState(false);
@@ -4751,6 +4748,23 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
     return { study: nextStudy, candidate: nextCandidate, roi: nextRoi, comparison: nextComparison?.comparison ?? null };
   }, [token]);
 
+  const refreshOptimizationCandidates = useCallback(async (
+    includeArchived = includeArchivedOptimiseCandidates,
+  ) => {
+    if (!selectedWorkflowName) {
+      setOptimiseCandidates([]);
+      return [] as OptimizationCandidate[];
+    }
+    const items = await fetchOptimizationCandidates(token, {
+      namespace,
+      workflowName: selectedWorkflowName,
+      includeArchived,
+      limit: 200,
+    });
+    setOptimiseCandidates(items);
+    return items;
+  }, [includeArchivedOptimiseCandidates, namespace, selectedWorkflowName, token]);
+
   const refreshOptimisationStudy = useCallback(async (studyId?: string | null, candidateId?: string | null) => {
     const targetStudyId = studyId ?? optimiseStudy?.id;
     if (!targetStudyId) return;
@@ -4759,6 +4773,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
     try {
       const nextStudy = await fetchOptimizationStudy(token, targetStudyId);
       await applyOptimisationStudySnapshot(nextStudy, candidateId ?? optimiseCandidate?.id);
+      await refreshOptimizationCandidates();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to refresh optimization study";
       setOptimiseStudyError(message);
@@ -4766,11 +4781,12 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
     } finally {
       setOptimiseStudyLoading(false);
     }
-  }, [applyOptimisationStudySnapshot, optimiseCandidate?.id, optimiseStudy?.id, token]);
+  }, [applyOptimisationStudySnapshot, optimiseCandidate?.id, optimiseStudy?.id, refreshOptimizationCandidates, token]);
 
   const loadPersistedOptimisationStudy = useCallback(async () => {
     if (!selectedWorkflowName) {
       setOptimiseStudies([]);
+      setOptimiseCandidates([]);
       setOptimiseStudy(null);
       setOptimiseCandidate(null);
       setOptimiseRoi(null);
@@ -4781,8 +4797,20 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
     setOptimiseStudyLoading(true);
     setOptimiseStudyError("");
     try {
-      const studies = await fetchOptimizationStudies(token, { namespace, workflowName: selectedWorkflowName, limit: 10 });
+      const [studies, candidates] = await Promise.all([
+        fetchOptimizationStudies(token, { namespace, workflowName: selectedWorkflowName, limit: 20 }),
+        refreshOptimizationCandidates(),
+      ]);
       setOptimiseStudies(studies);
+      const latestCandidate =
+        candidates.find((candidate) => candidate.lifecycle_state === "active") ??
+        candidates[0] ??
+        null;
+      if (latestCandidate) {
+        const detail = await fetchOptimizationCandidate(token, latestCandidate.id);
+        await applyOptimisationStudySnapshot(detail.study, latestCandidate.id);
+        return;
+      }
       const latestStudy = studies[0] ?? null;
       if (!latestStudy) {
         setOptimiseStudy(null);
@@ -4799,7 +4827,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
     } finally {
       setOptimiseStudyLoading(false);
     }
-  }, [applyOptimisationStudySnapshot, namespace, selectedWorkflowName, token]);
+  }, [applyOptimisationStudySnapshot, namespace, refreshOptimizationCandidates, selectedWorkflowName, token]);
 
   const handleSelectOptimisationStudy = useCallback(async (studyId: string) => {
     setOptimiseStudyLoading(true);
@@ -4817,12 +4845,12 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
   }, [applyOptimisationStudySnapshot, token]);
 
   const handleSelectOptimisationCandidate = useCallback(async (candidateId: string) => {
-    if (!optimiseStudy) return;
     setOptimiseStudyLoading(true);
     setOptimiseStudyError("");
     try {
-      await applyOptimisationStudySnapshot(optimiseStudy, candidateId);
-      setOptimiseWorkspaceTab("agent");
+      const detail = await fetchOptimizationCandidate(token, candidateId);
+      await applyOptimisationStudySnapshot(detail.study, candidateId);
+      setOptimiseWorkspaceTab("candidate");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load optimization candidate";
       setOptimiseStudyError(message);
@@ -4830,7 +4858,51 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
     } finally {
       setOptimiseStudyLoading(false);
     }
-  }, [applyOptimisationStudySnapshot, optimiseStudy]);
+  }, [applyOptimisationStudySnapshot, token]);
+
+  const handleUpdateOptimisationCandidateTags = useCallback(async (candidateId: string, tags: string[]) => {
+    setOptimiseActionLoading(`tags:${candidateId}`);
+    setOptimiseStudyError("");
+    try {
+      const updated = await updateOptimizationCandidate(token, candidateId, tags);
+      setOptimiseCandidates((items) => items.map((item) => item.id === updated.id ? { ...item, ...updated } : item));
+      setOptimiseCandidate((item) => item?.id === updated.id ? { ...item, ...updated } : item);
+      toast.success("Candidate tags updated");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to update candidate tags";
+      setOptimiseStudyError(message);
+      toast.error(message);
+    } finally {
+      setOptimiseActionLoading(null);
+    }
+  }, [token]);
+
+  const handleArchiveOptimisationCandidate = useCallback(async (candidateId: string) => {
+    setOptimiseActionLoading(`archive:${candidateId}`);
+    setOptimiseStudyError("");
+    try {
+      await archiveOptimizationCandidate(token, candidateId);
+      const remaining = await refreshOptimizationCandidates();
+      if (optimiseCandidate?.id === candidateId) {
+        const nextCandidate = remaining.find((item) => item.lifecycle_state === "active") ?? remaining[0] ?? null;
+        if (nextCandidate) {
+          const detail = await fetchOptimizationCandidate(token, nextCandidate.id);
+          await applyOptimisationStudySnapshot(detail.study, nextCandidate.id);
+        } else {
+          setOptimiseCandidate(null);
+          setOptimiseComparison(null);
+          setOptimiseRoi(null);
+        }
+      }
+      toast.success("Candidate archived");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to archive candidate";
+      setOptimiseStudyError(message);
+      toast.error(message);
+    } finally {
+      setOptimiseActionLoading(null);
+    }
+  }, [applyOptimisationStudySnapshot, optimiseCandidate?.id, refreshOptimizationCandidates, token]);
 
   useEffect(() => {
     if (activeTab !== "optimise") return;
@@ -5024,6 +5096,7 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
         return;
       }
       setOptimiseCandidate(candidate);
+      setOptimiseCandidates((items) => [candidate, ...items.filter((item) => item.id !== candidate.id)]);
       setOptimiseWorkspaceTab("agent");
       const studyWithCandidate = {
         ...study,
@@ -5408,6 +5481,8 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                   result={optimiseResult}
                   error={optimiseError}
                   studies={optimiseStudies}
+                  candidates={optimiseCandidates}
+                  includeArchivedCandidates={includeArchivedOptimiseCandidates}
                   study={optimiseStudy}
                   candidate={optimiseCandidate}
                   roi={optimiseRoi}
@@ -5422,6 +5497,9 @@ export function ExecutionObservatory({ selectedExecutionId: externalSelectedId, 
                   onRun={() => { void handleRunOptimisation(); }}
                   onSelectStudy={(studyId) => { void handleSelectOptimisationStudy(studyId); }}
                   onSelectCandidate={(candidateId) => { void handleSelectOptimisationCandidate(candidateId); }}
+                  onIncludeArchivedCandidatesChange={setIncludeArchivedOptimiseCandidates}
+                  onUpdateCandidateTags={(candidateId, tags) => { void handleUpdateOptimisationCandidateTags(candidateId, tags); }}
+                  onArchiveCandidate={(candidateId) => { void handleArchiveOptimisationCandidate(candidateId); }}
                   onApproveCandidate={() => { void handleApproveOptimisationCandidate(); }}
                   onDryRunApply={() => { void handleDryRunOptimisationApply(); }}
                   onRunCandidate={() => { void handleRunOptimisationCandidate(); }}

@@ -12,7 +12,7 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import JSON, Column, DateTime, ForeignKey, String, inspect, text
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, String, inspect, or_, text
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import declarative_base
 
@@ -95,11 +95,15 @@ class OptimizationCandidateRow(Base):
     optimizer_trace = Column(JSON, nullable=False, default=dict)
     validation_results = Column(JSON, nullable=False, default=dict)
     expected_savings = Column(JSON, nullable=False, default=dict)
+    tags = Column(JSON, nullable=False, default=list)
+    lifecycle_state = Column(String(32), nullable=False, default="active", index=True)
     created_by = Column(String(256), nullable=True)
     approved_by = Column(String(256), nullable=True)
     approval_reason = Column(String(1024), nullable=True)
     approved_at = Column(DateTime(timezone=True), nullable=True)
     applied_at = Column(DateTime(timezone=True), nullable=True)
+    archived_by = Column(String(256), nullable=True)
+    archived_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 
@@ -118,11 +122,15 @@ class OptimizationCandidateRow(Base):
             "optimizer_trace": _json_clone(self.optimizer_trace) or {},
             "validation_results": _json_clone(self.validation_results) or {},
             "expected_savings": _json_clone(self.expected_savings) or {},
+            "tags": _json_clone(self.tags) or [],
+            "lifecycle_state": self.lifecycle_state or "active",
             "created_by": self.created_by,
             "approved_by": self.approved_by,
             "approval_reason": self.approval_reason,
             "approved_at": ensure_utc(self.approved_at).isoformat() if self.approved_at else None,
             "applied_at": ensure_utc(self.applied_at).isoformat() if self.applied_at else None,
+            "archived_by": self.archived_by,
+            "archived_at": ensure_utc(self.archived_at).isoformat() if self.archived_at else None,
             "created_at": ensure_utc(self.created_at).isoformat() if self.created_at else None,
             "updated_at": ensure_utc(self.updated_at).isoformat() if self.updated_at else None,
         }
@@ -211,6 +219,39 @@ def _ensure_optimization_schema() -> None:
                 {"optimizer_trace": json.dumps({})},
             )
             logger.info("Added optimization_candidates.optimizer_trace column")
+        if "tags" not in candidate_columns:
+            tags_type = _compile_type_sql(JSON(), connection.dialect)
+            connection.execute(text(f"ALTER TABLE optimization_candidates ADD COLUMN tags {tags_type}"))
+            if connection.dialect.name == "postgresql":
+                connection.execute(
+                    text("UPDATE optimization_candidates SET tags = CAST(:tags AS JSON) WHERE tags IS NULL"),
+                    {"tags": json.dumps([])},
+                )
+            else:
+                connection.execute(
+                    text("UPDATE optimization_candidates SET tags = :tags WHERE tags IS NULL"),
+                    {"tags": json.dumps([])},
+                )
+            logger.info("Added optimization_candidates.tags column")
+        if "lifecycle_state" not in candidate_columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE optimization_candidates "
+                    "ADD COLUMN lifecycle_state VARCHAR(32) NOT NULL DEFAULT 'active'"
+                )
+            )
+            logger.info("Added optimization_candidates.lifecycle_state column")
+        if "archived_by" not in candidate_columns:
+            connection.execute(
+                text("ALTER TABLE optimization_candidates ADD COLUMN archived_by VARCHAR(256)")
+            )
+            logger.info("Added optimization_candidates.archived_by column")
+        if "archived_at" not in candidate_columns:
+            archived_at_type = _compile_type_sql(DateTime(timezone=True), connection.dialect)
+            connection.execute(
+                text(f"ALTER TABLE optimization_candidates ADD COLUMN archived_at {archived_at_type}")
+            )
+            logger.info("Added optimization_candidates.archived_at column")
 
 
 def create_study(
@@ -307,6 +348,8 @@ def create_candidate(
         optimizer_trace=optimizer_trace or {},
         validation_results=validation_results,
         expected_savings=expected_savings,
+        tags=[],
+        lifecycle_state="active",
         created_by=created_by,
     )
     with db_session() as session:
@@ -332,6 +375,94 @@ def list_candidates(study_id: str) -> list[dict[str, Any]]:
             .all()
         )
         return [row.to_dict() for row in rows]
+
+
+def list_candidate_registry(
+    *,
+    namespace: str,
+    workflow_name: str | None = None,
+    status: str | None = None,
+    approval_status: str | None = None,
+    tag: str | None = None,
+    search: str | None = None,
+    include_archived: bool = False,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    ensure_optimization_database()
+    with db_session() as session:
+        query = (
+            session.query(OptimizationCandidateRow, OptimizationStudyRow)
+            .join(OptimizationStudyRow, OptimizationStudyRow.id == OptimizationCandidateRow.study_id)
+            .filter(OptimizationCandidateRow.namespace == namespace)
+        )
+        if workflow_name:
+            query = query.filter(OptimizationStudyRow.workflow_name == workflow_name)
+        if status:
+            query = query.filter(OptimizationCandidateRow.status == status)
+        if approval_status:
+            query = query.filter(OptimizationCandidateRow.approval_status == approval_status)
+        if not include_archived:
+            query = query.filter(OptimizationCandidateRow.lifecycle_state == "active")
+        if search:
+            pattern = f"%{search.strip()}%"
+            query = query.filter(
+                or_(
+                    OptimizationCandidateRow.name.ilike(pattern),
+                    OptimizationCandidateRow.candidate_workflow_name.ilike(pattern),
+                    OptimizationCandidateRow.id.ilike(pattern),
+                )
+            )
+        rows = query.order_by(OptimizationCandidateRow.created_at.desc()).all()
+        items: list[dict[str, Any]] = []
+        normalized_tag = tag.strip().lower() if tag else ""
+        for candidate_row, study_row in rows:
+            candidate = candidate_row.to_dict()
+            if normalized_tag and normalized_tag not in {
+                str(item).strip().lower() for item in candidate.get("tags") or []
+            }:
+                continue
+            candidate["workflow_name"] = study_row.workflow_name
+            candidate["baseline_execution_count"] = len(study_row.baseline_execution_ids or [])
+            candidate["study_status"] = study_row.status
+            candidate["study_created_at"] = (
+                ensure_utc(study_row.created_at).isoformat() if study_row.created_at else None
+            )
+            candidate["trial_count"] = (
+                session.query(OptimizationTrialRow)
+                .filter_by(candidate_id=candidate_row.id)
+                .count()
+            )
+            items.append(candidate)
+        safe_offset = max(0, offset)
+        safe_limit = max(1, min(limit, 200))
+        return items[safe_offset : safe_offset + safe_limit]
+
+
+def update_candidate_tags(candidate_id: str, tags: list[str]) -> dict[str, Any] | None:
+    ensure_optimization_database()
+    with db_session() as session:
+        row = session.query(OptimizationCandidateRow).filter_by(id=candidate_id).one_or_none()
+        if row is None:
+            return None
+        row.tags = _json_clone(tags) or []
+        row.updated_at = utc_now()
+        session.flush()
+        return row.to_dict()
+
+
+def archive_candidate(candidate_id: str, *, archived_by: str | None) -> dict[str, Any] | None:
+    ensure_optimization_database()
+    with db_session() as session:
+        row = session.query(OptimizationCandidateRow).filter_by(id=candidate_id).one_or_none()
+        if row is None:
+            return None
+        row.lifecycle_state = "archived"
+        row.archived_by = archived_by
+        row.archived_at = utc_now()
+        row.updated_at = utc_now()
+        session.flush()
+        return row.to_dict()
 
 
 def decide_candidate(

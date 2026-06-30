@@ -7,10 +7,12 @@ const sourcePath = resolve(here, "../src/components/intelligence/ExecutionObserv
 const apiPath = resolve(here, "../src/lib/api.ts");
 const typesPath = resolve(here, "../src/types.ts");
 const tracePanelPath = resolve(here, "../src/components/intelligence/OptimizerTracePanel.tsx");
+const registryPanelPath = resolve(here, "../src/components/intelligence/CandidateRegistryPanel.tsx");
 const source = readFileSync(sourcePath, "utf8");
 const apiSource = readFileSync(apiPath, "utf8");
 const typesSource = readFileSync(typesPath, "utf8");
 const tracePanelSource = existsSync(tracePanelPath) ? readFileSync(tracePanelPath, "utf8") : "";
+const registryPanelSource = existsSync(registryPanelPath) ? readFileSync(registryPanelPath, "utf8") : "";
 
 const checks = [
   {
@@ -88,14 +90,14 @@ const checks = [
       source.includes("Candidate vs baseline"),
   },
   {
-    name: "optimizer tab hydrates persisted studies and selectable candidate history",
+    name: "optimizer tab hydrates persisted studies and selectable candidate registry",
     pass:
       apiSource.includes("fetchOptimizationStudies") &&
       apiSource.includes("/api/optimizations/studies") &&
       source.includes("loadPersistedOptimisationStudy") &&
       source.includes("handleSelectOptimisationCandidate") &&
-      source.includes("Candidate history") &&
-      source.includes("Expected gain"),
+      registryPanelSource.includes("Candidate registry") &&
+      registryPanelSource.includes("Expected gain"),
   },
   {
     name: "optimizer comparison renders trial, step, tool, and manifest evidence",
@@ -227,6 +229,34 @@ const checks = [
       source.includes("selectedManifestSection.diff_rows") &&
       source.includes("bg-emerald-500/10") &&
       source.includes("bg-red-500/10"),
+  },
+  {
+    name: "candidate registry is independent from the selected study",
+    pass:
+      apiSource.includes("fetchOptimizationCandidates") &&
+      apiSource.includes("/api/optimizations/candidates") &&
+      source.includes("optimiseCandidates") &&
+      source.includes("<CandidateRegistryPanel") &&
+      source.includes('value="candidates"'),
+  },
+  {
+    name: "candidate registry supports selection, tags, and audit-safe archival",
+    pass:
+      apiSource.includes("fetchOptimizationCandidate") &&
+      apiSource.includes("updateOptimizationCandidate") &&
+      apiSource.includes("archiveOptimizationCandidate") &&
+      registryPanelSource.includes("Candidate registry") &&
+      registryPanelSource.includes("Add tag") &&
+      registryPanelSource.includes("Archive candidate") &&
+      registryPanelSource.includes("Expected gain"),
+  },
+  {
+    name: "persisted candidate selection can cross study boundaries",
+    pass:
+      source.includes("refreshOptimizationCandidates") &&
+      source.includes("candidate.study_id") &&
+      source.includes("fetchOptimizationCandidate") &&
+      source.includes("setOptimiseCandidates"),
   },
 ];
 

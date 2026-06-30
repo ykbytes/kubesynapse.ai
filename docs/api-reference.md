@@ -915,6 +915,10 @@ Optimization studies use historical workflow traces and source manifests to crea
 | `GET` | `/api/v1/optimizations/studies` | List studies, optionally filtered by namespace or workflow. |
 | `GET` | `/api/v1/optimizations/studies/{study_id}` | Retrieve a study, candidates, trials, optimizer audit, and proof state. |
 | `POST` | `/api/v1/optimizations/studies/{study_id}/candidates/generate` | Generate, validate, and persist a copied candidate manifest bundle. |
+| `GET` | `/api/v1/optimizations/candidates` | List the cross-study candidate registry with workflow lineage, tags, lifecycle state, and trial counts. |
+| `GET` | `/api/v1/optimizations/candidates/{candidate_id}` | Retrieve a candidate with its source study and linked trial evidence. |
+| `PATCH` | `/api/v1/optimizations/candidates/{candidate_id}` | Replace normalized candidate tags. |
+| `DELETE` | `/api/v1/optimizations/candidates/{candidate_id}` | Archive a candidate while retaining its manifests, trace, trials, and audit record. |
 | `GET` | `/api/v1/optimizations/candidates/{candidate_id}/manifest` | Download the exact persisted candidate bundle as multi-document YAML. |
 | `POST` | `/api/v1/optimizations/candidates/{candidate_id}/approval` | Record the administrator approval decision. |
 | `POST` | `/api/v1/optimizations/candidates/{candidate_id}/apply` | Dry-run or apply only the copied candidate resources. |
@@ -930,6 +934,8 @@ Candidate generation accepts a topology mode. Preserve mode keeps step names, or
 Each generated candidate stores an observable optimizer trace: runtime status, explicit skill-file load events, reasoning summaries exposed by the runtime, tool activity, artifacts, referenced resources, visible final response, and candidate validation outcome. This audit data does not expose hidden model chain-of-thought.
 
 The manifest download response uses `Content-Type: application/yaml` and `Content-Disposition: attachment`. It is the persisted candidate submitted to validation, not a regenerated preview.
+
+Candidate deletion is audit-safe archival. Active registry queries hide archived candidates by default; pass `include_archived=true` to retrieve them. Archived candidates remain readable and downloadable but cannot be approved, applied, run, or promoted.
 
 ## Webhooks & Triggers
 
