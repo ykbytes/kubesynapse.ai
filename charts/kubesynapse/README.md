@@ -61,20 +61,23 @@ helm upgrade --install kubesynapse ./charts/kubesynapse \
 
 ## Release Chart Image Pinning
 
-The checked-in source chart keeps convenience image tags for local and branch-based
-installs. The published OCI release chart rewrites `opencodeRuntime.image` to the
-release tag and digest so OpenCode runtime pods pull an immutable image by default.
+Chart `0.2.1` pins the four production images to matching immutable release tags in
+GitHub Container Registry: operator/worker, API gateway, web UI, and OpenCode runtime.
+For stronger supply-chain pinning, set a verified digest in addition to the tag.
 
-If you install from source and want the same behavior, set both the tag and digest:
+Example OpenCode digest pin:
 
 ```yaml
 opencodeRuntime:
   image:
-    repository: docker.io/kubesynapse/kubesynapse-opencode-rt
-    tag: "1.2.3"
+    repository: ghcr.io/ykbytes/kubesynapse-opencode-rt
+    tag: "0.2.1"
     digest: "sha256:..."
     pullPolicy: IfNotPresent
 ```
+
+The experimental Pi and Mistral Vibe adapters retain their independent image settings
+and are not part of this OpenCode-focused release bundle.
 
 ## Bootstrap Behavior
 

@@ -166,9 +166,14 @@ agentctl --gateway http://localhost:8080 auth login -u admin -p "ChangeMeStrong9
 agentctl agents list
 agentctl workflows list
 agentctl optimizations studies --workflow daily-standup
+agentctl optimizations candidates --workflow daily-standup
+agentctl optimizations candidate <candidate-id>
+agentctl optimizations manifest <candidate-id> --output candidate.yaml
 agentctl optimizations trace <study-id> --candidate-id <candidate-id>
 agentctl observatory traces --limit 10
 ```
+
+Candidate operations are explicit and audit-friendly: listing, inspection, manifest download, and dry-run validation are non-mutating; archive, cluster apply, trial execution, and promotion require confirmation or `--yes`.
 
 See [`cli/README.md`](cli/README.md) for the full command reference.
 

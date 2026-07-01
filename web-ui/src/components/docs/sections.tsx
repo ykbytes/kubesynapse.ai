@@ -2204,6 +2204,22 @@ function OptimizationSection() {
           ["GET", "/api/v1/optimizations/studies/{id}/roi", "Return proof status, measured deltas, and projected savings."],
         ]} />
       </div>
+
+      <div id="optimizer-cli">
+        <h3 className="mb-3 text-lg font-bold text-[oklch(0.95_0.005_264)]">Candidate operations from the CLI</h3>
+        <p className="mb-3 text-sm leading-7 text-muted-foreground">
+          Candidate inspection and dry-run validation are non-mutating. Cluster apply, trial execution, promotion,
+          and archive operations require confirmation unless <code>--yes</code> is supplied explicitly.
+        </p>
+        <CodeBlock code={`agentctl optimizations candidates --workflow daily-standup
+agentctl optimizations candidate <candidate-id>
+agentctl optimizations manifest <candidate-id> -o candidate.yaml
+agentctl optimizations tags <candidate-id> --add reviewed
+agentctl optimizations approve <candidate-id> --reason "Manifest reviewed"
+agentctl optimizations apply <candidate-id>
+agentctl optimizations run <candidate-id> --input "smoke" --yes
+agentctl optimizations promote <candidate-id> --reason "ROI verified" --yes`} />
+      </div>
     </div>
   );
 }
@@ -2875,6 +2891,7 @@ export const SECTIONS: DocSection[] = [
       { id: "optimizer-trace", title: "Candidate Audit Trace" },
       { id: "optimizer-safety", title: "Safety & Topology" },
       { id: "optimizer-api", title: "Key Endpoints" },
+      { id: "optimizer-cli", title: "Candidate CLI" },
     ],
     content: <OptimizationSection />,
   },

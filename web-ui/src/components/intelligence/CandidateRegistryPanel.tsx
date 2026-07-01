@@ -130,9 +130,9 @@ export function CandidateRegistryPanel({
   };
 
   return (
-    <section className="min-h-0 overflow-hidden rounded-lg border border-border/60 bg-card">
+    <section className="min-h-0 min-w-0 max-w-full overflow-hidden rounded-lg border border-border/60 bg-card">
       <header className="flex flex-wrap items-center gap-2 border-b border-border/50 px-3 py-2.5">
-        <div className="min-w-[13rem] flex-1">
+        <div className="min-w-0 basis-[13rem] flex-1">
           <div className="flex items-center gap-2">
             <FlaskConical className="h-4 w-4 text-primary" />
             <h4 className="text-sm font-semibold">Candidate registry</h4>
@@ -142,7 +142,7 @@ export function CandidateRegistryPanel({
             Versioned candidates across every study for this workflow.
           </p>
         </div>
-        <div className="relative min-w-[14rem] flex-1 md:max-w-sm">
+        <div className="relative min-w-0 basis-[14rem] flex-1 md:max-w-sm">
           <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             aria-label="Search candidates"
@@ -176,8 +176,8 @@ export function CandidateRegistryPanel({
         </Button>
       </header>
 
-      <div className="min-h-[16rem] max-h-[24rem] overflow-auto">
-        <div className="hidden grid-cols-[minmax(15rem,2fr)_7rem_minmax(11rem,1.2fr)_6rem_9rem_2rem] gap-3 border-b border-border/50 bg-muted/25 px-3 py-2 text-[10px] font-semibold uppercase text-muted-foreground lg:grid">
+      <div className="min-h-[16rem] max-h-[24rem] max-w-full overflow-y-auto overflow-x-hidden">
+        <div className="hidden xl:grid-cols-[minmax(0,2fr)_minmax(0,0.75fr)_minmax(0,1.25fr)_minmax(0,0.5fr)_minmax(0,0.9fr)_1.5rem] gap-3 border-b border-border/50 bg-muted/25 px-3 py-2 text-[10px] font-semibold uppercase text-muted-foreground xl:grid">
           <span>Candidate</span>
           <span>State</span>
           <span>Expected gain</span>
@@ -206,8 +206,8 @@ export function CandidateRegistryPanel({
                 type="button"
                 key={candidate.id}
                 className={cn(
-                  "grid w-full gap-2 border-b border-border/40 px-3 py-2.5 text-left transition-colors last:border-b-0 hover:bg-muted/40",
-                  "lg:grid-cols-[minmax(15rem,2fr)_7rem_minmax(11rem,1.2fr)_6rem_9rem_2rem] lg:items-center lg:gap-3",
+                  "grid min-w-0 w-full max-w-full gap-2 border-b border-border/40 px-3 py-2.5 text-left transition-colors last:border-b-0 hover:bg-muted/40",
+                  "xl:grid-cols-[minmax(0,2fr)_minmax(0,0.75fr)_minmax(0,1.25fr)_minmax(0,0.5fr)_minmax(0,0.9fr)_1.5rem] xl:items-center xl:gap-3",
                   active && "bg-primary/[0.06] shadow-[inset_3px_0_0_hsl(var(--primary))]",
                 )}
                 onClick={() => onSelect(candidate)}
@@ -243,7 +243,7 @@ export function CandidateRegistryPanel({
                   </Badge>
                 </span>
                 <span className="text-[11px] text-foreground">
-                  <span className="lg:hidden text-muted-foreground">Expected gain: </span>
+                  <span className="xl:hidden text-muted-foreground">Expected gain: </span>
                   {expectedGain(candidate)}
                 </span>
                 <span className="flex items-center gap-1 text-[11px]">
@@ -254,7 +254,7 @@ export function CandidateRegistryPanel({
                   <CalendarClock className="h-3 w-3 shrink-0" />
                   {formatDate(candidate.created_at)}
                 </span>
-                <ChevronRight className="hidden h-4 w-4 text-muted-foreground lg:block" />
+                <ChevronRight className="hidden h-4 w-4 text-muted-foreground xl:block" />
               </button>
             );
           })
@@ -264,11 +264,11 @@ export function CandidateRegistryPanel({
       {selected && (
         <footer className="border-t border-border/60 bg-muted/15 px-3 py-2.5">
           <div className="flex flex-wrap items-center gap-2">
-            <div className="mr-auto min-w-[12rem]">
+            <div className="mr-auto min-w-0 basis-[12rem]">
               <p className="text-[10px] font-semibold uppercase text-muted-foreground">Selected candidate</p>
               <p className="truncate text-xs font-medium">{selected.candidate_workflow_name}</p>
             </div>
-            <div className="flex min-w-[16rem] flex-1 flex-wrap items-center gap-1 md:max-w-xl">
+            <div className="flex min-w-0 basis-[16rem] flex-1 flex-wrap items-center gap-1 md:max-w-xl">
               <Tag className="mr-1 h-3.5 w-3.5 text-muted-foreground" />
               {selected.tags.map((tag) => (
                 <Badge key={tag} variant="secondary" className="h-6 gap-1 pl-2 pr-1 text-[10px]">
@@ -296,7 +296,7 @@ export function CandidateRegistryPanel({
                 </Badge>
               ))}
               {selected.lifecycle_state === "active" && (
-                <div className="flex min-w-[11rem] flex-1 items-center gap-1">
+                <div className="flex min-w-0 basis-[11rem] flex-1 items-center gap-1">
                   <Input
                     aria-label="Candidate tag"
                     className="h-7 min-w-0 text-xs"
@@ -366,7 +366,7 @@ export function CandidateRegistryPanel({
               YAML
             </Button>
           </header>
-          <div className="max-h-[32rem] overflow-auto border-t border-border/50 bg-slate-950">
+          <div className="max-h-[32rem] max-w-full overflow-auto border-t border-border/50 bg-slate-950">
             {manifestLoading ? (
               <div className="flex min-h-40 items-center justify-center text-xs text-slate-400">
                 Loading validated manifest…
@@ -375,7 +375,7 @@ export function CandidateRegistryPanel({
               <Highlight theme={KubeSynapseTheme} code={manifest.trimEnd()} language={"yaml" as Language}>
                 {({ className, style, tokens, getLineProps, getTokenProps }) => (
                   <pre
-                    className={cn(className, "min-w-max p-3 font-mono text-[11px] leading-5")}
+                    className={cn(className, "w-max min-w-full p-3 font-mono text-[11px] leading-5")}
                     style={{ ...style, margin: 0, background: "transparent" }}
                   >
                     {tokens.map((line, index) => (

@@ -96,6 +96,29 @@ class ApiClient:
     def delete(self, path: str, *, params: dict[str, Any] | None = None) -> Any:
         return self.request("DELETE", path, params=params)
 
+    @retry(
+        retry=retry_if_exception_type(httpx.TimeoutException),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=0.5, min=0.5, max=5),
+        reraise=True,
+    )
+    def get_text(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        accept: str = "text/plain",
+    ) -> str:
+        """Fetch a text response without attempting JSON decoding."""
+        try:
+            response = self._client.get(path, params=params, headers={"Accept": accept})
+        except httpx.TimeoutException:
+            raise
+        except httpx.HTTPError as exc:
+            raise ApiError(f"Connection failed: {exc}") from exc
+        self._raise_for_status(response)
+        return response.text
+
     # ─── Streaming ───
 
     def stream(

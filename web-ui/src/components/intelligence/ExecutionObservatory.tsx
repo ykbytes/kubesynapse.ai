@@ -2330,7 +2330,7 @@ function TraceExplorer({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+    <div className="flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-hidden">
       <div className="shrink-0 border-b border-border/40 bg-card/30 px-3 py-2">
         <div className="flex flex-wrap items-center gap-2">
           <div className="min-w-[14rem] flex-1">
@@ -2954,10 +2954,10 @@ function OptimisePanel({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+    <div className="flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-hidden">
       <div className="shrink-0 border-b border-border/40 bg-card/30 px-3 py-2">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="min-w-[18rem] flex-1">
+          <div className="min-w-0 basis-[18rem] flex-1">
             <div className="flex items-center gap-2">
               <TrendingDown className="h-4 w-4 text-primary" />
               <h3 className="text-sm font-semibold text-foreground">Optimization ROI Lab</h3>
@@ -3038,11 +3038,11 @@ function OptimisePanel({
         </div>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-3 p-3">
-          <section className="rounded-lg border border-border/50 bg-card/45 p-3">
+      <ScrollArea className="min-h-0 min-w-0 flex-1">
+        <div className="min-w-0 max-w-full space-y-3 p-3">
+          <section className="min-w-0 max-w-full rounded-lg border border-border/50 bg-card/45 p-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="min-w-[18rem]">
+              <div className="min-w-0 basis-[18rem] flex-1">
                 <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                   {isVerified ? "Verified gain" : "Best current lever"}
                 </div>
@@ -3102,7 +3102,7 @@ function OptimisePanel({
                     <div
                       key={phase.key}
                       className={cn(
-                        "flex min-w-[11rem] flex-1 items-start gap-2 rounded-md border px-2 py-1.5",
+                        "flex min-w-0 basis-[11rem] flex-1 items-start gap-2 rounded-md border px-2 py-1.5",
                         phase.status === "running" && "border-sky-500/30 bg-sky-500/8",
                         phase.status === "success" && "border-emerald-500/25 bg-emerald-500/8",
                         phase.status === "error" && "border-red-500/30 bg-red-500/10",
@@ -3284,7 +3284,7 @@ function OptimisePanel({
                 !(showSummaryTab || showDiffTab || showEvidenceTab) && "hidden",
               )}>
                 <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-[18rem] flex-1">
+                  <div className="min-w-0 basis-[18rem] flex-1">
                     <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
                       <GitCompare className="h-4 w-4 text-primary" />
                       Candidate vs baseline

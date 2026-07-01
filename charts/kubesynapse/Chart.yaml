@@ -2,8 +2,8 @@ apiVersion: v2
 name: kubesynapse
 description: Kubernetes-native AI agent platform with operator, four runtimes, gateway, and MCP services
 type: application
-version: 0.2.0
-appVersion: "deploy-20260531-policy-enforcement"
+version: 0.2.1
+appVersion: "0.2.1"
 
 dependencies:
   - name: gatekeeper

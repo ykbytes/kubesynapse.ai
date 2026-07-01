@@ -8,11 +8,13 @@ const apiPath = resolve(here, "../src/lib/api.ts");
 const typesPath = resolve(here, "../src/types.ts");
 const tracePanelPath = resolve(here, "../src/components/intelligence/OptimizerTracePanel.tsx");
 const registryPanelPath = resolve(here, "../src/components/intelligence/CandidateRegistryPanel.tsx");
+const scrollAreaPath = resolve(here, "../src/components/ui/scroll-area.tsx");
 const source = readFileSync(sourcePath, "utf8");
 const apiSource = readFileSync(apiPath, "utf8");
 const typesSource = readFileSync(typesPath, "utf8");
 const tracePanelSource = existsSync(tracePanelPath) ? readFileSync(tracePanelPath, "utf8") : "";
 const registryPanelSource = existsSync(registryPanelPath) ? readFileSync(registryPanelPath, "utf8") : "";
+const scrollAreaSource = readFileSync(scrollAreaPath, "utf8");
 
 const checks = [
   {
@@ -269,6 +271,24 @@ const checks = [
       source.includes("candidate.study_id") &&
       source.includes("fetchOptimizationCandidate") &&
       source.includes("setOptimiseCandidates"),
+  },
+  {
+    name: "hydrated optimizer content cannot widen the application viewport",
+    pass:
+      scrollAreaSource.includes("[&>div]:!block") &&
+      scrollAreaSource.includes("[&>div]:min-w-0") &&
+      scrollAreaSource.includes("[&>div]:w-full") &&
+      /function OptimisePanel[\s\S]*?<div className="flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-hidden">/.test(source) &&
+      source.includes('<ScrollArea className="min-h-0 min-w-0 flex-1">') &&
+      source.includes('className="min-w-0 max-w-full space-y-3 p-3"'),
+  },
+  {
+    name: "candidate registry collapses before fixed columns can overflow",
+    pass:
+      registryPanelSource.includes('className="min-h-0 min-w-0 max-w-full overflow-hidden') &&
+      registryPanelSource.includes("xl:grid-cols-[minmax(0,2fr)_minmax(0,0.75fr)_minmax(0,1.25fr)_minmax(0,0.5fr)_minmax(0,0.9fr)_1.5rem]") &&
+      !registryPanelSource.includes("minmax(15rem,2fr)") &&
+      !registryPanelSource.includes("minmax(11rem,1.2fr)"),
   },
 ];
 

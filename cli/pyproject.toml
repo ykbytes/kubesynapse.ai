@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kubesynapse-cli"
-version = "0.3.0"
+version = "0.4.0"
 description = "Modern CLI for KubeSynapse — Kubernetes-native AI agent operations"
 readme = "README.md"
 requires-python = ">=3.11"

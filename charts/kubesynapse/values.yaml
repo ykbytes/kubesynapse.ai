@@ -76,10 +76,10 @@ runtimeServiceAccount:
 
 opencodeRuntime:
   image:
-    repository: docker.io/kubesynapse/kubesynapse-opencode-rt
-    tag: latest
+    repository: ghcr.io/ykbytes/kubesynapse-opencode-rt
+    tag: "0.2.1"
     digest: ""
-    pullPolicy: Always
+    pullPolicy: IfNotPresent
   provider: litellm
   # §security-P0: Mount a hardened, immutable ConfigMap at /etc/kubesynapse/opencode.json.
   # Prevents config-driven RCE via plugins, MCP commands, or provider baseURL redirect.
@@ -218,15 +218,15 @@ operator:
   replicaCount: 2
   revisionHistoryLimit: 3
   image:
-    repository: docker.io/kubesynapse/kubesynapse-operator
-    tag: latest
+    repository: ghcr.io/ykbytes/kubesynapse-operator
+    tag: "0.2.1"
     digest: ""
-    pullPolicy: Always
+    pullPolicy: IfNotPresent
   workerImage:
-    repository: docker.io/kubesynapse/kubesynapse-operator
-    tag: latest
+    repository: ghcr.io/ykbytes/kubesynapse-operator
+    tag: "0.2.1"
     digest: ""
-    pullPolicy: Always
+    pullPolicy: IfNotPresent
   migrationImage:
     repository: docker.io/bitnamilegacy/kubectl
     tag: "1.31.2"
@@ -286,10 +286,10 @@ apiGateway:
   revisionHistoryLimit: 3
   auditRetentionDays: 90  # Days to keep audit logs before auto-purge
   image:
-    repository: docker.io/kubesynapse/kubesynapse-api-gateway
-    tag: latest
+    repository: ghcr.io/ykbytes/kubesynapse-api-gateway
+    tag: "0.2.1"
     digest: ""
-    pullPolicy: Always
+    pullPolicy: IfNotPresent
   ingressClassName: ""
   ingressHost: ""  # leave empty for a hostless ingress, or set e.g. "agents.mycompany.com"
   ingress:
@@ -369,10 +369,10 @@ webUi:
   replicaCount: 2  # §reliability-P1: minimum 2 replicas for PDB efficacy
   revisionHistoryLimit: 3
   image:
-    repository: docker.io/kubesynapse/kubesynapse-web-ui
-    tag: latest
+    repository: ghcr.io/ykbytes/kubesynapse-web-ui
+    tag: "0.2.1"
     digest: ""
-    pullPolicy: Always
+    pullPolicy: IfNotPresent
   service:
     type: ClusterIP
     port: 80

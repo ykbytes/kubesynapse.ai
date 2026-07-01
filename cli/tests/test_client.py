@@ -94,6 +94,24 @@ class TestApiClientRequests:
         data = client.patch("/api/agents/test", payload={"model": "gpt-4"})
         assert data == {"status": "patched"}
 
+    def test_get_text_preserves_non_json_manifest(self, settings: ResolvedSettings, httpx_mock) -> None:
+        httpx_mock.add_response(
+            method="GET",
+            url="http://gateway:8080/api/optimizations/candidates/cand-1/manifest",
+            headers={"Content-Type": "application/yaml"},
+            text="---\nkind: AgentWorkflow\n",
+        )
+        client = ApiClient(settings)
+
+        content = client.get_text(
+            "/api/optimizations/candidates/cand-1/manifest",
+            accept="application/yaml",
+        )
+
+        assert content == "---\nkind: AgentWorkflow\n"
+        request = httpx_mock.get_request()
+        assert request.headers["Accept"] == "application/yaml"
+
 
 class TestApiErrorHandling:
     def test_400_extracts_detail_string(self, settings: ResolvedSettings, httpx_mock) -> None:

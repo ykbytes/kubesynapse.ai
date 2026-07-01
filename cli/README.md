@@ -196,6 +196,16 @@ agentctl workflows logs my-wf --run-id abc # Specific run logs
 agentctl optimizations studies                                  # List ROI studies in the active namespace
 agentctl optimizations studies --workflow daily-standup         # Filter by workflow
 agentctl optimizations show opt-study-123                       # Study summary + candidate inventory
+agentctl optimizations candidates --workflow daily-standup      # Cross-study candidate registry
+agentctl optimizations candidate cand-123                       # Candidate, lineage, resources, and trials
+agentctl optimizations manifest cand-123 -o candidate.yaml      # Exact validated multi-document YAML
+agentctl optimizations tags cand-123 --add winner --remove slow # Maintain searchable tags
+agentctl optimizations archive cand-123                         # Archive with confirmation; audit is retained
+agentctl optimizations approve cand-123 --reason "Reviewed"     # Approve apply and trial execution
+agentctl optimizations apply cand-123                            # Server-side dry run (safe default)
+agentctl optimizations apply cand-123 --execute --yes            # Apply copied resources to the cluster
+agentctl optimizations run cand-123 --input "smoke" --yes        # Launch and record a candidate trial
+agentctl optimizations promote cand-123 --reason "ROI verified" --yes
 agentctl optimizations trace opt-study-123                      # Latest candidate's persisted optimizer trace
 agentctl optimizations trace opt-study-123 --candidate-id cand  # Specific candidate trace
 agentctl optimizations roi opt-study-123                        # Verified ROI + proof status
@@ -203,6 +213,8 @@ agentctl optimizations comparison opt-study-123                 # Baseline vs ca
 ```
 
 `agentctl optimizations trace` exposes the same observable optimizer trace that powers the candidate view in the web UI. It includes runtime status, tool activity, reasoning summaries, final response metadata, candidate validation, and recorded skills/resources. When the OpenCode runtime reports attached skills, the trace includes each materialized skill file and notes that it was delivered in system context. It does not claim access to hidden model chain-of-thought.
+
+Candidate manifests and records are persisted independently of the current UI session. `apply` is a dry run unless `--execute` is supplied. Cluster apply, trial execution, promotion, and archive operations prompt before changing state unless `--yes` is explicitly passed.
 
 ---
 
@@ -382,6 +394,15 @@ runs:
 optimizations:
   optimizations studies                    List ROI studies
   optimizations show ID                    Study detail + candidates
+  optimizations candidates                 Cross-study candidate registry
+  optimizations candidate ID               Candidate detail and lineage
+  optimizations manifest ID                Download exact candidate YAML
+  optimizations tags ID                    Add or remove candidate tags
+  optimizations archive ID                 Archive candidate, retain audit
+  optimizations approve ID                 Approve candidate
+  optimizations apply ID                   Dry-run or explicitly apply
+  optimizations run ID                     Launch a candidate trial
+  optimizations promote ID                 Promote a verified winner
   optimizations trace ID                   Persisted optimizer trace
   optimizations roi ID                     ROI and proof gate detail
   optimizations comparison ID              Baseline vs candidate comparison
