@@ -160,18 +160,16 @@ def _fake_get_execution(execution_id: str):
 
 def _fake_get_executions_by_ids(execution_ids: list[str]):
     return {
-        execution_id: _TRACE_FIXTURES[execution_id]
-        for execution_id in execution_ids
-        if execution_id in _TRACE_FIXTURES
+        execution_id: _TRACE_FIXTURES[execution_id] for execution_id in execution_ids if execution_id in _TRACE_FIXTURES
     }
 
 
 @contextmanager
 def _optimization_api_context(*, manifests: bool = False):
-    with patch("routers.optimizations.ensure_namespace_access", side_effect=_allow_namespace_access), patch(
-        "routers.optimizations.trace_store.get_execution", side_effect=_fake_get_execution
-    ), patch(
-        "routers.optimizations.trace_store.get_executions_by_ids", side_effect=_fake_get_executions_by_ids
+    with (
+        patch("routers.optimizations.ensure_namespace_access", side_effect=_allow_namespace_access),
+        patch("routers.optimizations.trace_store.get_execution", side_effect=_fake_get_execution),
+        patch("routers.optimizations.trace_store.get_executions_by_ids", side_effect=_fake_get_executions_by_ids),
     ):
         if manifests:
             with patch("routers.optimizations.read_custom_resource", side_effect=_fake_read_custom_resource):
@@ -209,11 +207,12 @@ def test_create_study_reconstructs_missing_source_agent_contract_from_traces(cli
             raise RuntimeError("missing source agent")
         return _fake_read_custom_resource(plural, name, namespace, label)
 
-    with patch("routers.optimizations.ensure_namespace_access", side_effect=_allow_namespace_access), patch(
-        "routers.optimizations.trace_store.get_execution", side_effect=_fake_get_execution
-    ), patch(
-        "routers.optimizations.trace_store.get_executions_by_ids", side_effect=_fake_get_executions_by_ids
-    ), patch("routers.optimizations.read_custom_resource", side_effect=fake_read_missing_git):
+    with (
+        patch("routers.optimizations.ensure_namespace_access", side_effect=_allow_namespace_access),
+        patch("routers.optimizations.trace_store.get_execution", side_effect=_fake_get_execution),
+        patch("routers.optimizations.trace_store.get_executions_by_ids", side_effect=_fake_get_executions_by_ids),
+        patch("routers.optimizations.read_custom_resource", side_effect=fake_read_missing_git),
+    ):
         response = client.post(
             "/api/v1/optimizations/studies",
             headers=auth_headers,
@@ -237,13 +236,24 @@ def test_create_study_reconstructs_missing_source_agent_contract_from_traces(cli
     assert reconstructed["metadata"]["annotations"]["kubesynapse.ai/reconstructed-source"] == "true"
     assert reconstructed["spec"]["model"] == "opencode/deepseek-v4-flash-free"
     assert reconstructed["spec"]["runtime"] == {"kind": "opencode"}
-    assert "Summarize git commits" in reconstructed["spec"]["systemPrompt"]
+    # The reconstruction preamble and step data must NOT leak into the
+    # systemPrompt (it is a stable behavioral identity); step contract lives
+    # in an annotation so optimizer copies do not inherit optimizer meta text.
+    assert "Reconstructed source contract" not in reconstructed["spec"]["systemPrompt"]
+    assert (
+        "Summarize git commits"
+        in reconstructed["metadata"]["annotations"]["kubesynapse.ai/reconstructed-step-contract"]
+    )
     assert any("standup-git" in warning for warning in source["warnings"])
 
 
 def test_create_study_computes_baseline_metrics_and_opportunities(client, auth_headers) -> None:
-    first = _seed_execution(execution_id="exec-opt-base-1", duration_ms=60_000, tokens=1_200, cost_usd=0.036, tool_calls=3)
-    second = _seed_execution(execution_id="exec-opt-base-2", duration_ms=120_000, tokens=1_800, cost_usd=0.054, tool_calls=5)
+    first = _seed_execution(
+        execution_id="exec-opt-base-1", duration_ms=60_000, tokens=1_200, cost_usd=0.036, tool_calls=3
+    )
+    second = _seed_execution(
+        execution_id="exec-opt-base-2", duration_ms=120_000, tokens=1_800, cost_usd=0.054, tool_calls=5
+    )
 
     with _optimization_api_context(manifests=True):
         response = client.post(
@@ -290,11 +300,14 @@ def test_create_study_uses_bulk_trace_loading(client, auth_headers) -> None:
         requested_ids.extend(execution_ids)
         return {execution_id: _TRACE_FIXTURES[execution_id] for execution_id in execution_ids}
 
-    with patch("routers.optimizations.ensure_namespace_access", side_effect=_allow_namespace_access), patch(
-        "routers.optimizations.trace_store.get_execution",
-        side_effect=AssertionError("create_study must not load baseline traces one connection at a time"),
-    ), patch("routers.optimizations.trace_store.get_executions_by_ids", side_effect=fake_get_executions, create=True), patch(
-        "routers.optimizations.read_custom_resource", side_effect=_fake_read_custom_resource
+    with (
+        patch("routers.optimizations.ensure_namespace_access", side_effect=_allow_namespace_access),
+        patch(
+            "routers.optimizations.trace_store.get_execution",
+            side_effect=AssertionError("create_study must not load baseline traces one connection at a time"),
+        ),
+        patch("routers.optimizations.trace_store.get_executions_by_ids", side_effect=fake_get_executions, create=True),
+        patch("routers.optimizations.read_custom_resource", side_effect=_fake_read_custom_resource),
     ):
         response = client.post(
             "/api/v1/optimizations/studies",
@@ -335,7 +348,7 @@ def test_candidate_validation_rejects_topology_changes_and_secret_expansion(clie
                 "optimizer_output": "try a topology rewrite",
                 "manifest_bundle": [bad_agent, bad_workflow],
             },
-    )
+        )
 
     assert response.status_code == 422
     payload = response.json()
@@ -363,7 +376,9 @@ def test_candidate_validation_allows_topology_rewrite_only_when_explicit(client,
         }
     ]
     rewritten_agent = _agent_manifest("daily-standup-opt-single")
-    rewritten_agent["spec"]["systemPrompt"] = "You consolidate git, Jira, and final standup writing without losing required output behavior."
+    rewritten_agent["spec"]["systemPrompt"] = (
+        "You consolidate git, Jira, and final standup writing without losing required output behavior."
+    )
 
     with _optimization_api_context():
         blocked = client.post(
@@ -444,7 +459,7 @@ def test_create_study_rejects_provided_manifests_without_workflow(client, auth_h
                 "baseline_execution_ids": [baseline_id],
                 "source_manifests": {"agents": {"daily-standup": _agent_manifest()}},
             },
-    )
+        )
 
     assert response.status_code == 422
     payload = response.json()
@@ -834,7 +849,10 @@ def test_generate_candidate_fallback_copies_manifests_without_roi_prompt_injecti
         response = client.post(
             f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
             headers=auth_headers,
-            json={"optimizer_output": "Trim repeated reads and batch tool updates, but preserve all outputs.", "suffix": "opt-guided"},
+            json={
+                "optimizer_output": "Trim repeated reads and batch tool updates, but preserve all outputs.",
+                "suffix": "opt-guided",
+            },
         )
 
     assert response.status_code == 201
@@ -856,8 +874,14 @@ def test_generate_candidate_fallback_copies_manifests_without_roi_prompt_injecti
 
     with _optimization_api_context():
         refreshed = client.get(f"/api/v1/optimizations/studies/{study['id']}", headers=auth_headers).json()
-    assert refreshed["source_manifests"]["workflow"]["spec"]["steps"][0]["prompt"] == "Read git and Jira context, then write standup.md."
-    assert refreshed["source_manifests"]["agents"]["daily-standup"]["spec"]["systemPrompt"] == "You write daily standup reports."
+    assert (
+        refreshed["source_manifests"]["workflow"]["spec"]["steps"][0]["prompt"]
+        == "Read git and Jira context, then write standup.md."
+    )
+    assert (
+        refreshed["source_manifests"]["agents"]["daily-standup"]["spec"]["systemPrompt"]
+        == "You write daily standup reports."
+    )
 
 
 def test_generate_candidate_rejects_optimizer_meta_inside_candidate_prompts(client, auth_headers) -> None:
@@ -916,7 +940,271 @@ spec:
     assert any("optimizer/roi lab meta" in warning.lower() for warning in candidate["validation_results"]["warnings"])
 
 
-def test_generate_candidate_uses_optimizer_manifest_copy_without_mutating_source(client, auth_headers) -> None:
+def test_validate_contract_preservation_rejects_dropped_output_path() -> None:
+    """A candidate that drops a required /workspace output path is rejected."""
+    from routers.optimizations import _validate_contract_preservation
+
+    source = {
+        "spec": {
+            "messageBus": "in-memory",
+            "steps": [
+                {
+                    "name": "summarize-git",
+                    "type": "agent",
+                    "agentRef": "git-agent",
+                    "prompt": "Write the output to /workspace/commits-summary.md.",
+                },
+                {
+                    "name": "track-jira",
+                    "type": "agent",
+                    "agentRef": "jira-agent",
+                    "prompt": "Write the output to /workspace/sprint-status.json.",
+                },
+            ],
+        }
+    }
+    candidate = {
+        "spec": {
+            "messageBus": "in-memory",
+            "steps": [
+                {
+                    "name": "summarize-git",
+                    "type": "agent",
+                    "agentRef": "git-agent",
+                    "prompt": "Produce a summary of the commits.",
+                },
+                {
+                    "name": "track-jira",
+                    "type": "agent",
+                    "agentRef": "jira-agent",
+                    "prompt": "Write the output to /workspace/sprint-status.json.",
+                },
+            ],
+        }
+    }
+    violations = _validate_contract_preservation(source, candidate)
+    codes = [v["code"] for v in violations if v["severity"] == "error"]
+    assert "dropped_output_path" in codes
+
+
+def test_validate_contract_preservation_rejects_broken_handoff() -> None:
+    """Replacing embedded handoff with file reads on an in-memory bus is rejected."""
+    from routers.optimizations import _validate_contract_preservation
+
+    source = {
+        "spec": {
+            "messageBus": "in-memory",
+            "steps": [
+                {
+                    "name": "summarize-git",
+                    "type": "agent",
+                    "agentRef": "git",
+                    "prompt": "Write to /workspace/commits-summary.md.\n[FILE_CONTENT]\n(paste content)\n[/FILE_CONTENT]",
+                },
+                {
+                    "name": "track-jira",
+                    "type": "agent",
+                    "agentRef": "jira",
+                    "prompt": "Write to /workspace/sprint-status.json.\n[FILE_CONTENT]\n(paste content)\n[/FILE_CONTENT]",
+                },
+                {
+                    "name": "compose",
+                    "type": "agent",
+                    "agentRef": "scribe",
+                    "dependsOn": ["summarize-git", "track-jira"],
+                    "prompt": "Use the embedded content from {{previous_output}}. Write to /workspace/standup.md.",
+                },
+            ],
+        }
+    }
+    candidate = {
+        "spec": {
+            "messageBus": "in-memory",
+            "steps": [
+                {
+                    "name": "summarize-git",
+                    "type": "agent",
+                    "agentRef": "git",
+                    "prompt": "Write to /workspace/commits-summary.md.",
+                },
+                {
+                    "name": "track-jira",
+                    "type": "agent",
+                    "agentRef": "jira",
+                    "prompt": "Write to /workspace/sprint-status.json.",
+                },
+                {
+                    "name": "compose",
+                    "type": "agent",
+                    "agentRef": "scribe",
+                    "dependsOn": ["summarize-git", "track-jira"],
+                    "prompt": "Read /workspace/commits-summary.md and /workspace/sprint-status.json. Write to /workspace/standup.md.",
+                },
+            ],
+        }
+    }
+    violations = _validate_contract_preservation(source, candidate)
+    codes = [v["code"] for v in violations if v["severity"] == "error"]
+    # compose switched from embedded to file reads on an in-memory bus, and the
+    # file reads are unsatisfiable because pods don't share /workspace.
+    assert "handoff_mode_broken" in codes or "unsatisfiable_read" in codes
+
+
+def test_validate_contract_preservation_rejects_stripped_inline_data() -> None:
+    """Stripping inline input data from a step prompt is rejected."""
+    from routers.optimizations import _validate_contract_preservation
+
+    source = {
+        "spec": {
+            "messageBus": "in-memory",
+            "steps": [
+                {
+                    "name": "summarize-git",
+                    "type": "agent",
+                    "agentRef": "git",
+                    "prompt": "## Task: Summarize Git Activity\n\nGit log:\nabc1234 | alice | feat: add thing\n\nWrite to /workspace/commits-summary.md.",
+                },
+            ],
+        }
+    }
+    candidate = {
+        "spec": {
+            "messageBus": "in-memory",
+            "steps": [
+                {
+                    "name": "summarize-git",
+                    "type": "agent",
+                    "agentRef": "git",
+                    "prompt": "## Task: Summarize Git Activity\n[Git log data follows]\nWrite to /workspace/commits-summary.md.",
+                },
+            ],
+        }
+    }
+    violations = _validate_contract_preservation(source, candidate)
+    codes = [v["code"] for v in violations if v["severity"] == "error"]
+    assert "stripped_inline_data" in codes
+
+
+def test_sanitize_candidate_prompt_strips_tool_bans() -> None:
+    """Optimizer-injected tool bans and one-pass directives are stripped."""
+    from routers.optimizations import _sanitize_candidate_prompt
+
+    prompt = (
+        "## Task: Summarize Git Activity\n"
+        "Write to /workspace/commits-summary.md.\n\n"
+        "IMPORTANT: Do NOT use todowrite. Complete the task in one pass and write the file."
+    )
+    sanitized = _sanitize_candidate_prompt(prompt)
+    assert "Do NOT use todowrite" not in sanitized
+    assert "Complete the task in one pass" not in sanitized
+    assert "Summarize Git Activity" in sanitized
+    assert "/workspace/commits-summary.md" in sanitized
+
+
+def test_reconstructed_source_agent_does_not_leak_preamble_into_systemprompt() -> None:
+    """The reconstruction preamble must live in annotations, not systemPrompt."""
+    from routers.optimizations import _reconstructed_source_agent
+
+    workflow = {
+        "spec": {
+            "steps": [
+                {
+                    "name": "summarize-git",
+                    "agentRef": "standup-git",
+                    "prompt": "Summarize git commits and write /workspace/commits-summary.md.",
+                },
+            ]
+        }
+    }
+    agent = _reconstructed_source_agent(
+        namespace="default",
+        agent_ref="standup-git",
+        workflow_manifest=workflow,
+        traces=None,
+    )
+    system_prompt = agent["spec"]["systemPrompt"]
+    assert "Reconstructed source contract" not in system_prompt
+    assert "Summarize git commits" not in system_prompt
+    annotations = agent["metadata"]["annotations"]
+    assert annotations["kubesynapse.ai/reconstructed-source"] == "true"
+    assert "Summarize git commits" in annotations["kubesynapse.ai/reconstructed-step-contract"]
+
+
+def test_generate_candidate_rejects_broken_handoff_via_contract_gate(client, auth_headers) -> None:
+    """End-to-end: a candidate that breaks the in-memory handoff falls back to a no-change control."""
+    baseline_id = _seed_execution(execution_id="exec-opt-contract-break")
+
+    source_workflow = _workflow_manifest("daily-standup")
+    source_workflow["spec"]["messageBus"] = "in-memory"
+    source_workflow["spec"]["steps"] = [
+        {
+            "name": "summarize-git",
+            "type": "agent",
+            "agentRef": "standup-git",
+            "prompt": "Summarize the git log below.\nabc1234 | alice | feat: x\nWrite to /workspace/commits-summary.md.\n[FILE_CONTENT]\n(paste)\n[/FILE_CONTENT]",
+        },
+        {
+            "name": "compose",
+            "type": "agent",
+            "agentRef": "standup-scribe",
+            "dependsOn": ["summarize-git"],
+            "prompt": "Use {{previous_output}} to write /workspace/standup.md.",
+        },
+    ]
+
+    with _optimization_api_context():
+        study = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={
+                "namespace": "default",
+                "workflow_name": "daily-standup",
+                "baseline_execution_ids": [baseline_id],
+                "source_manifests": {
+                    "workflow": source_workflow,
+                    "agent_refs": ["standup-git", "standup-scribe"],
+                    "agents": {
+                        "standup-git": _agent_manifest("standup-git"),
+                        "standup-scribe": _agent_manifest("standup-scribe"),
+                    },
+                },
+            },
+        ).json()
+
+    optimizer_output = """
+```yaml
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: daily-standup
+  namespace: default
+spec:
+  messageBus: in-memory
+  steps:
+    - name: summarize-git
+      type: agent
+      agentRef: standup-git
+      prompt: Produce a summary. Write to /workspace/commits-summary.md.
+    - name: compose
+      type: agent
+      agentRef: standup-scribe
+      dependsOn: ["summarize-git"]
+      prompt: Read /workspace/commits-summary.md and write /workspace/standup.md.
+```
+"""
+
+    with _optimization_api_context():
+        response = client.post(
+            f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
+            headers=auth_headers,
+            json={"optimizer_output": optimizer_output, "suffix": "opt-break"},
+        )
+
+    assert response.status_code == 201, response.json()
+    candidate = response.json()
+    # The broken candidate must fall back to a no-change control.
+    assert candidate["validation_results"]["no_effective_changes"] is True
+    assert any("failed validation" in w.lower() for w in candidate["validation_results"]["warnings"])
     baseline_id = _seed_execution(execution_id="exec-opt-generated-manifest")
 
     with _optimization_api_context(manifests=True):
@@ -1094,7 +1382,8 @@ spec:
     candidate = response.json()
     assert {manifest["apiVersion"] for manifest in candidate["manifest_bundle"]} == {"kubesynapse.ai/v1alpha1"}
     extra_agent = next(
-        manifest for manifest in candidate["manifest_bundle"]
+        manifest
+        for manifest in candidate["manifest_bundle"]
         if manifest["kind"] == "AIAgent" and manifest["metadata"]["name"] == "standup-single-pass-opt-single"
     )
     assert extra_agent["metadata"]["labels"]["kubesynapse.ai/topology-rewrite"] == "allowed"
@@ -1372,7 +1661,9 @@ def test_list_studies_returns_recent_workflow_studies_with_candidates(client, au
 
 
 def test_candidate_lifecycle_approval_trials_and_verified_roi(client, auth_headers) -> None:
-    baseline_id = _seed_execution(execution_id="exec-opt-roi-base", duration_ms=100_000, tokens=2_000, cost_usd=0.08, tool_calls=8)
+    baseline_id = _seed_execution(
+        execution_id="exec-opt-roi-base", duration_ms=100_000, tokens=2_000, cost_usd=0.08, tool_calls=8
+    )
     candidate_execution_ids = [
         _seed_execution(
             execution_id=f"exec-opt-roi-candidate-{index}",
@@ -1629,7 +1920,9 @@ def test_roi_comparison_exposes_trials_steps_tools_and_manifest_diff(client, aut
 
 
 def test_run_candidate_applies_copy_triggers_workflow_and_records_trial(client, auth_headers) -> None:
-    baseline_id = _seed_execution(execution_id="exec-opt-run-base", duration_ms=100_000, tokens=2_000, cost_usd=0.08, tool_calls=8)
+    baseline_id = _seed_execution(
+        execution_id="exec-opt-run-base", duration_ms=100_000, tokens=2_000, cost_usd=0.08, tool_calls=8
+    )
 
     with _optimization_api_context(manifests=True):
         study = client.post(
@@ -1638,26 +1931,31 @@ def test_run_candidate_applies_copy_triggers_workflow_and_records_trial(client, 
             json={"namespace": "default", "workflow_name": "daily-standup", "baseline_execution_ids": [baseline_id]},
         ).json()
 
-    with _optimization_api_context(), patch(
-        "routers.optimizations._apply_manifest_bundle",
-        return_value=[{"kind": "AIAgent", "name": "daily-standup-opt-run", "status": "created"}],
-    ) as apply_bundle, patch(
-        "routers.optimizations._wait_for_candidate_agents_ready",
-        return_value=[
-            {"name": "standup-git-opt-run", "status": "ready"},
-            {"name": "standup-jira-opt-run", "status": "ready"},
-            {"name": "standup-scribe-opt-run", "status": "ready"},
-        ],
-    ) as wait_ready, patch(
-        "routers.optimizations._trigger_candidate_workflow",
-        return_value={
-            "workflow_name": "daily-standup-opt-run",
-            "namespace": "default",
-            "run_id": "wf-run-default-daily-standup-opt-run-1-abc123",
-            "phase": "pending",
-            "generation": 2,
-        },
-    ) as trigger_workflow:
+    with (
+        _optimization_api_context(),
+        patch(
+            "routers.optimizations._apply_manifest_bundle",
+            return_value=[{"kind": "AIAgent", "name": "daily-standup-opt-run", "status": "created"}],
+        ) as apply_bundle,
+        patch(
+            "routers.optimizations._wait_for_candidate_agents_ready",
+            return_value=[
+                {"name": "standup-git-opt-run", "status": "ready"},
+                {"name": "standup-jira-opt-run", "status": "ready"},
+                {"name": "standup-scribe-opt-run", "status": "ready"},
+            ],
+        ) as wait_ready,
+        patch(
+            "routers.optimizations._trigger_candidate_workflow",
+            return_value={
+                "workflow_name": "daily-standup-opt-run",
+                "namespace": "default",
+                "run_id": "wf-run-default-daily-standup-opt-run-1-abc123",
+                "phase": "pending",
+                "generation": 2,
+            },
+        ) as trigger_workflow,
+    ):
         candidate = client.post(
             f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
             headers=auth_headers,
@@ -1688,7 +1986,9 @@ def test_run_candidate_applies_copy_triggers_workflow_and_records_trial(client, 
     assert payload["candidate"]["status"] == "applied"
     assert payload["candidate_run"]["workflow_name"] == "daily-standup-opt-run"
     assert payload["trial"]["status"] == "pending"
-    assert payload["trial"]["metrics_delta"]["candidate_run"]["run_id"] == "wf-run-default-daily-standup-opt-run-1-abc123"
+    assert (
+        payload["trial"]["metrics_delta"]["candidate_run"]["run_id"] == "wf-run-default-daily-standup-opt-run-1-abc123"
+    )
     assert payload["trial"]["metrics_delta"]["apply_results"][0]["status"] == "created"
     assert payload["trial"]["metrics_delta"]["agent_readiness"][0]["status"] == "ready"
     apply_bundle.assert_called_once()
@@ -1708,13 +2008,16 @@ def test_apply_candidate_stages_agents_and_defers_workflow_until_trial(client, a
             json={"namespace": "default", "workflow_name": "daily-standup", "baseline_execution_ids": [baseline_id]},
         ).json()
 
-    with _optimization_api_context(), patch(
-        "routers.optimizations._apply_manifest_bundle",
-        return_value=[
-            {"kind": "AIAgent", "name": "daily-standup-opt-stage", "status": "created"},
-            {"kind": "AgentWorkflow", "name": "daily-standup-opt-stage", "status": "deferred_until_trial"},
-        ],
-    ) as apply_bundle:
+    with (
+        _optimization_api_context(),
+        patch(
+            "routers.optimizations._apply_manifest_bundle",
+            return_value=[
+                {"kind": "AIAgent", "name": "daily-standup-opt-stage", "status": "created"},
+                {"kind": "AgentWorkflow", "name": "daily-standup-opt-stage", "status": "deferred_until_trial"},
+            ],
+        ) as apply_bundle,
+    ):
         candidate = client.post(
             f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
             headers=auth_headers,
@@ -1737,7 +2040,9 @@ def test_apply_candidate_stages_agents_and_defers_workflow_until_trial(client, a
 
 
 def test_roi_syncs_completed_candidate_run_into_pending_trial(client, auth_headers) -> None:
-    baseline_id = _seed_execution(execution_id="exec-opt-sync-base", duration_ms=100_000, tokens=2_000, cost_usd=0.08, tool_calls=8)
+    baseline_id = _seed_execution(
+        execution_id="exec-opt-sync-base", duration_ms=100_000, tokens=2_000, cost_usd=0.08, tool_calls=8
+    )
     candidate_id = _seed_execution(
         execution_id="exec-opt-sync-candidate",
         workflow_name="daily-standup-opt-sync",
@@ -1755,23 +2060,29 @@ def test_roi_syncs_completed_candidate_run_into_pending_trial(client, auth_heade
             json={"namespace": "default", "workflow_name": "daily-standup", "baseline_execution_ids": [baseline_id]},
         ).json()
 
-    with _optimization_api_context(), patch(
-        "routers.optimizations._apply_manifest_bundle",
-        return_value=[{"kind": "AgentWorkflow", "name": "daily-standup-opt-sync", "status": "created"}],
-    ), patch(
-        "routers.optimizations._wait_for_candidate_agents_ready",
-        return_value=[{"name": "standup-git-opt-sync", "status": "ready"}],
-    ), patch(
-        "routers.optimizations._trigger_candidate_workflow",
-        return_value={
-            "workflow_name": "daily-standup-opt-sync",
-            "namespace": "default",
-            "run_id": "wf-run-default-daily-standup-opt-sync-1-abc123",
-            "phase": "pending",
-        },
-    ), patch(
-        "routers.optimizations.trace_store.list_executions",
-        return_value=[_TRACE_FIXTURES[candidate_id]],
+    with (
+        _optimization_api_context(),
+        patch(
+            "routers.optimizations._apply_manifest_bundle",
+            return_value=[{"kind": "AgentWorkflow", "name": "daily-standup-opt-sync", "status": "created"}],
+        ),
+        patch(
+            "routers.optimizations._wait_for_candidate_agents_ready",
+            return_value=[{"name": "standup-git-opt-sync", "status": "ready"}],
+        ),
+        patch(
+            "routers.optimizations._trigger_candidate_workflow",
+            return_value={
+                "workflow_name": "daily-standup-opt-sync",
+                "namespace": "default",
+                "run_id": "wf-run-default-daily-standup-opt-sync-1-abc123",
+                "phase": "pending",
+            },
+        ),
+        patch(
+            "routers.optimizations.trace_store.list_executions",
+            return_value=[_TRACE_FIXTURES[candidate_id]],
+        ),
     ):
         candidate = client.post(
             f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
@@ -1804,7 +2115,9 @@ def test_roi_syncs_completed_candidate_run_into_pending_trial(client, auth_heade
 
 
 def test_promote_candidate_requires_verified_safe_trials(client, auth_headers) -> None:
-    baseline_id = _seed_execution(execution_id="exec-opt-promote-base", duration_ms=100_000, tokens=2_000, cost_usd=0.08, tool_calls=8)
+    baseline_id = _seed_execution(
+        execution_id="exec-opt-promote-base", duration_ms=100_000, tokens=2_000, cost_usd=0.08, tool_calls=8
+    )
     candidate_execution_ids = [
         _seed_execution(
             execution_id=f"exec-opt-promote-candidate-{index}",
@@ -1918,11 +2231,12 @@ def test_optimization_schema_adds_trace_and_proof_gate_to_existing_tables(monkey
     with engine.connect() as connection:
         columns = {str(column["name"]) for column in inspect(connection).get_columns("optimization_studies")}
         assert "proof_gate" in columns
-        stored = connection.execute(text("SELECT proof_gate FROM optimization_studies WHERE id = 'opt-existing'")).scalar_one()
+        stored = connection.execute(
+            text("SELECT proof_gate FROM optimization_studies WHERE id = 'opt-existing'")
+        ).scalar_one()
         assert "requires_approval" in stored
         candidate_columns = {
-            str(column["name"])
-            for column in inspect(connection).get_columns("optimization_candidates")
+            str(column["name"]) for column in inspect(connection).get_columns("optimization_candidates")
         }
         assert "optimizer_trace" in candidate_columns
         assert {"tags", "lifecycle_state", "archived_by", "archived_at"} <= candidate_columns
@@ -1951,7 +2265,9 @@ def test_dataset_export_redacts_secrets_and_keeps_trace_labels(client, auth_head
         ).json()
 
     with _optimization_api_context():
-        response = client.get(f"/api/v1/optimizations/studies/{study['id']}/dataset?redacted=true", headers=auth_headers)
+        response = client.get(
+            f"/api/v1/optimizations/studies/{study['id']}/dataset?redacted=true", headers=auth_headers
+        )
 
     assert response.status_code == 200
     dataset = response.json()
@@ -1963,7 +2279,11 @@ def test_dataset_export_redacts_secrets_and_keeps_trace_labels(client, auth_head
     assert dataset["baseline_traces"][0]["id"] == baseline_id
     assert dataset["dataset_plan"]["strategy"] == "dataset_first"
     assert dataset["dataset_plan"]["splits"]["replay_cases"] == 1
-    assert dataset["dataset_plan"]["local_model_path"]["suitability"] in {"needs_more_review", "needs_more_examples", "candidate"}
+    assert dataset["dataset_plan"]["local_model_path"]["suitability"] in {
+        "needs_more_review",
+        "needs_more_examples",
+        "candidate",
+    }
     assert dataset["redaction_report"]["state"] == "redacted"
     assert any(record["record_type"] == "llm_call" for record in dataset["training_records"])
     assert dataset["evaluation_records"][0]["quality_label"] == "baseline_success"
@@ -1972,7 +2292,7 @@ def test_dataset_export_redacts_secrets_and_keeps_trace_labels(client, auth_head
 def test_optimizer_agent_manifest_declares_roi_optimization_skills() -> None:
     path = Path(__file__).resolve().parents[2] / "examples" / "daily-standup-bot" / "optimizer-agent.yaml"
     manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
-    skills = (((manifest.get("spec") or {}).get("skills") or {}).get("files") or {})
+    skills = ((manifest.get("spec") or {}).get("skills") or {}).get("files") or {}
 
     assert manifest["metadata"]["name"] == "workflow-optimizer"
     assert len(skills) >= 5
@@ -1982,3 +2302,48 @@ def test_optimizer_agent_manifest_declares_roi_optimization_skills() -> None:
     assert "tool-economy" in skill_text
     assert "topology-rewrite" in skill_text
     assert "regression-proof-gate" in skill_text
+
+
+def test_generate_candidate_patches_a2a_allowed_callers_with_candidate_workflow_name(client, auth_headers) -> None:
+    """Candidate agents must allow the candidate workflow name as an A2A caller.
+
+    Without this, the workflow worker gets HTTP 403 forbidden when invoking
+    candidate agents because the source agent's allowedCallers lists the
+    source workflow name, not the suffixed candidate workflow name.
+    """
+    baseline_id = _seed_execution(execution_id="exec-a2a-callers")
+
+    with _optimization_api_context(manifests=True):
+        study = client.post(
+            "/api/v1/optimizations/studies",
+            headers=auth_headers,
+            json={"namespace": "default", "workflow_name": "daily-standup", "baseline_execution_ids": [baseline_id]},
+        ).json()
+
+    with _optimization_api_context():
+        response = client.post(
+            f"/api/v1/optimizations/studies/{study['id']}/candidates/generate",
+            headers=auth_headers,
+            json={
+                "optimizer_output": "Minor prompt refinement for clarity.",
+                "suffix": "opt-a2a-fix",
+            },
+        )
+
+    assert response.status_code == 201, response.json()
+    candidate = response.json()
+    bundle = candidate["manifest_bundle"]
+    workflow = next(m for m in bundle if m["kind"] == "AgentWorkflow")
+    candidate_wf_name = workflow["metadata"]["name"]
+
+    for manifest in bundle:
+        if manifest["kind"] != "AIAgent":
+            continue
+        a2a = (manifest.get("spec") or {}).get("a2a") or {}
+        callers = a2a.get("allowedCallers") or []
+        caller_names = [c.get("name") for c in callers if isinstance(c, dict)]
+        assert candidate_wf_name in caller_names, (
+            f"Candidate agent '{manifest['metadata']['name']}' does not list "
+            f"candidate workflow '{candidate_wf_name}' in a2a.allowedCallers. "
+            f"Found: {caller_names}"
+        )

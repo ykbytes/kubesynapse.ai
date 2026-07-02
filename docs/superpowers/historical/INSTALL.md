@@ -159,7 +159,7 @@ Key capabilities:
 
 ## Quick Start — DockerHub Images
 
-The fastest way to get running. Pre-built platform and sidecar images are published to `docker.io/kubesynapse`. No build step required.
+The fastest way to get running. Pre-built platform and sidecar images are published to `quay.io/yakdhane/kubesynapse`. No build step required.
 
 ### Prerequisites
 
@@ -261,7 +261,7 @@ curl -X POST http://localhost:8080/api/v1/agents/research-assistant/invoke \
 #### Image tag and registry reference
 
 `deploy/values.cluster.example.yaml` pins the published image repositories and tags used by the current public install path.
-All default images live under `docker.io/kubesynapse` except LiteLLM:
+All default images live under `quay.io/yakdhane/kubesynapse` (including LiteLLM):
 
 | Image | Description |
 |---|---|

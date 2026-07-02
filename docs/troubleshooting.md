@@ -124,7 +124,7 @@ Common causes:
 kubectl get secrets -n kubesynapse
 
 # Re-create or update Helm values
-helm upgrade KubeSynapse oci://docker.io/kubesynapse/charts/kubesynapse \
+helm upgrade KubeSynapse oci://quay.io/yakdhane/charts/kubesynapse \
   -n kubesynapse -f values.yaml
 ```
 
@@ -490,8 +490,8 @@ Common causes:
 
 ```bash
 # Rebuild and redeploy the api-gateway image after restoring the missing imports in api-gateway/routers/llm.py
-podman build -t docker.io/kubesynapse/kubesynapse-api-gateway:<tag> -f api-gateway/Dockerfile api-gateway
-minikube image load docker.io/kubesynapse/kubesynapse-api-gateway:<tag> -p <profile>
+podman build -t quay.io/yakdhane/kubesynapse:api-gateway -f api-gateway/Dockerfile api-gateway
+minikube image load quay.io/yakdhane/kubesynapse:api-gateway -p <profile>
 helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse \
   -f deploy/values.kind.yaml \
   --set apiGateway.image.tag=<tag>

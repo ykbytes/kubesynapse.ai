@@ -62,7 +62,7 @@ helm upgrade --install kubesynapse ./charts/kubesynapse \
 ## Release Chart Image Pinning
 
 Chart `0.2.1` pins the four production images to matching immutable release tags in
-GitHub Container Registry: operator/worker, API gateway, web UI, and OpenCode runtime.
+Quay.io: operator/worker, API gateway, web UI, and OpenCode runtime.
 For stronger supply-chain pinning, set a verified digest in addition to the tag.
 
 Example OpenCode digest pin:
@@ -70,8 +70,8 @@ Example OpenCode digest pin:
 ```yaml
 opencodeRuntime:
   image:
-    repository: ghcr.io/ykbytes/kubesynapse-opencode-rt
-    tag: "0.2.1"
+    repository: quay.io/yakdhane/kubesynapse
+    tag: opencode-rt
     digest: "sha256:..."
     pullPolicy: IfNotPresent
 ```
@@ -85,7 +85,7 @@ and are not part of this OpenCode-focused release bundle.
 - The chart runs `prisma db push` in a LiteLLM init container during install and upgrade.
 - When the chart-managed PostgreSQL instance is enabled, LiteLLM targets the dedicated `litellm` database created by the chart so Prisma sync does not modify gateway auth/session tables.
 - System agent `AIAgent` resources are created in a post-install/post-upgrade hook, so first installs do not need `systemAgents.enabled=false`.
-- Local and air-gapped installs must preload `docker.io/litellm/litellm:v1.82.3-stable` alongside the platform images.
+- Local and air-gapped installs must preload `quay.io/yakdhane/kubesynapse:litellm` alongside the platform images.
 - You should not need to run manual database bootstrap commands after a normal Helm deploy.
 - The `AgentIncident` CRD is installed as part of the chart and backed by the operator's incident lifecycle controller. Alertmanager webhooks are accepted at `POST /api/v1/webhooks/alertmanager` and create firing incidents automatically.
 

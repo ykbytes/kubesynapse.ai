@@ -33,7 +33,7 @@ Run `npm run build` to create a production bundle in `dist/`.
 
 ## Container image
 
-Build the production image with `podman build -t docker.io/kubesynapse/kubesynapse-web-ui:<tag> .`.
+Build the production image with `podman build -t quay.io/yakdhane/kubesynapse:web-ui .`.
 
 The image serves the Vite bundle through Nginx with SPA fallback enabled. In the Helm chart the UI is published on `/`, while the API gateway remains on `/api` for the same host.
 

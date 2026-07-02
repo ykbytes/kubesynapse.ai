@@ -1,12 +1,12 @@
 # kubesynapse — Kind/Local Kubernetes Deployment Values
 # 
 # Usage:
-#   kind load docker-image docker.io/kubesynapse/kubesynapse-api-gateway:v2.1.0-run-intelligence --name desktop
-#   kind load docker-image docker.io/kubesynapse/kubesynapse-web-ui:v2.1.0-run-intelligence --name desktop
-#   kind load docker-image docker.io/kubesynapse/kubesynapse-operator:v2.1.0-run-intelligence --name desktop
-#   kind load docker-image docker.io/kubesynapse/kubesynapse-opencode-rt:v2.1.0-run-intelligence --name desktop
-#   kind load docker-image docker.io/kubesynapse/kubesynapse-pi-rt:v2.1.0-run-intelligence --name desktop
-#   kind load docker-image docker.io/kubesynapse/kubesynapse-vibe-rt:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image quay.io/yakdhane/kubesynapse:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image quay.io/yakdhane/kubesynapse:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image quay.io/yakdhane/kubesynapse:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image quay.io/yakdhane/kubesynapse:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image quay.io/yakdhane/kubesynapse:v2.1.0-run-intelligence --name desktop
+#   kind load docker-image quay.io/yakdhane/kubesynapse:v2.1.0-run-intelligence --name desktop
 #   kind load docker-image docker.io/litellm/litellm:v1.82.3-stable --name desktop
 #   helm upgrade --install kubesynapse ./charts/kubesynapse -n kubesynapse --create-namespace -f deploy/values.kind.yaml
 
@@ -21,11 +21,11 @@ operator:
   enabled: true
   replicaCount: 1
   image:
-    repository: docker.io/kubesynapse/kubesynapse-operator
+    repository: quay.io/yakdhane/kubesynapse
     tag: latest
     pullPolicy: Never
   workerImage:
-    repository: docker.io/kubesynapse/kubesynapse-operator
+    repository: quay.io/yakdhane/kubesynapse
     tag: latest
     pullPolicy: Never
   resources:
@@ -58,7 +58,7 @@ apiGateway:
   enabled: true
   replicaCount: 1
   image:
-    repository: docker.io/kubesynapse/kubesynapse-api-gateway
+    repository: quay.io/yakdhane/kubesynapse
     tag: latest
     pullPolicy: Never
   ingress:
@@ -82,7 +82,7 @@ webUi:
   enabled: true
   replicaCount: 1
   image:
-    repository: docker.io/kubesynapse/kubesynapse-web-ui
+    repository: quay.io/yakdhane/kubesynapse
     tag: latest
     pullPolicy: Never
   service:
@@ -100,7 +100,7 @@ webUi:
 
 opencodeRuntime:
   image:
-    repository: docker.io/kubesynapse/kubesynapse-opencode-rt
+    repository: quay.io/yakdhane/kubesynapse
     tag: latest
     pullPolicy: Never
   provider: litellm
@@ -121,7 +121,7 @@ opencodeRuntime:
 
 piRuntime:
   image:
-    repository: docker.io/kubesynapse/kubesynapse-pi-rt
+    repository: quay.io/yakdhane/kubesynapse
     tag: latest
     pullPolicy: Never
   provider: ""
@@ -134,7 +134,7 @@ piRuntime:
 
 mistralVibeRuntime:
   image:
-    repository: docker.io/kubesynapse/kubesynapse-vibe-rt
+    repository: quay.io/yakdhane/kubesynapse
     tag: latest
     pullPolicy: Never
 

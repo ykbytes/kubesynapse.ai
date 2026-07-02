@@ -29,11 +29,30 @@ spec:
     - critical-path-roi for bottleneck selection and variance-aware ROI.
     - context-compression for prompt/cache/context reductions.
     - tool-economy for batching, caching, and tool-loop reduction.
+    - contract-preservation for handoff, output-path, and input-data safety.
     - topology-rewrite only when the request packet explicitly allows it.
     - regression-proof-gate for proof, trial, and promotion criteria.
     - Emit a concise visible decision record for audit; do not expose private
       chain-of-thought. The app records your visible response, skills used,
       resources used, topology decision, and candidate generation result.
+
+    Contract preservation rules (the gateway enforces these as hard gates):
+    - Every /workspace output path the source step writes MUST still be written
+      by the candidate step with the same name. Dropping an output path is a
+      contract violation and the candidate will be rejected.
+    - If the source workflow uses messageBus: in-memory, step pods do NOT share
+      a filesystem. The source's inter-step handoff (e.g. [FILE_CONTENT] markers
+      or {{previous_output}} embedding) MUST be preserved verbatim. Replacing
+      embedded handoff with "read /workspace/file.md" instructions is a
+      contract violation because the downstream pod cannot see upstream files.
+    - Inline input data (git logs, Jira dumps, JSON blobs) embedded in a source
+      step prompt MUST stay in that step prompt. Do NOT move input data into the
+      agent systemPrompt, and do NOT replace it with empty placeholders like
+      "[data follows]". Stripping inline data is a contract violation.
+    - Do NOT inject tool bans (e.g. "Do NOT use todowrite"), one-pass directives,
+      optimizer framing, skill names, or any ROI Lab language into candidate
+      step prompts or agent systemPrompts. The candidate agents must only know
+      how to perform the business workflow.
 
     Hard rules:
     - Never edit source resources in place. Return copied manifests only.
@@ -71,6 +90,9 @@ spec:
       skills_used, resources_used, topology_decision, topology_equivalence_map,
       candidate_strategy, regression_budget, and rejected_options. Keep it
       concise and audit-friendly; do not include hidden chain-of-thought.
+    - A fenced JSON block headed step_contracts containing, for each source
+      step, the preserved write_paths, handoff_mode (embedded|file|none), and
+      inline_data_anchors. The gateway validates candidate parity against this.
     - A fenced JSON block headed roi_hypothesis containing expected_metric_delta,
       confidence, evidence_execution_ids, target_steps, target_tools,
       quality_gate, rollback_plan, and regression_budget.
@@ -145,6 +167,43 @@ spec:
         - Be explicit about known input paths and output paths.
         - Add tool budgets when safe, such as "read each source artifact at most once" or "write final report once after planning."
         - Keep these instructions business-focused; do not mention cost experiments to target agents.
+      skills/contract-preservation/SKILL.md: |
+        ---
+        name: contract-preservation
+        description: Preserve inter-step handoff, output paths, and inline input data so candidate runs do not regress.
+        allowSubagents: false
+        ---
+        Use this skill before emitting the candidate_manifest_bundle.
+
+        Invariants the gateway validates as hard gates:
+        - Output paths: every /workspace path the source step writes must still
+          be written by the matching candidate step. A candidate that drops a
+          required output artifact is rejected, even if tokens shrink.
+        - Handoff mode: if the source uses embedded handoff ([FILE_CONTENT],
+          {{previous_output}}, [Previous Step Output]) because messageBus is
+          in-memory, the candidate must keep embedded handoff. Step pods on an
+          in-memory bus do not share /workspace, so replacing embedded handoff
+          with file reads breaks the downstream step.
+        - Inline data: input data embedded in a source step prompt (git logs,
+          Jira dumps, JSON blobs, tables) must stay in that step prompt. Do not
+          move it to the agent systemPrompt and do not replace it with empty
+          placeholders. The runtime injects the step prompt per-run; the agent
+          systemPrompt is stable identity.
+        - No optimizer injections: never add tool bans ("Do NOT use todowrite"),
+          one-pass directives, skill names, or ROI Lab framing to candidate
+          prompts. Candidate agents must only know the business task.
+
+        Self-check before emitting the candidate:
+        - For each source step, list its write_paths, handoff_mode, and data
+          anchors. Confirm the candidate step with the same name preserves all
+          three. Record this in the step_contracts block.
+        - If you want to change the handoff mechanism, you may only do so when
+          topology-rewrite is explicitly allowed AND the candidate declares a
+          compatible replacement (e.g. a shared PVC). Otherwise keep embedded
+          handoff verbatim.
+        - If a step prompt is long because of inline data, compress the
+          instructions around the data but keep the data itself and the output
+          path. Compression targets narration, not contract tokens.
       skills/topology-rewrite/SKILL.md: |
         ---
         name: topology-rewrite

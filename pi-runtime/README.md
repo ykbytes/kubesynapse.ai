@@ -56,7 +56,7 @@ docker build -t kubesynapse-pi-rt:v0.2.13 .
 Current deployed image:
 
 ```bash
-docker pull docker.io/kubesynapse/kubesynapse-pi-rt:v0.2.13
+docker pull quay.io/yakdhane/kubesynapse:pi-rt
 ```
 
 ## Session Persistence

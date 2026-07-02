@@ -6,17 +6,17 @@ global:
 
 operator:
   image:
-    repository: docker.io/kubesynapse/kubesynapse-operator
+    repository: quay.io/yakdhane/kubesynapse
     tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   workerImage:
-    repository: docker.io/kubesynapse/kubesynapse-operator
+    repository: quay.io/yakdhane/kubesynapse
     tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
 
 opencodeRuntime:
   image:
-    repository: docker.io/kubesynapse/kubesynapse-opencode-rt
+    repository: quay.io/yakdhane/kubesynapse
     tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   limits:
@@ -34,19 +34,19 @@ opencodeRuntime:
 
 piRuntime:
   image:
-    repository: docker.io/kubesynapse/kubesynapse-pi-rt
+    repository: quay.io/yakdhane/kubesynapse
     tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
 
 mistralVibeRuntime:
   image:
-    repository: docker.io/kubesynapse/kubesynapse-vibe-rt
+    repository: quay.io/yakdhane/kubesynapse
     tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
 
 apiGateway:
   image:
-    repository: docker.io/kubesynapse/kubesynapse-api-gateway
+    repository: quay.io/yakdhane/kubesynapse
     tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
   ingressClassName: ""
@@ -63,7 +63,7 @@ apiGateway:
 webUi:
   enabled: true
   image:
-    repository: docker.io/kubesynapse/kubesynapse-web-ui
+    repository: quay.io/yakdhane/kubesynapse
     tag: v2.1.0-run-intelligence
     pullPolicy: IfNotPresent
 
@@ -101,36 +101,36 @@ mcpHub:
   servers:
     github:
       enabled: true
-      image: docker.io/kubesynapse/mcp-github-adapter:deploy-20260401-212102
+      image: quay.io/yakdhane/kubesynapse:mcp-github-adapter
 
 mcpToolSidecars:
   codeExec:
-    image: docker.io/kubesynapse/mcp-code-exec
+    image: quay.io/yakdhane/kubesynapse
     tag: deploy-20260401-212102
   webSearch:
-    image: docker.io/kubesynapse/mcp-web-search
+    image: quay.io/yakdhane/kubesynapse
     tag: deploy-20260401-212102
   documents:
-    image: docker.io/kubesynapse/mcp-documents
+    image: quay.io/yakdhane/kubesynapse
     tag: deploy-20260401-212102
   browser:
-    image: docker.io/kubesynapse/mcp-browser
+    image: quay.io/yakdhane/kubesynapse
     tag: deploy-20260401-212102
   database:
-    image: docker.io/kubesynapse/mcp-database
+    image: quay.io/yakdhane/kubesynapse
     tag: deploy-20260401-212102
   git:
-    image: docker.io/kubesynapse/mcp-git
+    image: quay.io/yakdhane/kubesynapse
     tag: deploy-20260401-212102
   githubAdapter:
-    image: docker.io/kubesynapse/mcp-github-adapter
+    image: quay.io/yakdhane/kubesynapsehub-adapter
     tag: deploy-20260401-212102
   kubernetes:
-    image: docker.io/kubesynapse/mcp-kubernetes
+    image: quay.io/yakdhane/kubesynapse
     tag: deploy-20260401-212102
   messaging:
-    image: docker.io/kubesynapse/mcp-messaging
+    image: quay.io/yakdhane/kubesynapse
     tag: deploy-20260401-212102
   rag:
-    image: docker.io/kubesynapse/mcp-rag
+    image: quay.io/yakdhane/kubesynapse
     tag: deploy-20260401-212102

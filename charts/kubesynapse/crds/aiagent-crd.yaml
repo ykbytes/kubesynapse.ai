@@ -244,6 +244,20 @@ spec:
                         type: string
                       port:
                         type: integer
+                      env:
+                        type: array
+                        description: "Environment variables for the sidecar container"
+                        items:
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                      resources:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                        description: "Resource requests and limits for the sidecar container"
+                      networkEgress:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                        description: "Network egress allowlist for the sidecar"
                   description: "List of MCP servers to inject as local sidecars for zero-trust security"
                 opa:
                   type: object

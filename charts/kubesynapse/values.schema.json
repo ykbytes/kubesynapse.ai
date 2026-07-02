@@ -237,8 +237,8 @@
         "image": {
           "type": "object",
           "properties": {
-            "repository": { "type": "string", "default": "docker.io/kubesynapse/credential-proxy" },
-            "tag": { "type": "string", "default": "latest" },
+            "repository": { "type": "string", "default": "quay.io/yakdhane/kubesynapse" },
+            "tag": { "type": "string", "default": "credential-proxy" },
             "digest": { "type": "string", "default": "" },
             "pullPolicy": { "type": "string", "default": "Always" }
           }

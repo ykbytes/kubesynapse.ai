@@ -73,7 +73,7 @@ spec:
     kind: opencode
   mcpSidecars:
     - name: kubernetes
-      image: docker.io/kubesynapse/mcp-kubernetes:deploy-20260401-212102
+      image: quay.io/yakdhane/kubesynapse:mcp-kubernetes
       port: 8097
   systemPrompt: |
     You are an SRE triage agent.
@@ -105,7 +105,7 @@ spec:
     kind: opencode
   mcpSidecars:
     - name: kubernetes
-      image: docker.io/kubesynapse/mcp-kubernetes:deploy-20260401-212102
+      image: quay.io/yakdhane/kubesynapse:mcp-kubernetes
       port: 8097
   systemPrompt: |
     You are a Kubernetes remediation agent.

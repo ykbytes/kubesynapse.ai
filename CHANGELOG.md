@@ -157,7 +157,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Security best practices section
 - **Artifact Distribution**:
   - Docker Hub publishing in release workflow: `KubeSynapse/operator`, `KubeSynapse/api-gateway`, `KubeSynapse/opencode-runtime`, `KubeSynapse/web-ui` (with `:latest` tags)
-  - Helm OCI pushed to both GHCR and Docker Hub (`oci://docker.io/kubesynapse/charts/KubeSynapse`)
+  - Helm OCI pushed to Quay.io (`oci://quay.io/yakdhane/charts/kubesynapse`)
   - Python SDK renamed to `kubesynapse-sdk` for `pip install kubesynapse-sdk`
   - TypeScript SDK renamed to `@kubesynapse/sdk` for `npm install @kubesynapse/sdk`
   - CLI renamed to `kubesynapse-cli` for `pip install kubesynapse-cli`
@@ -378,4 +378,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Helm chart (`charts/kubesynapse/`)
 - CLI tool (`agentctl`) built on Typer + Rich
 - MCP sidecar architecture with 3-tier execution model
-- Pre-built images published to `docker.io/kubesynapse`
+- Pre-built images published to `quay.io/yakdhane/kubesynapse`

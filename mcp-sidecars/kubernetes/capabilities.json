@@ -1,11 +1,11 @@
 {
   "sidecarName": "kubernetes",
-  "version": "1.0.0",
-  "description": "Query Kubernetes resources and read pod logs. Secrets, service accounts, RBAC, and CSR objects are blocked. Writes are not supported.",
+  "version": "1.1.0",
+  "description": "Query Kubernetes resources — list pods with restart counts and OOMKilled state, list events, get logs, describe resources, inspect deployment resource limits.",
   "tools": [
     {
       "name": "list_pods",
-      "description": "List pods and their status in a namespace.",
+      "description": "List pods in a namespace with full status: restarts, phase, age, and OOMKilled/termination info.",
       "parameters": [
         {
           "name": "namespace",
@@ -13,13 +13,48 @@
           "required": false,
           "default": "default",
           "description": "Kubernetes namespace."
+        },
+        {
+          "name": "label_selector",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "Optional label selector (e.g. 'app=checkout-api')."
         }
       ],
-      "returns": "Tabular list of pod names and phases.",
-      "whenToUse": "Use to get a quick overview of pods in a namespace.",
+      "returns": "Tabular list: NAME, READY, STATUS, RESTARTS, AGE, LAST-TERMINATION",
+      "whenToUse": "Use to find crash-looping pods, OOMKilled pods, or pods with high restart counts.",
       "whenNotToUse": "Do not use when you need detailed pod specs or logs.",
       "examples": [
-        "list_pods(namespace='default')"
+        "list_pods(namespace='default')",
+        "list_pods(namespace='default', label_selector='app=checkout-api')"
+      ]
+    },
+    {
+      "name": "list_events",
+      "description": "List Kubernetes events in a namespace, sorted by most recent first.",
+      "parameters": [
+        {
+          "name": "namespace",
+          "type": "string",
+          "required": false,
+          "default": "default",
+          "description": "Kubernetes namespace."
+        },
+        {
+          "name": "field_selector",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "Optional field selector (e.g. 'type=Warning')."
+        }
+      ],
+      "returns": "Tabular list: LAST-SEEN, TYPE, REASON, OBJECT, COUNT, MESSAGE",
+      "whenToUse": "Use to find OOMKilled, CrashLoopBackOff, BackOff, Killing, or FailedScheduling events.",
+      "whenNotToUse": "Do not use for pods in namespaces outside the allowlist.",
+      "examples": [
+        "list_events(namespace='default')",
+        "list_events(namespace='default', field_selector='type=Warning')"
       ]
     },
     {
@@ -54,6 +89,31 @@
       ]
     },
     {
+      "name": "describe_deployment",
+      "description": "Describe a Deployment including container resource requests and limits.",
+      "parameters": [
+        {
+          "name": "namespace",
+          "type": "string",
+          "required": false,
+          "default": "default",
+          "description": "Kubernetes namespace."
+        },
+        {
+          "name": "deployment_name",
+          "type": "string",
+          "required": true,
+          "description": "Name of the Deployment."
+        }
+      ],
+      "returns": "Deployment details including replicas, image, and per-container resource requests/limits.",
+      "whenToUse": "Use to inspect memory/CPU limits when diagnosing OOMKilled pods.",
+      "whenNotToUse": "Do not use for resources outside allowed namespaces.",
+      "examples": [
+        "describe_deployment(namespace='default', deployment_name='checkout-api')"
+      ]
+    },
+    {
       "name": "kubectl_get",
       "description": "Get a summary of Kubernetes resources of a given type.",
       "parameters": [
@@ -80,7 +140,7 @@
       ],
       "returns": "Resource summary or a single resource detail.",
       "whenToUse": "Use to inspect deployments, services, nodes, events, or other safe resource types.",
-      "whenNotToUse": "Do not use for secrets, serviceaccounts, roles, rolebindings, clusterroles, clusterrolebindings, tokenreviews, or certificatesigningrequests.",
+      "whenNotToUse": "Do not use for secrets, serviceaccounts, roles, rolebindings, clusterroles, clusterrolebindings.",
       "examples": [
         "kubectl_get(resource_type='deployments', namespace='default')",
         "kubectl_get(resource_type='nodes', name='node-1')"
@@ -88,7 +148,7 @@
     },
     {
       "name": "kubectl_describe",
-      "description": "Describe a Kubernetes resource in detail.",
+      "description": "Describe a Kubernetes resource in detail — full spec, status, and metadata.",
       "parameters": [
         {
           "name": "resource_type",
@@ -110,7 +170,7 @@
           "description": "Namespace for namespaced resources."
         }
       ],
-      "returns": "Detailed resource description.",
+      "returns": "Detailed resource description with full spec and status.",
       "whenToUse": "Use when you need events, conditions, or full metadata for debugging.",
       "whenNotToUse": "Do not use for blocked resource types or resources outside allowed namespaces.",
       "examples": [
@@ -118,7 +178,7 @@
       ]
     }
   ],
-  "allowedTools": ["list_pods", "get_pod_logs", "kubectl_get", "kubectl_describe"],
+  "allowedTools": ["list_pods", "list_events", "get_pod_logs", "describe_deployment", "kubectl_get", "kubectl_describe"],
   "networkEgress": {
     "domains": [],
     "ips": [],

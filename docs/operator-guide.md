@@ -306,7 +306,7 @@ kubectl logs -n kubesynapse deploy/kubesynapse-operator
 3. **Upgrade the chart:**
 
    ```bash
-   helm upgrade KubeSynapse oci://docker.io/kubesynapse/charts/kubesynapse \
+   helm upgrade KubeSynapse oci://quay.io/yakdhane/charts/kubesynapse \
      -n kubesynapse -f values-production.yaml
    ```
 

@@ -30,13 +30,27 @@ _SECRET_VALUE_RE = re.compile(r"\b(sk-[A-Za-z0-9_\-]{8,}|Bearer\s+[A-Za-z0-9._\-
 _FENCED_BLOCK_RE = re.compile(r"```[^\n\r]*\r?\n(?P<body>.*?)```", re.DOTALL)
 _OPTIMIZER_META_PROMPT_RE = re.compile(
     r"(\[ROI Candidate Guidance\]|\bROI Lab\b|\boptimization stud(?:y|ies)\b|\bcandidate trial\b|"
-    r"\bexpected_metric_delta\b|\bbaseline-vs-candidate\b)",
+    r"\bexpected_metric_delta\b|\bbaseline-vs-candidate\b|"
+    r"\bReconstructed source contract\b|\breconstructed-source\b|"
+    r"\boptimizer_decision_record\b|\broi_hypothesis\b|\bcandidate_manifest_bundle\b|"
+    r"\bcandidate_strategy\b|\bregression_budget\b|\btopology[- ]rewrite\b|"
+    r"\btopology_equivalence_map\b|\bchange_log\b|"
+    r"\bcritical-path-roi\b|\bcontext-compression\b|\btool-economy\b|"
+    r"\bregression-proof-gate\b|\bpromotion[- ]ready\b|"
+    r"\bdo not use todowrite\b|\bdo not use (?:the )?todowrite\b|"
+    r"\bcomplete the task in one pass\b)",
     re.IGNORECASE,
+)
+_OPTIMIZER_INJECTED_TOOL_BAN_RE = re.compile(
+    r"(?im)^\s*important:\s*do not use\s+[a-z][a-z0-9_-]*\.?"
+    r"|^\s*do not use\s+(?:todowrite|the\s+plan(?:ning)?\s+tool)\b"
+    r"|^\s*complete the task in one pass\b",
 )
 _OPTIMIZER_SKILL_NAMES = (
     "critical-path-roi",
     "context-compression",
     "tool-economy",
+    "contract-preservation",
     "topology-rewrite",
     "regression-proof-gate",
 )
@@ -496,7 +510,8 @@ def _opportunities_for_traces(traces: list[dict[str, Any]]) -> list[dict[str, An
             "confidence": "medium" if metrics["sample_count"] >= 5 else "low",
             "metric": "avg_tokens",
             "baseline_value": metrics["avg_tokens"],
-            "affected_steps": top_model.get("affected_steps") or ([heaviest.get("step_name")] if heaviest.get("step_name") else []),
+            "affected_steps": top_model.get("affected_steps")
+            or ([heaviest.get("step_name")] if heaviest.get("step_name") else []),
             "estimated_savings": {"tokens_percent": 12 if metrics["sample_count"] < 5 else 25},
             "evidence": {
                 "step": heaviest.get("step_name"),
@@ -519,7 +534,12 @@ def _opportunities_for_traces(traces: list[dict[str, Any]]) -> list[dict[str, An
             "baseline_value": metrics["avg_tool_calls"],
             "affected_steps": top_tool.get("affected_steps") or [],
             "estimated_savings": {"tool_calls_percent": 15 if int(top_tool.get("repeated_arg_groups") or 0) else 8},
-            "evidence": {"tool": top_tool.get("tool_name"), "count": top_tool.get("calls"), "avg_tool_calls": metrics["avg_tool_calls"], "repeated_arg_groups": top_tool.get("repeated_arg_groups")},
+            "evidence": {
+                "tool": top_tool.get("tool_name"),
+                "count": top_tool.get("calls"),
+                "avg_tool_calls": metrics["avg_tool_calls"],
+                "repeated_arg_groups": top_tool.get("repeated_arg_groups"),
+            },
             "recommendation": "Batch related reads/writes and ask the agent to plan tool use before calling tools.",
             "dataset_use": "Mine repeated tool arguments into reusable workflow prefetch and batching examples.",
             "safe_scope": "tool_instruction_only",
@@ -535,7 +555,10 @@ def _opportunities_for_traces(traces: list[dict[str, Any]]) -> list[dict[str, An
             "baseline_value": metrics["avg_cache_read_tokens"],
             "affected_steps": [step.get("step_name") for step in steps[:3] if step.get("step_name")],
             "estimated_savings": {"tokens_percent": 5},
-            "evidence": {"avg_cache_read_tokens": metrics["avg_cache_read_tokens"], "avg_tokens": metrics["avg_tokens"]},
+            "evidence": {
+                "avg_cache_read_tokens": metrics["avg_cache_read_tokens"],
+                "avg_tokens": metrics["avg_tokens"],
+            },
             "recommendation": "Separate stable instructions, schemas, and examples from volatile run data so providers can reuse cached prefixes.",
             "dataset_use": "Mark stable versus volatile prompt sections for later prompt-cache policy learning.",
             "safe_scope": "prompt_layout_only",
@@ -546,7 +569,11 @@ def _opportunities_for_traces(traces: list[dict[str, Any]]) -> list[dict[str, An
             "severity": "high" if metrics["success_rate"] < 1 else "low",
             "title": "Hybrid proof gate",
             "impact_score": 40 if metrics["success_rate"] >= 1 else 70,
-            "confidence": "high" if metrics["sample_count"] >= 10 else "medium" if metrics["sample_count"] >= 5 else "low",
+            "confidence": "high"
+            if metrics["sample_count"] >= 10
+            else "medium"
+            if metrics["sample_count"] >= 5
+            else "low",
             "metric": "success_rate",
             "baseline_value": metrics["success_rate"],
             "affected_steps": [step.get("step_name") for step in steps if step.get("step_name")],
@@ -574,7 +601,11 @@ def _trajectory_diagnostics(traces: list[dict[str, Any]]) -> list[dict[str, Any]
                 "id": "repeated_tool_arguments",
                 "severity": "high" if int(top.get("repeated_arg_groups") or 0) > 2 else "medium",
                 "title": "Repeated tool arguments",
-                "evidence": {"tool": top.get("tool_name"), "calls": top.get("calls"), "repeated_arg_groups": top.get("repeated_arg_groups")},
+                "evidence": {
+                    "tool": top.get("tool_name"),
+                    "calls": top.get("calls"),
+                    "repeated_arg_groups": top.get("repeated_arg_groups"),
+                },
                 "affected_steps": top.get("affected_steps") or [],
                 "optimizer_hint": "Batch identical reads and convert repeated writes into a single structured artifact update.",
             }
@@ -584,9 +615,15 @@ def _trajectory_diagnostics(traces: list[dict[str, Any]]) -> list[dict[str, Any]
         diagnostics.append(
             {
                 "id": "expensive_step",
-                "severity": "high" if float(slow.get("avg_duration_ms") or 0) > metrics["avg_duration_ms"] else "medium",
+                "severity": "high"
+                if float(slow.get("avg_duration_ms") or 0) > metrics["avg_duration_ms"]
+                else "medium",
                 "title": "Dominant wall-clock step",
-                "evidence": {"step": slow.get("step_name"), "avg_duration_ms": slow.get("avg_duration_ms"), "avg_tokens": slow.get("avg_tokens")},
+                "evidence": {
+                    "step": slow.get("step_name"),
+                    "avg_duration_ms": slow.get("avg_duration_ms"),
+                    "avg_tokens": slow.get("avg_tokens"),
+                },
                 "affected_steps": [slow.get("step_name")],
                 "optimizer_hint": "Start candidate work here; do not optimize cheap steps before the dominant bottleneck.",
             }
@@ -597,7 +634,11 @@ def _trajectory_diagnostics(traces: list[dict[str, Any]]) -> list[dict[str, Any]
                 "id": "single_model_route",
                 "severity": "medium",
                 "title": "No model routing observed",
-                "evidence": {"model": models[0].get("model"), "calls": models[0].get("calls"), "tokens": models[0].get("tokens")},
+                "evidence": {
+                    "model": models[0].get("model"),
+                    "calls": models[0].get("calls"),
+                    "tokens": models[0].get("tokens"),
+                },
                 "affected_steps": models[0].get("affected_steps") or [],
                 "optimizer_hint": "Evaluate deterministic or summarization-heavy steps on cheaper routed models before touching workflow topology.",
             }
@@ -608,7 +649,10 @@ def _trajectory_diagnostics(traces: list[dict[str, Any]]) -> list[dict[str, Any]
                 "id": "no_cache_reuse",
                 "severity": "medium",
                 "title": "No prompt-cache reuse",
-                "evidence": {"avg_cache_read_tokens": metrics["avg_cache_read_tokens"], "avg_tokens": metrics["avg_tokens"]},
+                "evidence": {
+                    "avg_cache_read_tokens": metrics["avg_cache_read_tokens"],
+                    "avg_tokens": metrics["avg_tokens"],
+                },
                 "affected_steps": [step.get("step_name") for step in steps[:3] if step.get("step_name")],
                 "optimizer_hint": "Move stable policies, schemas, and examples ahead of volatile run data to improve prefix-cache hit potential.",
             }
@@ -618,8 +662,12 @@ def _trajectory_diagnostics(traces: list[dict[str, Any]]) -> list[dict[str, Any]
 
 def _dataset_readiness(traces: list[dict[str, Any]], source_manifests: dict[str, Any]) -> dict[str, Any]:
     metrics = _aggregate_metrics(traces)
-    llm_examples = sum(len([call for call in trace.get("llm_calls") or [] if isinstance(call, dict)]) for trace in traces)
-    tool_examples = sum(len([call for call in trace.get("tool_calls") or [] if isinstance(call, dict)]) for trace in traces)
+    llm_examples = sum(
+        len([call for call in trace.get("llm_calls") or [] if isinstance(call, dict)]) for trace in traces
+    )
+    tool_examples = sum(
+        len([call for call in trace.get("tool_calls") or [] if isinstance(call, dict)]) for trace in traces
+    )
     step_examples = sum(len([step for step in trace.get("steps") or [] if isinstance(step, dict)]) for trace in traces)
     if metrics["sample_count"] < 5:
         state = "needs_more_samples"
@@ -638,7 +686,8 @@ def _dataset_readiness(traces: list[dict[str, Any]], source_manifests: dict[str,
         "llm_examples": llm_examples,
         "tool_examples": tool_examples,
         "step_examples": step_examples,
-        "manifest_snapshots": 1 + len(source_manifests.get("agents", {}) if isinstance(source_manifests.get("agents"), dict) else {}),
+        "manifest_snapshots": 1
+        + len(source_manifests.get("agents", {}) if isinstance(source_manifests.get("agents"), dict) else {}),
         "workflow_steps": len(steps) if isinstance(steps, list) else 0,
         "redaction_required": True,
         "labels": ["workflow", "step", "agent", "model", "tool", "quality", "contract", "cost", "latency"],
@@ -650,7 +699,11 @@ def _dataset_readiness(traces: list[dict[str, Any]], source_manifests: dict[str,
             "regression_cases": max(1, int(metrics["sample_count"] * 0.2)) if metrics["sample_count"] else 0,
         },
         "local_model_path": {
-            "suitability": "candidate" if state == "candidate" else "needs_more_review" if state == "ready_for_replay" else "needs_more_examples",
+            "suitability": "candidate"
+            if state == "candidate"
+            else "needs_more_review"
+            if state == "ready_for_replay"
+            else "needs_more_examples",
             "next_step": "collect at least 20 reviewed LLM examples per high-value workflow before tenant-local tuning",
             "target": "tenant-local evaluator or routing model before optimizer fine-tuning",
         },
@@ -722,11 +775,12 @@ def _proof_gate_for_study(baseline_metrics: dict[str, Any], intelligence: dict[s
 
 def _expose_optimizer_intelligence(study: dict[str, Any]) -> dict[str, Any]:
     proof_gate = study.get("proof_gate") if isinstance(study.get("proof_gate"), dict) else {}
-    intelligence = proof_gate.get("optimizer_intelligence") if isinstance(proof_gate.get("optimizer_intelligence"), dict) else None
+    intelligence = (
+        proof_gate.get("optimizer_intelligence") if isinstance(proof_gate.get("optimizer_intelligence"), dict) else None
+    )
     if intelligence is not None:
         study["optimizer_intelligence"] = intelligence
     return study
-
 
 
 def _extract_agent_refs(workflow_manifest: dict[str, Any]) -> list[str]:
@@ -784,21 +838,27 @@ def _reconstructed_source_agent(
         for step in steps
         if str(step.get("prompt") or "").strip()
     )
+    # Keep the agent systemPrompt a minimal behavioral identity. The
+    # reconstruction preamble and per-run step data live in annotations only —
+    # never in the systemPrompt — so optimizer copies do not inherit optimizer
+    # meta text and do not conflate per-run input data with agent identity.
     system_prompt = (
-        "Reconstructed source contract for an AIAgent manifest that was not available in the cluster. "
-        "Preserve the behavior expressed by the workflow step prompts and baseline traces.\n\n"
-        f"{step_contract or 'No step prompt was available; preserve the baseline workflow behavior from traces.'}"
+        "You are a workflow agent. Follow the step prompt provided at runtime exactly. "
+        "Produce the required output artifacts to the declared workspace paths."
     )
+    annotations: dict[str, str] = {
+        "kubesynapse.ai/reconstructed-source": "true",
+        "kubesynapse.ai/reconstruction-source": "workflow-step-prompts-and-baseline-traces",
+    }
+    if step_contract:
+        annotations["kubesynapse.ai/reconstructed-step-contract"] = step_contract[:8192]
     return {
         "apiVersion": "kubesynapse.ai/v1alpha1",
         "kind": "AIAgent",
         "metadata": {
             "name": agent_ref,
             "namespace": namespace,
-            "annotations": {
-                "kubesynapse.ai/reconstructed-source": "true",
-                "kubesynapse.ai/reconstruction-source": "workflow-step-prompts-and-baseline-traces",
-            },
+            "annotations": annotations,
         },
         "spec": {
             "model": model,
@@ -833,7 +893,11 @@ def _load_source_manifests(
         provided_agents = provided.get("agents") if isinstance(provided.get("agents"), dict) else {}
         agent_refs = [
             str(item).strip()
-            for item in (provided.get("agent_refs") if isinstance(provided.get("agent_refs"), list) else _extract_agent_refs(workflow))
+            for item in (
+                provided.get("agent_refs")
+                if isinstance(provided.get("agent_refs"), list)
+                else _extract_agent_refs(workflow)
+            )
             if str(item).strip()
         ]
         if not agent_refs:
@@ -857,9 +921,13 @@ def _load_source_manifests(
                         "reconstructed a limited source contract from workflow step prompts and baseline traces"
                     )
             if str(manifest.get("kind") or "") != "AIAgent":
-                raise HTTPException(status_code=422, detail=f"source agent manifest for '{agent_ref}' must be an AIAgent")
+                raise HTTPException(
+                    status_code=422, detail=f"source agent manifest for '{agent_ref}' must be an AIAgent"
+                )
             if _manifest_namespace(manifest) != namespace:
-                raise HTTPException(status_code=422, detail=f"source agent manifest for '{agent_ref}' must stay in the study namespace")
+                raise HTTPException(
+                    status_code=422, detail=f"source agent manifest for '{agent_ref}' must stay in the study namespace"
+                )
             agents[agent_ref] = _clone(manifest)
 
         return {"workflow": _clone(workflow), "agent_refs": agent_refs, "agents": agents, "warnings": warnings}
@@ -926,7 +994,9 @@ def _spec_model(manifest: dict[str, Any] | None) -> str | None:
     return str(model).strip() if model is not None and str(model).strip() else None
 
 
-def _candidate_agent_ref_map(source_workflow: dict[str, Any] | None, candidate_workflow: dict[str, Any] | None) -> dict[str, str]:
+def _candidate_agent_ref_map(
+    source_workflow: dict[str, Any] | None, candidate_workflow: dict[str, Any] | None
+) -> dict[str, str]:
     source_steps = _workflow_steps(source_workflow)
     candidate_steps = _workflow_steps(candidate_workflow)
     refs: dict[str, str] = {}
@@ -944,7 +1014,9 @@ def _collect_sensitive_markers(value: Any, *, path: str = "") -> set[str]:
         for key, nested in value.items():
             key_text = str(key)
             normalized_path = f"{path}.{key_text}" if path else key_text
-            if key_text in {"env", "envFrom", "valueFrom", "secretKeyRef", "secretRef"} or _SENSITIVE_KEY_RE.search(key_text):
+            if key_text in {"env", "envFrom", "valueFrom", "secretKeyRef", "secretRef"} or _SENSITIVE_KEY_RE.search(
+                key_text
+            ):
                 markers.add(normalized_path)
             markers.update(_collect_sensitive_markers(nested, path=normalized_path))
     elif isinstance(value, list):
@@ -999,7 +1071,11 @@ def _candidate_effective_changes(study: dict[str, Any], bundle: list[dict[str, A
         "AgentWorkflow.spec",
     )
     changes.extend(workflow_paths)
-    if source_workflow and candidate_workflow and _step_signature(source_workflow) != _step_signature(candidate_workflow):
+    if (
+        source_workflow
+        and candidate_workflow
+        and _step_signature(source_workflow) != _step_signature(candidate_workflow)
+    ):
         changes.append("AgentWorkflow.topology")
 
     source_agents = source.get("agents") if isinstance(source.get("agents"), dict) else {}
@@ -1009,7 +1085,9 @@ def _candidate_effective_changes(study: dict[str, Any], bundle: list[dict[str, A
         if isinstance(manifest, dict) and str(manifest.get("kind") or "") == "AIAgent"
     }
     mapped_candidate_names = set()
-    for source_agent_name, candidate_agent_name in _candidate_agent_ref_map(source_workflow, candidate_workflow).items():
+    for source_agent_name, candidate_agent_name in _candidate_agent_ref_map(
+        source_workflow, candidate_workflow
+    ).items():
         source_agent = source_agents.get(source_agent_name) if isinstance(source_agents, dict) else None
         candidate_agent = candidate_agents.get(candidate_agent_name)
         if candidate_agent:
@@ -1021,7 +1099,11 @@ def _candidate_effective_changes(study: dict[str, Any], bundle: list[dict[str, A
         )
         changes.extend(agent_paths)
 
-    if source_workflow and candidate_workflow and _step_signature(source_workflow) != _step_signature(candidate_workflow):
+    if (
+        source_workflow
+        and candidate_workflow
+        and _step_signature(source_workflow) != _step_signature(candidate_workflow)
+    ):
         for candidate_agent_name in sorted(set(candidate_agents) - mapped_candidate_names):
             changes.append(f"AIAgent.{candidate_agent_name}.topology_agent")
 
@@ -1033,6 +1115,298 @@ def _candidate_effective_changes(study: dict[str, Any], bundle: list[dict[str, A
         seen.add(change)
         deduped.append(change)
     return deduped
+
+
+# ---------------------------------------------------------------------------
+# Step contract inference + preservation validation (generalizable).
+#
+# The optimizer must not silently drop output paths, break inter-step handoff
+# contracts, strip input data from step prompts, or introduce cross-step file
+# reads that the runtime cannot satisfy. Rather than scrape prompts with a
+# narrow regex, we infer a structural contract from each step and validate
+# candidate parity against it. This works for any AgentWorkflow, not only the
+# standup demo.
+# ---------------------------------------------------------------------------
+
+_WORKSPACE_PATH_RE = re.compile(r"(/workspace/[A-Za-z0-9_./$\{\}\-]+)")
+_WRITE_VERB_RE = re.compile(
+    r"(?im)^\s*(?:[-*]\s+)?(?:write|output|save|store|emit|produce|append)\b.*?(?P<path>/workspace/[A-Za-z0-9_./$\{\}\-]+)",
+)
+_READ_VERB_RE = re.compile(
+    r"(?im)^\s*(?:[-*]\s+)?(?:read|load|parse|open|import)\b.*?(?P<path>/workspace/[A-Za-z0-9_./$\{\}\-]+)",
+)
+_EMBEDDED_HANDOFF_MARKERS = (
+    "{{previous_output}}",
+    "[FILE_CONTENT]",
+    "[/FILE_CONTENT]",
+    "[Previous Step Output]",
+    "[PreviousStepOutput]",
+)
+_DATA_ANCHOR_RE = re.compile(
+    r"(?im)^(?P<anchor>##\s+.*?(?:data|log|sprint|input|context|source|provided|jira|git).*?[:\n])",
+)
+# Detects empty placeholders the optimizer inserts when it strips real inline
+# data: "[Git log data follows]", "[Jira data follows, schema inline]", etc.
+_DATA_PLACEHOLDER_RE = re.compile(
+    r"(?i)\[(?:[a-z][a-z0-9 _-]*\s+)?data(?:\s+(?:follows|inline|below|provided))?[^\]]*\]"
+    r"|\[git log data[^\]]*\]|\[jira data[^\]]*\]|\[input data[^\]]*\]",
+)
+_IN_MEMORY_BUS_VALUES = {"in-memory", "inmemory", "memory"}
+
+
+def _message_bus(workflow: dict[str, Any] | None) -> str:
+    if workflow is None:
+        return ""
+    spec = workflow.get("spec") if isinstance(workflow.get("spec"), dict) else {}
+    return str(spec.get("messageBus") or "").strip().lower()
+
+
+def _infer_step_contract(step: dict[str, Any], workflow: dict[str, Any] | None) -> dict[str, Any]:
+    """Infer a structural contract from a single step prompt.
+
+    Generalizable: extracts output paths, read paths, handoff mode, data
+    anchors, and embedded-handoff markers without hard-coding any workflow.
+    """
+    prompt = str(step.get("prompt") or "")
+    name = str(step.get("name") or "")
+    depends_on = step.get("dependsOn") if isinstance(step.get("dependsOn"), list) else []
+
+    write_paths: list[str] = []
+    seen: set[str] = set()
+    for match in _WRITE_VERB_RE.finditer(prompt):
+        path = match.group("path")
+        if path not in seen:
+            seen.add(path)
+            write_paths.append(path)
+    for match in _WORKSPACE_PATH_RE.finditer(prompt):
+        path = match.group(0)
+        if path not in seen and re.search(r"\b(?:to|into|at|file[: ])\s*" + re.escape(path), prompt, re.IGNORECASE):
+            seen.add(path)
+            write_paths.append(path)
+
+    read_paths: list[str] = []
+    write_set = set(write_paths)
+    for match in _READ_VERB_RE.finditer(prompt):
+        path = match.group("path")
+        if path and path not in write_set and path not in read_paths:
+            read_paths.append(path)
+
+    embedded_markers = [marker for marker in _EMBEDDED_HANDOFF_MARKERS if marker in prompt]
+    if embedded_markers:
+        handoff_mode = "embedded"
+    elif read_paths:
+        handoff_mode = "file"
+    else:
+        handoff_mode = "none"
+
+    data_anchors: list[str] = []
+    for match in _DATA_ANCHOR_RE.finditer(prompt):
+        anchor = match.group("anchor").strip().rstrip(":\n").strip()
+        if anchor and anchor not in data_anchors:
+            data_anchors.append(anchor)
+
+    # Inline data is present when the prompt carries substantive content beyond
+    # instructions: multiple non-empty lines that are not just headers/markers.
+    non_empty_lines = [ln for ln in prompt.splitlines() if ln.strip()]
+    data_content_lines = [
+        ln for ln in non_empty_lines if not ln.strip().startswith(("#", "##", "-", "*", "IMPORTANT:", "Write", "Read"))
+    ]
+    has_inline_data = len(data_content_lines) >= 2 or len(prompt.strip()) > 120
+    data_placeholders = [m.group(0) for m in _DATA_PLACEHOLDER_RE.finditer(prompt)]
+
+    return {
+        "step_name": name,
+        "write_paths": write_paths,
+        "read_paths": read_paths,
+        "handoff_mode": handoff_mode,
+        "embedded_markers": embedded_markers,
+        "data_anchors": data_anchors,
+        "data_placeholders": data_placeholders,
+        "has_inline_data": has_inline_data,
+        "depends_on": [str(d) for d in depends_on],
+    }
+
+
+def _workflow_contract(workflow: dict[str, Any] | None) -> dict[str, Any]:
+    """Build a cross-step data-flow contract for a workflow."""
+    steps = _workflow_steps(workflow)
+    contracts = {c["step_name"]: c for c in (_infer_step_contract(s, workflow) for s in steps) if c["step_name"]}
+    all_writes: set[str] = set()
+    for contract in contracts.values():
+        all_writes.update(contract["write_paths"])
+    bus = _message_bus(workflow)
+    in_memory = bus in _IN_MEMORY_BUS_VALUES
+    # A read is satisfiable only if an upstream step (transitive) writes it,
+    # or the workflow uses a shared filesystem (non-in-memory bus).
+    return {
+        "steps": contracts,
+        "step_order": [str(s.get("name") or "") for s in steps],
+        "message_bus": bus,
+        "in_memory_bus": in_memory,
+        "all_writes": sorted(all_writes),
+    }
+
+
+def _upstream_writes(contract: dict[str, Any], step_name: str) -> set[str]:
+    """Collect write paths from all transitive upstream steps of ``step_name``."""
+    steps = contract["steps"]
+    order = contract["step_order"]
+    if step_name not in order:
+        return set()
+    idx = order.index(step_name)
+    writes: set[str] = set()
+    for earlier_name in order[:idx]:
+        earlier = steps.get(earlier_name)
+        if earlier:
+            writes.update(earlier["write_paths"])
+    return writes
+
+
+def _validate_contract_preservation(
+    source_workflow: dict[str, Any] | None,
+    candidate_workflow: dict[str, Any] | None,
+    *,
+    allow_topology_rewrite: bool = False,
+) -> list[dict[str, Any]]:
+    """Compare source and candidate contracts; return violations.
+
+    Each violation is ``{"severity": "error"|"warning", "step": str, "code": str, "message": str}``.
+    Generalizable: no workflow-specific assumptions.
+    """
+    violations: list[dict[str, Any]] = []
+    source = _workflow_contract(source_workflow)
+    candidate = _workflow_contract(candidate_workflow)
+    source_steps = source["steps"]
+    candidate_steps = candidate["steps"]
+
+    for name, src_contract in source_steps.items():
+        cand_contract = candidate_steps.get(name)
+        if cand_contract is None:
+            if not allow_topology_rewrite:
+                violations.append(
+                    {
+                        "severity": "error",
+                        "step": name,
+                        "code": "missing_step",
+                        "message": f"candidate is missing step '{name}' present in the source workflow",
+                    }
+                )
+            continue
+
+        # 1. Output-path preservation: every source write path must still be written.
+        for path in src_contract["write_paths"]:
+            if path not in cand_contract["write_paths"]:
+                violations.append(
+                    {
+                        "severity": "error",
+                        "step": name,
+                        "code": "dropped_output_path",
+                        "message": f"candidate step '{name}' no longer writes '{path}'; the source output contract is broken",
+                    }
+                )
+
+        # 2. Handoff-mode preservation: embedded handoff must stay embedded
+        #    (or be replaced by a file handoff only when the bus supports it).
+        if src_contract["handoff_mode"] == "embedded" and cand_contract["handoff_mode"] != "embedded":
+            if candidate["in_memory_bus"]:
+                violations.append(
+                    {
+                        "severity": "error",
+                        "step": name,
+                        "code": "handoff_mode_broken",
+                        "message": (
+                            f"candidate step '{name}' switched from embedded handoff to '{cand_contract['handoff_mode']}' "
+                            "but the workflow uses an in-memory message bus with no shared filesystem; "
+                            "downstream steps will not receive upstream outputs"
+                        ),
+                    }
+                )
+            else:
+                violations.append(
+                    {
+                        "severity": "warning",
+                        "step": name,
+                        "code": "handoff_mode_changed",
+                        "message": f"candidate step '{name}' changed handoff from embedded to '{cand_contract['handoff_mode']}'",
+                    }
+                )
+
+        # 3. Embedded-handoff marker preservation.
+        for marker in src_contract["embedded_markers"]:
+            if marker not in cand_contract["embedded_markers"] and src_contract["handoff_mode"] == "embedded":
+                violations.append(
+                    {
+                        "severity": "error",
+                        "step": name,
+                        "code": "dropped_handoff_marker",
+                        "message": f"candidate step '{name}' dropped required handoff marker '{marker}'",
+                    }
+                )
+
+        # 4. Inline-data preservation: if the source step carried inline input
+        #    data, the candidate must not strip it or replace it with empty
+        #    placeholders. Two signals: (a) candidate lost inline data the source
+        #    had, or (b) candidate introduced a data placeholder absent from source.
+        if not allow_topology_rewrite:
+            src_has_data = src_contract["has_inline_data"]
+            cand_has_data = cand_contract["has_inline_data"]
+            src_placeholders = set(src_contract.get("data_placeholders", []))
+            cand_placeholders = set(cand_contract.get("data_placeholders", []))
+            new_placeholders = cand_placeholders - src_placeholders
+            if src_has_data and not cand_has_data:
+                violations.append(
+                    {
+                        "severity": "error",
+                        "step": name,
+                        "code": "stripped_inline_data",
+                        "message": (
+                            f"candidate step '{name}' appears to have stripped inline input data that the source step carried; "
+                            "moving input data out of step prompts breaks the runtime contract"
+                        ),
+                    }
+                )
+            if new_placeholders:
+                violations.append(
+                    {
+                        "severity": "error",
+                        "step": name,
+                        "code": "data_placeholder_substitution",
+                        "message": (
+                            f"candidate step '{name}' replaced real inline data with empty placeholder(s) "
+                            f"{sorted(new_placeholders)}; the runtime injects the step prompt per-run so the data must stay inline"
+                        ),
+                    }
+                )
+
+    # 5. Cross-step file-read safety: a candidate step may not read a
+    #    /workspace path that no upstream step writes when the bus is in-memory.
+    for name, cand_contract in candidate_steps.items():
+        for path in cand_contract["read_paths"]:
+            upstream = _upstream_writes(candidate, name)
+            if path not in upstream and path not in candidate["all_writes"]:
+                if candidate["in_memory_bus"]:
+                    violations.append(
+                        {
+                            "severity": "error",
+                            "step": name,
+                            "code": "unsatisfiable_read",
+                            "message": (
+                                f"candidate step '{name}' reads '{path}' but no upstream step writes it and the "
+                                "in-memory message bus does not share a filesystem across step pods"
+                            ),
+                        }
+                    )
+                else:
+                    violations.append(
+                        {
+                            "severity": "warning",
+                            "step": name,
+                            "code": "external_read",
+                            "message": f"candidate step '{name}' reads '{path}' which is not produced by an upstream step",
+                        }
+                    )
+
+    return violations
 
 
 def _candidate_optimizer_meta_noise(bundle: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -1049,11 +1423,55 @@ def _candidate_optimizer_meta_noise(bundle: list[dict[str, Any]]) -> list[dict[s
                     continue
                 prompt = str(step.get("prompt") or "")
                 if _OPTIMIZER_META_PROMPT_RE.search(prompt):
-                    noise.append({"resource": resource, "path": f"spec.steps[{index}].prompt"})
+                    noise.append({"resource": resource, "path": f"spec.steps[{index}].prompt", "kind": "meta_regex"})
+                if _OPTIMIZER_INJECTED_TOOL_BAN_RE.search(prompt):
+                    noise.append(
+                        {"resource": resource, "path": f"spec.steps[{index}].prompt", "kind": "injected_tool_ban"}
+                    )
         elif kind == "AIAgent":
             system_prompt = str(spec.get("systemPrompt") or "")
             if _OPTIMIZER_META_PROMPT_RE.search(system_prompt):
-                noise.append({"resource": resource, "path": "spec.systemPrompt"})
+                noise.append({"resource": resource, "path": "spec.systemPrompt", "kind": "meta_regex"})
+            if _OPTIMIZER_INJECTED_TOOL_BAN_RE.search(system_prompt):
+                noise.append({"resource": resource, "path": "spec.systemPrompt", "kind": "injected_tool_ban"})
+    return noise
+
+
+def _candidate_injected_instruction_noise(
+    source_workflow: dict[str, Any] | None,
+    candidate_workflow: dict[str, Any] | None,
+) -> list[dict[str, str]]:
+    """Detect optimizer-injected instructions absent from the source prompt.
+
+    Catches behavioral injections (tool bans, one-pass directives, optimizer
+    framing) that the regex denylist might miss, by diffing candidate prompt
+    lines against the source prompt for the same step.
+    """
+    if source_workflow is None or candidate_workflow is None:
+        return []
+    source_steps = {str(s.get("name") or ""): s for s in _workflow_steps(source_workflow) if isinstance(s, dict)}
+    noise: list[dict[str, str]] = []
+    candidate_wf_name = _manifest_name(candidate_workflow)
+    for index, cand_step in enumerate(_workflow_steps(candidate_workflow)):
+        name = str(cand_step.get("name") or "")
+        src_step = source_steps.get(name)
+        if not src_step:
+            continue
+        src_prompt = str(src_step.get("prompt") or "")
+        cand_prompt = str(cand_step.get("prompt") or "")
+        for cand_line in cand_prompt.splitlines():
+            stripped = cand_line.strip()
+            if not stripped or stripped in src_prompt:
+                continue
+            if _OPTIMIZER_INJECTED_TOOL_BAN_RE.search(stripped) or _OPTIMIZER_META_PROMPT_RE.search(stripped):
+                noise.append(
+                    {
+                        "resource": f"AgentWorkflow/{candidate_wf_name}",
+                        "path": f"spec.steps[{index}].prompt",
+                        "kind": "injected_line",
+                        "line": stripped[:120],
+                    }
+                )
     return noise
 
 
@@ -1099,20 +1517,20 @@ def _validate_candidate_bundle(
         for manifest in bundle
         if isinstance(manifest, dict) and str(manifest.get("kind") or "") == "AIAgent"
     }
-    source_models = {
-        model
-        for model in (_spec_model(agent) for agent in source_agents.values())
-        if model
-    } if isinstance(source_agents, dict) else set()
-    for source_agent_name, candidate_agent_name in _candidate_agent_ref_map(source_workflow, candidate_workflow).items():
+    source_models = (
+        {model for model in (_spec_model(agent) for agent in source_agents.values()) if model}
+        if isinstance(source_agents, dict)
+        else set()
+    )
+    for source_agent_name, candidate_agent_name in _candidate_agent_ref_map(
+        source_workflow, candidate_workflow
+    ).items():
         source_agent = source_agents.get(source_agent_name) if isinstance(source_agents, dict) else None
         candidate_agent = candidate_agents.get(candidate_agent_name)
         source_model = _spec_model(source_agent)
         candidate_model = _spec_model(candidate_agent)
         if source_model and candidate_model and source_model != candidate_model:
-            errors.append(
-                f"candidate agent '{candidate_agent_name}' must preserve source model '{source_model}' in v1"
-            )
+            errors.append(f"candidate agent '{candidate_agent_name}' must preserve source model '{source_model}' in v1")
     if allow_topology_rewrite and source_models:
         for candidate_agent_name, candidate_agent in candidate_agents.items():
             candidate_model = _spec_model(candidate_agent)
@@ -1145,9 +1563,26 @@ def _validate_candidate_bundle(
         errors.append("secret/env expansion is not allowed in v1 candidates")
 
     optimizer_meta_noise = _candidate_optimizer_meta_noise(bundle)
-    if optimizer_meta_noise:
-        locations = ", ".join(f"{item['resource']}:{item['path']}" for item in optimizer_meta_noise[:6])
+    injected_noise = _candidate_injected_instruction_noise(source_workflow, candidate_workflow)
+    all_meta_noise = [*optimizer_meta_noise, *injected_noise]
+    if all_meta_noise:
+        locations = ", ".join(
+            f"{item['resource']}:{item['path']}({item.get('kind', 'meta')})" for item in all_meta_noise[:6]
+        )
         errors.append(f"candidate prompts must not include optimizer/ROI Lab meta instructions ({locations})")
+
+    contract_violations: list[dict[str, Any]] = []
+    if source_workflow is not None and candidate_workflow is not None:
+        contract_violations = _validate_contract_preservation(
+            source_workflow,
+            candidate_workflow,
+            allow_topology_rewrite=allow_topology_rewrite,
+        )
+        for violation in contract_violations:
+            if violation.get("severity") == "error":
+                errors.append(f"contract violation [{violation['code']}] {violation['message']}")
+            else:
+                validation_warnings.append(f"contract warning [{violation['code']}] {violation['message']}")
 
     effective_changes = _candidate_effective_changes(study, bundle)
     if not effective_changes:
@@ -1165,7 +1600,8 @@ def _validate_candidate_bundle(
         "effective_change_count": len(effective_changes),
         "effective_changes": effective_changes[:80],
         "no_effective_changes": not bool(effective_changes),
-        "optimizer_meta_noise": optimizer_meta_noise,
+        "optimizer_meta_noise": all_meta_noise,
+        "contract_violations": contract_violations,
         "hybrid_gate": (
             "candidate requires approval, safe trials, human contract review, and output-equivalence checks before promotion"
             if allow_topology_rewrite
@@ -1391,7 +1827,9 @@ def _build_optimizer_audit(
     candidate_workflow = _workflow_from_bundle(bundle)
     source_signature = _step_signature(source_workflow) if source_workflow else []
     candidate_signature = _step_signature(candidate_workflow) if candidate_workflow else []
-    topology_rewrite_produced = bool(source_signature and candidate_signature and source_signature != candidate_signature)
+    topology_rewrite_produced = bool(
+        source_signature and candidate_signature and source_signature != candidate_signature
+    )
     topology_decision = (
         "rewritten"
         if topology_rewrite_produced
@@ -1423,13 +1861,16 @@ def _build_optimizer_audit(
         "roi_hypothesis": "roi_hypothesis" in lower_output and "expected_metric_delta" in lower_output,
         "change_log": "change_log" in lower_output or "| resource | path |" in lower_output,
         "candidate_manifest_bundle": bool(parsed_documents),
-        "topology_equivalence_map": "topology_equivalence_map" in lower_output or "topology equivalence" in lower_output,
+        "topology_equivalence_map": "topology_equivalence_map" in lower_output
+        or "topology equivalence" in lower_output,
     }
 
     output_excerpt = _redact_optimizer_text(optimizer_output, max_length=5000)
-    requested_skills = list(_OPTIMIZER_SKILL_NAMES) if allow_topology_rewrite else [
-        skill for skill in _OPTIMIZER_SKILL_NAMES if skill != "topology-rewrite"
-    ]
+    requested_skills = (
+        list(_OPTIMIZER_SKILL_NAMES)
+        if allow_topology_rewrite
+        else [skill for skill in _OPTIMIZER_SKILL_NAMES if skill != "topology-rewrite"]
+    )
     if allow_topology_rewrite:
         topology_reason = (
             "Optimizer produced a topology-changing candidate; inspect equivalence map and trial gate before approval."
@@ -1437,7 +1878,9 @@ def _build_optimizer_audit(
             else "Topology rewrite was allowed, but the generated candidate preserved the source step graph. Review the visible decision record to confirm why consolidation was rejected or retry with stronger evidence."
         )
     else:
-        topology_reason = "Topology rewrite was disabled for this study, so the candidate must preserve the source step graph."
+        topology_reason = (
+            "Topology rewrite was disabled for this study, so the candidate must preserve the source step graph."
+        )
 
     return {
         "summary": (
@@ -1573,7 +2016,9 @@ def _candidate_bundle_from_source(
     return bundle
 
 
-def _candidate_step_execution_overrides(source_step: dict[str, Any], candidate_step: dict[str, Any]) -> dict[str, Any] | None:
+def _candidate_step_execution_overrides(
+    source_step: dict[str, Any], candidate_step: dict[str, Any]
+) -> dict[str, Any] | None:
     source_execution = source_step.get("execution") if isinstance(source_step.get("execution"), dict) else {}
     candidate_execution = candidate_step.get("execution") if isinstance(candidate_step.get("execution"), dict) else {}
     if not candidate_execution:
@@ -1584,6 +2029,26 @@ def _candidate_step_execution_overrides(source_step: dict[str, Any], candidate_s
     if isinstance(timeout_seconds, int) and timeout_seconds > 0:
         execution["timeoutSeconds"] = timeout_seconds
     return execution or None
+
+
+def _sanitize_candidate_prompt(prompt: str) -> str:
+    """Strip optimizer-injected instructions from a candidate step prompt.
+
+    Removes tool-ban lines, optimizer framing, and one-pass directives that the
+    optimizer may have inserted. Generalizable — operates on line patterns, not
+    workflow-specific text.
+    """
+    if not prompt:
+        return prompt
+    cleaned_lines: list[str] = []
+    for line in prompt.splitlines():
+        stripped = line.strip()
+        if _OPTIMIZER_INJECTED_TOOL_BAN_RE.search(stripped):
+            continue
+        if _OPTIMIZER_META_PROMPT_RE.search(stripped):
+            continue
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines).strip()
 
 
 def _normalise_candidate_workflow_contract(
@@ -1610,6 +2075,7 @@ def _normalise_candidate_workflow_contract(
             "Optimizer workflow topology was repaired from the source manifest; step names, order, and types were preserved."
         )
 
+    source_contract = _workflow_contract(source_workflow)
     repaired_spec = _clone(source_spec)
     repaired_steps: list[dict[str, Any]] = []
     for source_step in _workflow_steps(source_workflow):
@@ -1622,7 +2088,25 @@ def _normalise_candidate_workflow_contract(
         if candidate_step:
             candidate_prompt = str(candidate_step.get("prompt") or "").strip()
             if candidate_prompt:
-                repaired_step["prompt"] = candidate_step["prompt"]
+                sanitized = _sanitize_candidate_prompt(candidate_prompt)
+                src_contract = source_contract["steps"].get(signature[0])
+                # Re-inject output-path and handoff-marker instructions that the
+                # optimizer may have dropped. Generalizable: only re-inject
+                # structural tokens the source step declared.
+                if src_contract:
+                    src_prompt = str(source_step.get("prompt") or "")
+                    for marker in src_contract["embedded_markers"]:
+                        if marker not in sanitized and marker in src_prompt:
+                            warnings.append(
+                                f"Re-injected missing handoff marker '{marker}' into step '{signature[0]}'."
+                            )
+                            sanitized = f"{sanitized}\n\n{marker}"
+                    for path in src_contract["write_paths"]:
+                        if path not in sanitized and "/workspace/" in src_prompt:
+                            warnings.append(
+                                f"Re-injected missing output path '{path}' into step '{signature[0]}' prompt."
+                            )
+                repaired_step["prompt"] = sanitized or candidate_prompt
             execution = _candidate_step_execution_overrides(source_step, candidate_step)
             if execution is not None:
                 repaired_step["execution"] = execution
@@ -1693,7 +2177,9 @@ def _candidate_bundle_from_optimizer_output(
         workflow_document = workflow_documents[0]
         warnings.append("Optimizer workflow manifest name was normalized to the copied candidate resource name.")
     elif workflow_document is None and workflow_documents:
-        warnings.append("Optimizer output included workflow manifests, but none matched the source workflow; generated workflow from source.")
+        warnings.append(
+            "Optimizer output included workflow manifests, but none matched the source workflow; generated workflow from source."
+        )
     elif workflow_document is None:
         warnings.append("Optimizer output omitted workflow manifest; generated copied workflow from source.")
 
@@ -1709,21 +2195,32 @@ def _candidate_bundle_from_optimizer_output(
             source_name=source_agent_name,
             suffixed_name=candidate_agent_name,
         )
-        if agent_document is None and not allow_topology_rewrite and len(source_agents) == 1 and len(agent_documents) == 1:
+        if (
+            agent_document is None
+            and not allow_topology_rewrite
+            and len(source_agents) == 1
+            and len(agent_documents) == 1
+        ):
             agent_document = agent_documents[0]
             warnings.append("Optimizer agent manifest name was normalized to the copied candidate agent name.")
         if agent_document is None:
             continue
         used_agent_document_names.add(_manifest_name(agent_document))
         if _manifest_namespace(agent_document) != namespace:
-            warnings.append(f"Optimizer agent manifest for '{source_agent_name}' was ignored because it left the study namespace.")
+            warnings.append(
+                f"Optimizer agent manifest for '{source_agent_name}' was ignored because it left the study namespace."
+            )
             continue
         agent_spec = agent_document.get("spec") if isinstance(agent_document.get("spec"), dict) else None
         if agent_spec is None:
             warnings.append(f"Optimizer agent manifest for '{source_agent_name}' was ignored because it omitted spec.")
             continue
         source_agent = source_agents.get(source_agent_name) if isinstance(source_agents, dict) else None
-        source_spec = source_agent.get("spec") if isinstance(source_agent, dict) and isinstance(source_agent.get("spec"), dict) else {}
+        source_spec = (
+            source_agent.get("spec")
+            if isinstance(source_agent, dict) and isinstance(source_agent.get("spec"), dict)
+            else {}
+        )
         merged_spec = _clone(source_spec)
         system_prompt = str(agent_spec.get("systemPrompt") or "").strip()
         if system_prompt:
@@ -1731,31 +2228,52 @@ def _candidate_bundle_from_optimizer_output(
         source_model = _spec_model(source_agent)
         if source_model:
             merged_spec["model"] = source_model
+        # Ensure the candidate workflow can invoke this candidate agent via A2A.
+        # The source agent's allowedCallers lists the source workflow name, but the
+        # candidate workflow has a suffixed name (e.g. "incident-auto-triage-opt-346e3").
+        # Without this, the runtime rejects the invoke with HTTP 403 forbidden.
+        a2a_config = merged_spec.get("a2a") if isinstance(merged_spec.get("a2a"), dict) else {}
+        existing_callers = a2a_config.get("allowedCallers") or []
+        if not any(
+            (c.get("name") if isinstance(c, dict) else None) == candidate_workflow_name
+            for c in existing_callers
+        ):
+            a2a_config = dict(a2a_config)
+            a2a_config["allowedCallers"] = [*existing_callers, {"name": candidate_workflow_name, "namespace": namespace}]
+            merged_spec["a2a"] = a2a_config
         for manifest in bundle:
             if str(manifest.get("kind") or "") == "AIAgent" and _manifest_name(manifest) == candidate_agent_name:
                 manifest["spec"] = merged_spec
                 break
 
     if allow_topology_rewrite:
-        source_models = {
-            model
-            for model in (_spec_model(agent) for agent in source_agents.values())
-            if model
-        } if isinstance(source_agents, dict) else set()
+        source_models = (
+            {model for model in (_spec_model(agent) for agent in source_agents.values()) if model}
+            if isinstance(source_agents, dict)
+            else set()
+        )
         default_model = next(iter(source_models)) if len(source_models) == 1 else None
-        existing_agent_names = {_manifest_name(manifest) for manifest in bundle if str(manifest.get("kind") or "") == "AIAgent"}
+        existing_agent_names = {
+            _manifest_name(manifest) for manifest in bundle if str(manifest.get("kind") or "") == "AIAgent"
+        }
         for agent_document in agent_documents:
             source_doc_name = _manifest_name(agent_document)
             if not source_doc_name or source_doc_name in used_agent_document_names:
                 continue
             if _manifest_namespace(agent_document) != namespace:
-                warnings.append(f"Optimizer topology agent manifest '{source_doc_name}' was ignored because it left the study namespace.")
+                warnings.append(
+                    f"Optimizer topology agent manifest '{source_doc_name}' was ignored because it left the study namespace."
+                )
                 continue
             agent_spec = agent_document.get("spec") if isinstance(agent_document.get("spec"), dict) else None
             if agent_spec is None:
-                warnings.append(f"Optimizer topology agent manifest '{source_doc_name}' was ignored because it omitted spec.")
+                warnings.append(
+                    f"Optimizer topology agent manifest '{source_doc_name}' was ignored because it omitted spec."
+                )
                 continue
-            candidate_agent_name = source_doc_name if source_doc_name.endswith(f"-{safe_suffix}") else f"{source_doc_name}-{safe_suffix}"
+            candidate_agent_name = (
+                source_doc_name if source_doc_name.endswith(f"-{safe_suffix}") else f"{source_doc_name}-{safe_suffix}"
+            )
             if candidate_agent_name in existing_agent_names:
                 continue
             candidate_agent = _clone(agent_document)
@@ -1804,6 +2322,34 @@ def _candidate_workflow_name(bundle: list[dict[str, Any]]) -> str:
     if workflow is None:
         return ""
     return _manifest_name(workflow)
+
+
+def _patch_candidate_a2a_callers(bundle: list[dict[str, Any]], namespace: str) -> list[dict[str, Any]]:
+    """Ensure candidate agents allow the candidate workflow as an A2A caller.
+
+    When the optimizer copies source agents into candidate agents, the
+    a2a.allowedCallers still lists the source workflow name. The candidate
+    workflow has a suffixed name (e.g. "incident-auto-triage-opt-346e3"),
+    so the runtime rejects invocations with HTTP 403 forbidden. This
+    function adds the candidate workflow name to every AIAgent in the bundle.
+    """
+    wf_name = _candidate_workflow_name(bundle)
+    if not wf_name:
+        return bundle
+    for manifest in bundle:
+        if str(manifest.get("kind") or "") != "AIAgent":
+            continue
+        spec = manifest.get("spec") if isinstance(manifest.get("spec"), dict) else {}
+        a2a = spec.get("a2a") if isinstance(spec.get("a2a"), dict) else {}
+        existing = a2a.get("allowedCallers") or []
+        if any((c.get("name") if isinstance(c, dict) else None) == wf_name for c in existing):
+            continue
+        a2a = dict(a2a)
+        a2a["allowedCallers"] = [*existing, {"name": wf_name, "namespace": namespace}]
+        spec = dict(spec)
+        spec["a2a"] = a2a
+        manifest["spec"] = spec
+    return bundle
 
 
 def _saved_percent(baseline: float | int | None, candidate: float | int | None) -> float:
@@ -1919,11 +2465,32 @@ def _comparison_scorecard(
         if from_trials is not None:
             return from_trials
         rollup = baseline_metrics if side == "baseline" else candidate_metrics
-        return _round(_as_float(rollup.get(rollup_key) if rollup.get(rollup_key) is not None else rollup.get(fallback_rollup_key or rollup_key)), 6 if snapshot_key == "cost_usd" else 3)
+        return _round(
+            _as_float(
+                rollup.get(rollup_key)
+                if rollup.get(rollup_key) is not None
+                else rollup.get(fallback_rollup_key or rollup_key)
+            ),
+            6 if snapshot_key == "cost_usd" else 3,
+        )
 
     metric_specs = [
-        ("duration_saved_percent", "Wall-clock", "duration_ms", "duration_per_successful_run_ms", "avg_duration_ms", "ms per successful run"),
-        ("tokens_saved_percent", "Tokens", "tokens", "tokens_per_successful_run", "avg_tokens", "tokens per successful run"),
+        (
+            "duration_saved_percent",
+            "Wall-clock",
+            "duration_ms",
+            "duration_per_successful_run_ms",
+            "avg_duration_ms",
+            "ms per successful run",
+        ),
+        (
+            "tokens_saved_percent",
+            "Tokens",
+            "tokens",
+            "tokens_per_successful_run",
+            "avg_tokens",
+            "tokens per successful run",
+        ),
         ("tool_calls_saved_percent", "Tool calls", "tool_calls", "avg_tool_calls", "avg_tool_calls", "calls per run"),
         ("cost_saved_percent", "Cost", "cost_usd", "cost_per_successful_run", "avg_cost_usd", "USD per successful run"),
     ]
@@ -1982,10 +2549,14 @@ def _roi_headline(roi: dict[str, Any], trial_rows: list[dict[str, Any]] | None =
     values = {key: _as_float(deltas.get(key)) for key, _label in labels}
     positive = [(key, label, values[key]) for key, label in labels if values[key] > 0]
     regressions = [(key, label, values[key]) for key, label in labels if values[key] < 0]
-    primary = positive[0] if positive else max(
-        [(key, label, values[key]) for key, label in labels],
-        key=lambda item: item[2],
-        default=("duration_saved_percent", "time", 0.0),
+    primary = (
+        positive[0]
+        if positive
+        else max(
+            [(key, label, values[key]) for key, label in labels],
+            key=lambda item: item[2],
+            default=("duration_saved_percent", "time", 0.0),
+        )
     )
     summary_parts = [f"{value:.1f}% {label}" for _key, label, value in positive[:3]]
     if summary_parts:
@@ -2077,8 +2648,26 @@ def _tool_comparison_rows(
     candidate_count = max(len(candidate_traces), 1)
     rows: list[dict[str, Any]] = []
     for tool_name in sorted(set(baseline_by_tool) | set(candidate_by_tool)):
-        baseline = _clone(baseline_by_tool.get(tool_name) or {"tool_name": tool_name, "calls": 0, "avg_duration_ms": 0.0, "repeated_arg_groups": 0, "affected_steps": []})
-        candidate = _clone(candidate_by_tool.get(tool_name) or {"tool_name": tool_name, "calls": 0, "avg_duration_ms": 0.0, "repeated_arg_groups": 0, "affected_steps": []})
+        baseline = _clone(
+            baseline_by_tool.get(tool_name)
+            or {
+                "tool_name": tool_name,
+                "calls": 0,
+                "avg_duration_ms": 0.0,
+                "repeated_arg_groups": 0,
+                "affected_steps": [],
+            }
+        )
+        candidate = _clone(
+            candidate_by_tool.get(tool_name)
+            or {
+                "tool_name": tool_name,
+                "calls": 0,
+                "avg_duration_ms": 0.0,
+                "repeated_arg_groups": 0,
+                "affected_steps": [],
+            }
+        )
         baseline["calls_per_run"] = _round(_as_float(baseline.get("calls")) / baseline_count, 3)
         candidate["calls_per_run"] = _round(_as_float(candidate.get("calls")) / candidate_count, 3)
         rows.append(
@@ -2087,9 +2676,15 @@ def _tool_comparison_rows(
                 "baseline": baseline,
                 "candidate": candidate,
                 "deltas": {
-                    "calls_saved_percent": _saved_percent(baseline.get("calls_per_run"), candidate.get("calls_per_run")),
-                    "duration_saved_percent": _saved_percent(baseline.get("avg_duration_ms"), candidate.get("avg_duration_ms")),
-                    "repeated_arg_groups_saved_percent": _saved_percent(baseline.get("repeated_arg_groups"), candidate.get("repeated_arg_groups")),
+                    "calls_saved_percent": _saved_percent(
+                        baseline.get("calls_per_run"), candidate.get("calls_per_run")
+                    ),
+                    "duration_saved_percent": _saved_percent(
+                        baseline.get("avg_duration_ms"), candidate.get("avg_duration_ms")
+                    ),
+                    "repeated_arg_groups_saved_percent": _saved_percent(
+                        baseline.get("repeated_arg_groups"), candidate.get("repeated_arg_groups")
+                    ),
                 },
             }
         )
@@ -2107,7 +2702,9 @@ def _trial_comparison_rows(
         baseline = trace_by_id.get(baseline_id) if trace_by_id is not None else _trace_or_none(baseline_id)
         candidate = trace_by_id.get(candidate_id) if trace_by_id is not None else _trace_or_none(candidate_id)
         metrics_delta = trial.get("metrics_delta") if isinstance(trial.get("metrics_delta"), dict) else {}
-        candidate_run = metrics_delta.get("candidate_run") if isinstance(metrics_delta.get("candidate_run"), dict) else {}
+        candidate_run = (
+            metrics_delta.get("candidate_run") if isinstance(metrics_delta.get("candidate_run"), dict) else {}
+        )
         rows.append(
             {
                 "id": trial.get("id"),
@@ -2215,9 +2812,15 @@ def _manifest_highlights(
     highlights: list[str] = []
     if kind == "AgentWorkflow":
         source_steps = ((source.get("spec") or {}).get("steps") or []) if isinstance(source.get("spec"), dict) else []
-        candidate_steps = ((candidate.get("spec") or {}).get("steps") or []) if isinstance(candidate.get("spec"), dict) else []
+        candidate_steps = (
+            ((candidate.get("spec") or {}).get("steps") or []) if isinstance(candidate.get("spec"), dict) else []
+        )
         for index, step in enumerate(source_steps):
-            if not isinstance(step, dict) or index >= len(candidate_steps) or not isinstance(candidate_steps[index], dict):
+            if (
+                not isinstance(step, dict)
+                or index >= len(candidate_steps)
+                or not isinstance(candidate_steps[index], dict)
+            ):
                 continue
             step_name = str(step.get("name") or f"step-{index + 1}")
             candidate_step = candidate_steps[index]
@@ -2274,7 +2877,11 @@ def _manifest_diff_section(
 def _manifest_comparison(study: dict[str, Any], candidate: dict[str, Any] | None) -> dict[str, Any]:
     source = study.get("source_manifests") if isinstance(study.get("source_manifests"), dict) else {}
     source_workflow = source.get("workflow") if isinstance(source.get("workflow"), dict) else {}
-    bundle = candidate.get("manifest_bundle") if isinstance(candidate, dict) and isinstance(candidate.get("manifest_bundle"), list) else []
+    bundle = (
+        candidate.get("manifest_bundle")
+        if isinstance(candidate, dict) and isinstance(candidate.get("manifest_bundle"), list)
+        else []
+    )
     candidate_workflow = _workflow_from_bundle(bundle) or {}
     sections: list[dict[str, Any]] = []
     sections.append(
@@ -2292,7 +2899,9 @@ def _manifest_comparison(study: dict[str, Any], candidate: dict[str, Any] | None
         for manifest in bundle
         if isinstance(manifest, dict) and str(manifest.get("kind") or "") == "AIAgent"
     }
-    for source_agent_name, candidate_agent_name in _candidate_agent_ref_map(source_workflow, candidate_workflow).items():
+    for source_agent_name, candidate_agent_name in _candidate_agent_ref_map(
+        source_workflow, candidate_workflow
+    ).items():
         source_agent = source_agents.get(source_agent_name) if isinstance(source_agents, dict) else None
         candidate_agent = candidate_agents.get(candidate_agent_name)
         sections.append(
@@ -2331,9 +2940,7 @@ def _comparison_payload(
     candidate_id = str(candidate.get("id")) if isinstance(candidate, dict) else None
     trials = optimization_store.list_trials(study["id"], candidate_id=candidate_id)
     trace_ids = {
-        str(execution_id)
-        for execution_id in study.get("baseline_execution_ids", [])
-        if str(execution_id or "")
+        str(execution_id) for execution_id in study.get("baseline_execution_ids", []) if str(execution_id or "")
     }
     for trial in trials:
         if trial.get("baseline_execution_id"):
@@ -2341,9 +2948,7 @@ def _comparison_payload(
         if trial.get("result_execution_id"):
             trace_ids.add(str(trial.get("result_execution_id")))
     trace_by_id = {
-        execution_id: trace
-        for execution_id in trace_ids
-        if (trace := _trace_or_none(execution_id)) is not None
+        execution_id: trace for execution_id in trace_ids if (trace := _trace_or_none(execution_id)) is not None
     }
     baseline_traces = [
         trace_by_id[str(execution_id)]
@@ -2351,8 +2956,10 @@ def _comparison_payload(
         if str(execution_id) in trace_by_id
     ]
     passing_trials = [
-        trial for trial in trials
-        if trial.get("result_execution_id") and str(trial.get("quality_status") or "").lower() in _PASSING_QUALITY_STATES
+        trial
+        for trial in trials
+        if trial.get("result_execution_id")
+        and str(trial.get("quality_status") or "").lower() in _PASSING_QUALITY_STATES
     ]
     candidate_traces = [
         trace_by_id[str(trial.get("result_execution_id"))]
@@ -2376,8 +2983,10 @@ def _compute_roi(study: dict[str, Any], candidate_id: str | None = None, *, sync
         _sync_candidate_trial_results(study, candidate_id=candidate_id)
     trials = optimization_store.list_trials(study["id"], candidate_id=candidate_id)
     passing_trials = [
-        trial for trial in trials
-        if trial.get("result_execution_id") and str(trial.get("quality_status") or "").lower() in _PASSING_QUALITY_STATES
+        trial
+        for trial in trials
+        if trial.get("result_execution_id")
+        and str(trial.get("quality_status") or "").lower() in _PASSING_QUALITY_STATES
     ]
     candidate_traces = [_get_trace(str(trial["result_execution_id"])) for trial in passing_trials]
     candidate_metrics = _aggregate_metrics(candidate_traces)
@@ -2385,26 +2994,32 @@ def _compute_roi(study: dict[str, Any], candidate_id: str | None = None, *, sync
     proof_gate = study.get("proof_gate") if isinstance(study.get("proof_gate"), dict) else {}
     minimum_safe_trials = int(proof_gate.get("minimum_safe_trials") or 1)
     rollup_deltas = {
-        "duration_saved_percent": _saved_percent(baseline_metrics.get("avg_duration_ms"), candidate_metrics.get("avg_duration_ms")),
+        "duration_saved_percent": _saved_percent(
+            baseline_metrics.get("avg_duration_ms"), candidate_metrics.get("avg_duration_ms")
+        ),
         "tokens_saved_percent": _saved_percent(baseline_metrics.get("avg_tokens"), candidate_metrics.get("avg_tokens")),
-        "cost_saved_percent": _saved_percent(baseline_metrics.get("avg_cost_usd"), candidate_metrics.get("avg_cost_usd")),
-        "tool_calls_saved_percent": _saved_percent(baseline_metrics.get("avg_tool_calls"), candidate_metrics.get("avg_tool_calls")),
+        "cost_saved_percent": _saved_percent(
+            baseline_metrics.get("avg_cost_usd"), candidate_metrics.get("avg_cost_usd")
+        ),
+        "tool_calls_saved_percent": _saved_percent(
+            baseline_metrics.get("avg_tool_calls"), candidate_metrics.get("avg_tool_calls")
+        ),
     }
     trial_rows = _trial_comparison_rows(trials)
     paired_trial_deltas = _average_trial_deltas(trial_rows)
     deltas = paired_trial_deltas or rollup_deltas
     max_regression = abs(float(proof_gate.get("max_metric_regression_percent") or 5))
-    regression_deltas = {
-        key: value
-        for key, value in deltas.items()
-        if _as_float(value) < -max_regression
-    }
+    regression_deltas = {key: value for key, value in deltas.items() if _as_float(value) < -max_regression}
     verified = bool(
         len(passing_trials) >= minimum_safe_trials
         and candidate_metrics["sample_count"] > 0
         and candidate_metrics["success_rate"] >= float(baseline_metrics.get("success_rate") or 0)
         and not regression_deltas
-        and (deltas["tokens_saved_percent"] > 0 or deltas["duration_saved_percent"] > 0 or deltas["cost_saved_percent"] > 0)
+        and (
+            deltas["tokens_saved_percent"] > 0
+            or deltas["duration_saved_percent"] > 0
+            or deltas["cost_saved_percent"] > 0
+        )
     )
     monthly_runs = max(int(baseline_metrics.get("sample_count") or 0) * 20, 1)
     projected = {
@@ -2415,7 +3030,11 @@ def _compute_roi(study: dict[str, Any], candidate_id: str | None = None, *, sync
             4,
         ),
         "monthly_hours_saved": round(
-            max(float(baseline_metrics.get("avg_duration_ms") or 0) - float(candidate_metrics.get("avg_duration_ms") or 0), 0)
+            max(
+                float(baseline_metrics.get("avg_duration_ms") or 0)
+                - float(candidate_metrics.get("avg_duration_ms") or 0),
+                0,
+            )
             * monthly_runs
             / 3_600_000,
             3,
@@ -2580,11 +3199,7 @@ def _attach_optimizer_trace_audit(
     if candidate_workflow_name:
         events = enriched.get("events") if isinstance(enriched.get("events"), list) else []
         max_sequence = max(
-            (
-                int(event.get("sequence") or 0)
-                for event in events
-                if isinstance(event, dict)
-            ),
+            (int(event.get("sequence") or 0) for event in events if isinstance(event, dict)),
             default=0,
         )
         contract_status = "passed" if validation.get("valid") is not False else "failed"
@@ -2617,14 +3232,10 @@ def _attach_optimizer_trace_audit(
             "event_count": len(events),
             "tool_count": tool_count,
             "reasoning_event_count": sum(
-                1
-                for event in events
-                if isinstance(event, dict) and str(event.get("kind") or "") == "reasoning"
+                1 for event in events if isinstance(event, dict) and str(event.get("kind") or "") == "reasoning"
             ),
             "error_count": sum(
-                1
-                for event in events
-                if isinstance(event, dict) and str(event.get("kind") or "") == "error"
+                1 for event in events if isinstance(event, dict) and str(event.get("kind") or "") == "error"
             ),
         }
     return _redact(enriched)
@@ -2726,8 +3337,8 @@ def _wait_for_candidate_agents_ready(
     bundle: list[dict[str, Any]],
     namespace: str,
     *,
-    timeout_seconds: float = 90.0,
-    poll_seconds: float = 2.0,
+    timeout_seconds: float = 300.0,
+    poll_seconds: float = 3.0,
 ) -> list[dict[str, str]]:
     names = _candidate_agent_names(bundle)
     if not names:
@@ -2740,6 +3351,8 @@ def _wait_for_candidate_agents_ready(
     pending = set(names)
     readiness: dict[str, str] = dict.fromkeys(names, "pending")
     deadline = time.monotonic() + timeout_seconds
+    logged_total = len(names)
+    logged_ready = 0
 
     while pending and time.monotonic() < deadline:
         for name in list(pending):
@@ -2766,22 +3379,35 @@ def _wait_for_candidate_agents_ready(
             except Exception as exc:
                 raise HTTPException(status_code=502, detail=f"Failed to inspect candidate agent pod '{name}'") from exc
 
-            if cr_ready and pod_ready is not False:
+            if pod_ready is True:
                 readiness[name] = "ready"
                 pending.remove(name)
+                logged_ready += 1
+                logger.info(
+                    "Candidate agent ready (pod-healthy): %s (crd_phase=%s) — %d/%d ready",
+                    name, phase or "unknown", logged_ready, logged_total,
+                )
+            elif cr_ready and pod_ready is None:
+                readiness[name] = "ready"
+                pending.remove(name)
+                logged_ready += 1
+                logger.info(
+                    "Candidate agent ready (crd-healthy, pod not found): %s — %d/%d ready",
+                    name, logged_ready, logged_total,
+                )
             elif pod_ready is False:
-                readiness[name] = "waiting_for_pod"
+                readiness[name] = f"waiting_for_pod (crd_phase={phase or 'none'})"
             else:
-                readiness[name] = phase or "waiting_for_runtime"
+                readiness[name] = f"waiting_for_runtime (crd_phase={phase or 'none'}, pod={pod_ready})"
 
         if pending:
             time.sleep(poll_seconds)
 
     if pending:
-        pending_list = ", ".join(sorted(pending))
+        pending_details = "; ".join(f"{name}={readiness[name]}" for name in sorted(pending))
         raise HTTPException(
             status_code=409,
-            detail=f"Candidate agent runtime did not become ready before trial launch: {pending_list}",
+            detail=f"Candidate agent runtime did not become ready before trial launch: {pending_details}",
         )
 
     return [{"name": name, "status": readiness[name]} for name in names]
@@ -2816,7 +3442,11 @@ def _wait_for_workflow_run(
         phase = str(status.get("phase") or "").strip()
         generation_ready = generation is None or observed == int(generation)
         run_ready = bool(run_id) and run_id != (previous_run_id or "")
-        if generation_ready and run_ready and phase in {"queued", "running", "waiting-approval", "completed", "failed", "cancelled"}:
+        if (
+            generation_ready
+            and run_ready
+            and phase in {"queued", "running", "waiting-approval", "completed", "failed", "cancelled"}
+        ):
             return last_resource
         if generation is None and run_ready:
             return last_resource
@@ -2875,7 +3505,9 @@ def _trigger_candidate_workflow(
                     previous_run_id=None,
                 )
             except Exception as create_exc:
-                raise HTTPException(status_code=502, detail=f"Failed to create candidate workflow '{workflow_name}'") from create_exc
+                raise HTTPException(
+                    status_code=502, detail=f"Failed to create candidate workflow '{workflow_name}'"
+                ) from create_exc
         else:
             raise HTTPException(status_code=502, detail=f"Failed to read candidate workflow '{workflow_name}'") from exc
     else:
@@ -2903,7 +3535,9 @@ def _trigger_candidate_workflow(
                 previous_run_id=previous_run_id,
             )
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Failed to trigger candidate workflow '{workflow_name}'") from exc
+            raise HTTPException(
+                status_code=502, detail=f"Failed to trigger candidate workflow '{workflow_name}'"
+            ) from exc
 
     refreshed = refreshed if isinstance(refreshed, dict) else {}
     status = refreshed.get("status") if isinstance(refreshed.get("status"), dict) else {}
@@ -2929,7 +3563,9 @@ def _sync_candidate_trial_results(study: dict[str, Any], candidate_id: str | Non
             if trial.get("result_execution_id"):
                 continue
             metrics_delta = trial.get("metrics_delta") if isinstance(trial.get("metrics_delta"), dict) else {}
-            candidate_run = metrics_delta.get("candidate_run") if isinstance(metrics_delta.get("candidate_run"), dict) else {}
+            candidate_run = (
+                metrics_delta.get("candidate_run") if isinstance(metrics_delta.get("candidate_run"), dict) else {}
+            )
             workflow_name = str(candidate_run.get("workflow_name") or candidate.get("candidate_workflow_name") or "")
             if not workflow_name:
                 continue
@@ -3044,7 +3680,9 @@ def _training_records(traces: list[dict[str, Any]]) -> list[dict[str, Any]]:
                         "llm_calls": step.get("llm_calls_count"),
                         "tool_calls": step.get("tool_calls_count"),
                     },
-                    "label": "successful_step" if str(step.get("status") or "").lower() == "completed" else "needs_review",
+                    "label": "successful_step"
+                    if str(step.get("status") or "").lower() == "completed"
+                    else "needs_review",
                 }
             )
         for call in trace.get("llm_calls") or []:
@@ -3200,7 +3838,9 @@ def get_study(study_id: str, user: dict[str, Any] = Depends(verify_token)) -> di
 
 
 @router.post("/studies/{study_id}/candidates", status_code=201)
-def create_candidate(study_id: str, body: CreateCandidateRequest, user: dict[str, Any] = Depends(verify_token)) -> dict[str, Any]:
+def create_candidate(
+    study_id: str, body: CreateCandidateRequest, user: dict[str, Any] = Depends(verify_token)
+) -> dict[str, Any]:
     study = optimization_store.get_study(study_id)
     if study is None:
         raise HTTPException(status_code=404, detail="Optimization study not found")
@@ -3245,7 +3885,9 @@ def create_candidate(study_id: str, body: CreateCandidateRequest, user: dict[str
 
 
 @router.post("/studies/{study_id}/candidates/generate", status_code=201)
-def generate_candidate(study_id: str, body: GenerateCandidateRequest, user: dict[str, Any] = Depends(verify_token)) -> dict[str, Any]:
+def generate_candidate(
+    study_id: str, body: GenerateCandidateRequest, user: dict[str, Any] = Depends(verify_token)
+) -> dict[str, Any]:
     study = optimization_store.get_study(study_id)
     if study is None:
         raise HTTPException(status_code=404, detail="Optimization study not found")
@@ -3275,6 +3917,7 @@ def generate_candidate(study_id: str, body: GenerateCandidateRequest, user: dict
         bundle,
         allow_topology_rewrite=body.allow_topology_rewrite,
     )
+    bundle = _patch_candidate_a2a_callers(bundle, str(study["namespace"]))
     validation = _validate_candidate_bundle(
         study,
         bundle,
@@ -3300,6 +3943,7 @@ def generate_candidate(study_id: str, body: GenerateCandidateRequest, user: dict
             bundle,
             allow_topology_rewrite=body.allow_topology_rewrite,
         )
+        bundle = _patch_candidate_a2a_callers(bundle, str(study["namespace"]))
         validation = _validate_candidate_bundle(
             study,
             bundle,
@@ -3448,7 +4092,9 @@ def download_candidate_manifest(
 
 
 @router.post("/candidates/{candidate_id}/approval")
-def approve_candidate(candidate_id: str, body: ApprovalRequest, user: dict[str, Any] = Depends(verify_token)) -> dict[str, Any]:
+def approve_candidate(
+    candidate_id: str, body: ApprovalRequest, user: dict[str, Any] = Depends(verify_token)
+) -> dict[str, Any]:
     candidate = optimization_store.get_candidate(candidate_id)
     if candidate is None:
         raise HTTPException(status_code=404, detail="Optimization candidate not found")
@@ -3481,7 +4127,12 @@ def apply_candidate(
     if candidate.get("approval_status") != "approved":
         raise HTTPException(status_code=409, detail="Candidate must be approved before apply or trial execution")
     if body.dry_run:
-        return {"candidate_id": candidate_id, "dry_run": True, "applied": False, "resources": candidate["manifest_bundle"]}
+        return {
+            "candidate_id": candidate_id,
+            "dry_run": True,
+            "applied": False,
+            "resources": candidate["manifest_bundle"],
+        }
     results = _apply_manifest_bundle(candidate["manifest_bundle"], str(candidate["namespace"]), include_workflows=False)
     updated = optimization_store.mark_candidate_applied(candidate_id)
     return {"candidate_id": candidate_id, "dry_run": False, "applied": True, "results": results, "candidate": updated}
@@ -3507,7 +4158,9 @@ def run_candidate(
     if not baseline_execution_id:
         raise HTTPException(status_code=409, detail="Study has no baseline execution to compare against")
     baseline = _get_trace(baseline_execution_id)
-    apply_results = _apply_manifest_bundle(candidate["manifest_bundle"], str(candidate["namespace"]), include_workflows=False)
+    apply_results = _apply_manifest_bundle(
+        candidate["manifest_bundle"], str(candidate["namespace"]), include_workflows=False
+    )
     updated = optimization_store.mark_candidate_applied(candidate_id)
     agent_readiness = _wait_for_candidate_agents_ready(candidate["manifest_bundle"], str(candidate["namespace"]))
     candidate_run = _trigger_candidate_workflow(
@@ -3589,7 +4242,9 @@ def promote_candidate(
 
 
 @router.post("/candidates/{candidate_id}/trials", status_code=201)
-def create_trial(candidate_id: str, body: CreateTrialRequest, user: dict[str, Any] = Depends(verify_token)) -> dict[str, Any]:
+def create_trial(
+    candidate_id: str, body: CreateTrialRequest, user: dict[str, Any] = Depends(verify_token)
+) -> dict[str, Any]:
     candidate = optimization_store.get_candidate(candidate_id)
     if candidate is None:
         raise HTTPException(status_code=404, detail="Optimization candidate not found")
@@ -3663,9 +4318,13 @@ def export_study_dataset(
     candidates = optimization_store.list_candidates(study_id)
     trials = optimization_store.list_trials(study_id)
     proof_gate = study.get("proof_gate") if isinstance(study.get("proof_gate"), dict) else {}
-    intelligence = proof_gate.get("optimizer_intelligence") if isinstance(proof_gate.get("optimizer_intelligence"), dict) else _build_optimizer_intelligence(
-        baseline_traces,
-        study.get("source_manifests") if isinstance(study.get("source_manifests"), dict) else {},
+    intelligence = (
+        proof_gate.get("optimizer_intelligence")
+        if isinstance(proof_gate.get("optimizer_intelligence"), dict)
+        else _build_optimizer_intelligence(
+            baseline_traces,
+            study.get("source_manifests") if isinstance(study.get("source_manifests"), dict) else {},
+        )
     )
     payload = {
         "study_id": study_id,

@@ -244,7 +244,7 @@ See [Backup and Recovery](backup-and-recovery.md) for the full guide.
 ### How do I upgrade KubeSynapse?
 
 ```bash
-helm upgrade KubeSynapse oci://docker.io/kubesynapse/charts/kubesynapse \
+helm upgrade KubeSynapse oci://quay.io/yakdhane/charts/kubesynapse \
   -n kubesynapse -f values-production.yaml
 ```
 

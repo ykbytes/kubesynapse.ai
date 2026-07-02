@@ -1,0 +1,78 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: incident-triage-context
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: incident-auto-triage
+data:
+  alert-context.md: |
+    # Alert Context
+
+    The platform runs a checkout-api service in the default namespace on a
+    kind development cluster. The service handles payment checkout requests
+    for an e-commerce platform.
+
+    ## Demo App
+    The checkout-api is a Python Flask app with an intentional memory leak.
+    Each /checkout request allocates 10MB that is never freed. The pod has
+    a 64Mi memory limit. After ~6 requests, the pod exceeds the limit and
+    gets OOMKilled (exit code 137). Kubernetes restarts it, and it enters
+    CrashLoopBackOff.
+
+    ## Alert Source
+    Alerts arrive via Alertmanager v4 webhooks to the KubeSynapse gateway.
+    The gateway creates an AgentIncident CRD and the operator links it to
+    this workflow run.
+
+    ## Cluster Context
+    - Cluster: kubesynapse-dev (kind)
+    - Namespace: default
+    - Runtime: opencode (DeepSeek v4 Flash)
+    - MCP: kubernetes sidecar available on the cluster-investigator agent
+
+    ## Safety Rules
+    - Never auto-apply remediation commands. The workflow produces
+      operator-ready plans for human review.
+    - Never recommend deleting PVCs, namespaces, or data.
+    - Prefer reversible actions: resource limit changes, rollbacks, scaling.
+    - Every remediation action must include a rollback command.
+    - The final report must state that no changes were applied automatically.
+
+  service-map.md: |
+    # Service Dependency Map
+
+    ## checkout-api
+    - Upstream deps: payment-gateway, inventory-api
+    - Downstream consumers: web-frontend, mobile-bff
+    - Critical path: user checkout flow
+    - SLO: p95 < 500ms, error rate < 1%
+    - Current issue: OOMKilled due to memory leak + low memory limit (64Mi)
+
+    ## payment-gateway
+    - Upstream deps: bank-api (external)
+    - Downstream consumers: checkout-api
+    - Critical path: payment authorization
+
+    ## inventory-api
+    - Upstream deps: warehouse-db
+    - Downstream consumers: checkout-api, search-api
+    - Critical path: stock reservation
+
+  acceptance.md: |
+    # Acceptance Criteria
+
+    1. The incident brief identifies the affected service, namespace, and severity.
+    2. The cluster investigation cites real cluster evidence:
+       - Pod name with restart count and OOMKilled termination state
+       - Event messages showing OOMKilling or BackOff
+       - Deployment resource limits (memory: 64Mi)
+       - Pod logs showing the app's behavior before crash
+    3. The root cause analysis identifies the memory limit as too low for
+       the app's memory usage pattern, backed by the evidence chain.
+    4. The remediation plan proposes increasing the memory limit with:
+       - An exact kubectl set resources command
+       - A declarative Deployment patch YAML for kubectl apply -f
+       - A rollback command
+    5. The incident report cites specific evidence (pod name, restart count,
+       OOMKilled events, memory limit) and states no changes were applied.

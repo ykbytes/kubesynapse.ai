@@ -21,8 +21,8 @@ networkPolicy:
 litellm:
   enabled: true
   image:
-    repository: litellm/litellm
-    tag: v1.82.3-stable
+    repository: quay.io/yakdhane/kubesynapse
+    tag: litellm
     digest: ""
     pullPolicy: IfNotPresent
   replicaCount: 2  # §reliability-P1: minimum 2 replicas for PDB efficacy
@@ -76,8 +76,8 @@ runtimeServiceAccount:
 
 opencodeRuntime:
   image:
-    repository: ghcr.io/ykbytes/kubesynapse-opencode-rt
-    tag: "0.2.1"
+    repository: quay.io/yakdhane/kubesynapse
+    tag: opencode-rt
     digest: ""
     pullPolicy: IfNotPresent
   provider: litellm
@@ -159,8 +159,8 @@ opencodeRuntime:
 credentialProxy:
   enabled: true
   image:
-    repository: docker.io/kubesynapse/credential-proxy
-    tag: latest
+    repository: quay.io/yakdhane/kubesynapse
+    tag: credential-proxy
     digest: ""
     pullPolicy: Always
   resources:
@@ -183,8 +183,8 @@ credentialProxy:
 # ---------------------------------------------------------------------------
 piRuntime:
   image:
-    repository: docker.io/kubesynapse/kubesynapse-pi-rt
-    tag: latest
+    repository: quay.io/yakdhane/kubesynapse
+    tag: pi-rt
     digest: ""
     pullPolicy: Always
   # §security-P0: Mount a hardened, immutable ConfigMap at /etc/kubesynapse/pi-config/.
@@ -208,8 +208,8 @@ piRuntime:
 
 mistralVibeRuntime:
   image:
-    repository: docker.io/kubesynapse/kubesynapse-vibe-rt
-    tag: latest
+    repository: quay.io/yakdhane/kubesynapse
+    tag: vibe-rt
     digest: ""
     pullPolicy: Always
 
@@ -218,13 +218,13 @@ operator:
   replicaCount: 2
   revisionHistoryLimit: 3
   image:
-    repository: ghcr.io/ykbytes/kubesynapse-operator
-    tag: "0.2.1"
+    repository: quay.io/yakdhane/kubesynapse
+    tag: operator
     digest: ""
     pullPolicy: IfNotPresent
   workerImage:
-    repository: ghcr.io/ykbytes/kubesynapse-operator
-    tag: "0.2.1"
+    repository: quay.io/yakdhane/kubesynapse
+    tag: operator
     digest: ""
     pullPolicy: IfNotPresent
   migrationImage:
@@ -286,8 +286,8 @@ apiGateway:
   revisionHistoryLimit: 3
   auditRetentionDays: 90  # Days to keep audit logs before auto-purge
   image:
-    repository: ghcr.io/ykbytes/kubesynapse-api-gateway
-    tag: "0.2.1"
+    repository: quay.io/yakdhane/kubesynapse
+    tag: api-gateway
     digest: ""
     pullPolicy: IfNotPresent
   ingressClassName: ""
@@ -369,8 +369,8 @@ webUi:
   replicaCount: 2  # §reliability-P1: minimum 2 replicas for PDB efficacy
   revisionHistoryLimit: 3
   image:
-    repository: ghcr.io/ykbytes/kubesynapse-web-ui
-    tag: "0.2.1"
+    repository: quay.io/yakdhane/kubesynapse
+    tag: web-ui
     digest: ""
     pullPolicy: IfNotPresent
   service:
@@ -564,7 +564,7 @@ mcpHub:
     # GitHub MCP server over streamable HTTP.
     github:
       enabled: true
-      image: "docker.io/kubesynapse/mcp-github-adapter:deploy-20260401-212102"
+      image: "quay.io/yakdhane/kubesynapse:mcp-github-adapter"
       imagePullPolicy: IfNotPresent
       port: 8000
       servicePort: 8000
@@ -674,56 +674,56 @@ skillsCatalog:
 # ---------------------------------------------------------------------------
 mcpToolSidecars:
   codeExec:
-    image: docker.io/kubesynapse/mcp-code-exec
-    tag: deploy-20260401-212102
+    image: quay.io/yakdhane/kubesynapse
+    tag: mcp-code-exec
     port: 8090
   webSearch:
-    image: docker.io/kubesynapse/mcp-web-search
-    tag: deploy-20260401-212102
+    image: quay.io/yakdhane/kubesynapse
+    tag: mcp-web-search
     port: 8091
   documents:
-    image: docker.io/kubesynapse/mcp-documents
-    tag: deploy-20260401-212102
+    image: quay.io/yakdhane/kubesynapse
+    tag: mcp-documents
     port: 8092
   browser:
-    image: docker.io/kubesynapse/mcp-browser
-    tag: deploy-20260401-212102
+    image: quay.io/yakdhane/kubesynapse
+    tag: mcp-browser
     port: 8093
   database:
-    image: docker.io/kubesynapse/mcp-database
-    tag: deploy-20260401-212102
+    image: quay.io/yakdhane/kubesynapse
+    tag: mcp-database
     port: 8094
   git:
-    image: docker.io/kubesynapse/mcp-git
-    tag: deploy-20260401-212102
+    image: quay.io/yakdhane/kubesynapse
+    tag: mcp-git
     port: 8095
   githubAdapter:
-    image: docker.io/kubesynapse/mcp-github-adapter
-    tag: deploy-20260401-212102
+    image: quay.io/yakdhane/kubesynapse
+    tag: mcp-github-adapter
     port: 8096
   kubernetes:
-    image: docker.io/kubesynapse/mcp-kubernetes
-    tag: deploy-20260401-212102
+    image: quay.io/yakdhane/kubesynapse
+    tag: mcp-kubernetes
     port: 8097
   messaging:
-    image: docker.io/kubesynapse/mcp-messaging
-    tag: deploy-20260401-212102
+    image: quay.io/yakdhane/kubesynapse
+    tag: mcp-messaging
     port: 8098
   rag:
-    image: docker.io/kubesynapse/mcp-rag
-    tag: deploy-20260401-212102
+    image: quay.io/yakdhane/kubesynapse
+    tag: mcp-rag
     port: 8099
   collector:
-    image: docker.io/kubesynapse/mcp-collector
-    tag: dev
+    image: quay.io/yakdhane/kubesynapse
+    tag: mcp-collector
     port: 8100
 
 # Intelligence Collector Agent (DaemonSet on target clusters)
 collector:
   enabled: false
   image:
-    repository: docker.io/kubesynapse/kubesynapse-collector
-    tag: v1.0.0
+    repository: quay.io/yakdhane/kubesynapse
+    tag: collector-agent
     pullPolicy: IfNotPresent
   port: 9100
   token: ""  # Must be set to a secure random value

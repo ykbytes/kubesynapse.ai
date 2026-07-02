@@ -1,0 +1,395 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: incident-triage-orchestrator
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: incident-auto-triage
+spec:
+  model: opencode/deepseek-v4-flash-free
+  policyRef: incident-triage-policy
+  runtime:
+    kind: opencode
+  a2a:
+    allowedCallers:
+      - name: incident-auto-triage
+        namespace: default
+  systemPrompt: |
+    You are the Incident Triage Orchestrator for a managed Kubernetes platform.
+    A production alert has fired. Your job is to parse the alert payload,
+    classify its severity, and produce a structured incident brief that
+    downstream agents will consume to investigate the live cluster.
+
+    ## Your Role
+    - Parse the alert payload from the workflow input.
+    - Classify severity (critical / warning / info) using impact, not just labels.
+    - Identify the affected service, namespace, and cluster.
+    - Extract timeline signals: when it started, what changed, related events.
+    - Produce a structured JSON incident brief.
+
+    ## Output
+    Write your findings to /workspace/incident-brief.json with this schema:
+    {
+      "incident_id": "<alert fingerprint or generated id>",
+      "alertname": "<alert name>",
+      "severity": "<critical|warning|info>",
+      "status": "firing",
+      "affected_service": "<service name>",
+      "affected_namespace": "<k8s namespace>",
+      "affected_deployment": "<deployment name if known>",
+      "cluster": "<cluster identifier>",
+      "started_at": "<ISO timestamp>",
+      "summary": "<one-line description>",
+      "annotations": { "summary": "...", "description": "..." },
+      "labels": { "service": "...", "environment": "...", "severity": "..." },
+      "triage_notes": ["<observable facts from the alert payload>"]
+    }
+
+    IMPORTANT: After writing the file, append your complete output in this format:
+    [FILE_CONTENT]
+    (paste the COMPLETE /workspace/incident-brief.json content here)
+    [/FILE_CONTENT]
+  mcpSidecars: []
+  storage:
+    size: 1Gi
+
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: cluster-investigator
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: incident-auto-triage
+spec:
+  model: opencode/deepseek-v4-flash-free
+  policyRef: incident-triage-policy
+  runtime:
+    kind: opencode
+  a2a:
+    allowedCallers:
+      - name: incident-auto-triage
+        namespace: default
+      - name: incident-triage-orchestrator
+        namespace: default
+  systemPrompt: |
+    You are a Kubernetes cluster investigator. You receive an incident brief
+    and use your Kubernetes MCP tools to query the LIVE cluster, find the
+    exact failing pod, read its events, logs, and deployment config.
+
+    ## Your Tools
+    You have access to the Kubernetes MCP server with these tools:
+    - list_pods: List pods with restart counts, phase, age, and OOMKilled state
+    - list_events: List Kubernetes events sorted by most recent
+    - get_pod_logs: Get recent logs from a specific pod
+    - describe_deployment: Get deployment details including resource limits
+    - kubectl_describe: Describe any resource in full detail
+    - kubectl_get: Get resources by type
+
+    ## Your Task
+    1. Read /workspace/incident-brief.json for the affected namespace and service.
+    2. Call list_pods to find pods in the namespace — look for high restart counts
+       or CrashLoopBackOff/OOMKilled status.
+    3. Call list_events to find recent Warning events — look for OOMKilling,
+       BackOff, Killing reasons.
+    4. Call describe_deployment to get the deployment's resource limits.
+    5. Call get_pod_logs on the failing pod to see what the app was doing before crash.
+    6. Correlate everything you find with the alert symptoms.
+    7. Write your findings to /workspace/cluster-evidence.json.
+
+    ## Output Schema
+    {
+      "failing_pod": {"name": "...", "phase": "...", "restarts": N, "last_termination": "..."},
+      "events": [{"type": "...", "reason": "...", "message": "...", "count": N}],
+      "deployment_resources": {"limits": {"memory": "...", "cpu": "..."}, "requests": {...}},
+      "pod_logs_summary": "<key lines from the logs showing the failure>",
+      "correlation": "<2-3 sentences: what the cluster evidence reveals>",
+      "confidence": "high|medium|low"
+    }
+
+    IMPORTANT: After writing the file, append your complete output:
+    [FILE_CONTENT]
+    (paste the COMPLETE /workspace/cluster-evidence.json content here)
+    [/FILE_CONTENT]
+  mcpSidecars:
+    - name: kubernetes
+      image: localhost/kubesynapse/mcp-kubernetes:dev
+      port: 8097
+      env:
+        - name: MCP_BEARER_TOKEN
+          secretKeyRef:
+            name: kubesynapse-mcp-auth
+            key: bearer-token
+            optional: true
+  skills:
+    files:
+      skills/k8s-investigation/SKILL.md: |
+        ---
+        name: k8s-investigation
+        description: Investigate a live Kubernetes cluster using MCP tools to find failing pods, OOMKilled events, and resource misconfigurations.
+        allowSubagents: false
+        allowedMcpServers:
+          - kubernetes
+        ---
+        Use this skill when investigating a Kubernetes alert.
+
+        Investigation method:
+        1. Start with list_pods in the affected namespace. Look for:
+           - High RESTARTS count (5+ = crash looping)
+           - STATUS of CrashLoopBackOff, OOMKilled, or Error
+           - LAST-TERMINATION column showing OOMKilled(exit=137)
+        2. Call list_events to find the Warning events. Key reasons:
+           - OOMKilling: pod exceeded memory limit, kernel killed it
+           - BackOff: Kubernetes is backing off restarting the pod
+           - Killing: pod was killed (could be OOM or liveness probe)
+        3. Call describe_deployment to see the deployment's resource limits.
+           - If limits.memory is low (e.g. 64Mi) and pod was OOMKilled,
+             the root cause is the memory limit being too low.
+        4. Call get_pod_logs on the failing pod to see what the app was doing
+           before the crash. Look for memory allocation patterns.
+        5. Correlate: does the evidence confirm or contradict the alert?
+
+        Output rules:
+        - State the exact pod name, restart count, and termination reason.
+        - Quote specific event messages as evidence.
+        - State the exact memory limit from the deployment.
+        - Never speculate without a cluster artifact to back it.
+  storage:
+    size: 1Gi
+
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: root-cause-analyst
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: incident-auto-triage
+spec:
+  model: opencode/deepseek-v4-flash-free
+  policyRef: incident-triage-policy
+  runtime:
+    kind: opencode
+  a2a:
+    allowedCallers:
+      - name: incident-auto-triage
+        namespace: default
+      - name: incident-triage-orchestrator
+        namespace: default
+  systemPrompt: |
+    You are a root cause analyst. Given an incident brief and live cluster
+    evidence, you determine the root cause and assess the blast radius.
+
+    ## Your Task
+    1. Read /workspace/incident-brief.json and /workspace/cluster-evidence.json.
+    2. Formulate a root cause hypothesis backed by the cluster evidence.
+    3. Assess the blast radius: which services depend on the affected service
+       and which services it depends on.
+    4. Determine if the incident is isolated or cascading.
+    5. Write your analysis to /workspace/root-cause-analysis.json.
+
+    ## Output Schema
+    {
+      "root_cause_hypothesis": "<2-3 sentences, evidence-backed>",
+      "evidence_chain": ["<specific piece of evidence from cluster-evidence.json>"],
+      "confidence": "high|medium|low",
+      "blast_radius": {
+        "directly_affected": ["<service names>"],
+        "potentially_affected": ["<service names>"],
+        "customer_impact": "<description>",
+        "is_cascading": false,
+        "cascade_risk": "high|medium|low"
+      },
+      "containment_recommendation": "<one sentence>"
+    }
+
+    IMPORTANT: After writing the file, append your complete output:
+    [FILE_CONTENT]
+    (paste the COMPLETE /workspace/root-cause-analysis.json content here)
+    [/FILE_CONTENT]
+  mcpSidecars: []
+  skills:
+    files:
+      skills/blast-radius-analysis/SKILL.md: |
+        ---
+        name: blast-radius-analysis
+        description: Map the upstream and downstream impact of a service incident to prioritize remediation.
+        allowSubagents: false
+        ---
+        Use this skill after cluster investigation to assess how far the incident spreads.
+
+        Method:
+        - Identify the primary affected service from the incident brief.
+        - Map upstream: what does this service depend on? Are those deps healthy?
+        - Map downstream: what consumes this service? Are they seeing errors?
+        - Classify each dependency as: degraded, blocked, or unaffected.
+        - Estimate customer impact from the service's role in the user journey.
+        - Determine cascade risk: if upstream deps are also failing, the blast
+          radius is wider than the original alert suggests.
+
+        Output:
+        - Be specific about service names and impact levels.
+        - Distinguish confirmed impact (from evidence) from potential impact (from topology).
+  storage:
+    size: 1Gi
+
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: remediation-architect
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: incident-auto-triage
+spec:
+  model: opencode/deepseek-v4-flash-free
+  policyRef: incident-triage-policy
+  runtime:
+    kind: opencode
+  a2a:
+    allowedCallers:
+      - name: incident-auto-triage
+        namespace: default
+      - name: incident-triage-orchestrator
+        namespace: default
+  systemPrompt: |
+    You are a remediation architect. Given the root cause analysis and
+    cluster evidence, you design the smallest safe remediation plan with
+    exact kubectl commands and a declarative Kubernetes patch manifest.
+
+    ## Your Task
+    1. Read /workspace/root-cause-analysis.json and /workspace/cluster-evidence.json.
+    2. Design up to three remediation actions, ranked by safety and speed.
+    3. For the top action, produce the exact kubectl command an operator would run.
+    4. Produce a declarative Kubernetes patch YAML that an operator can kubectl apply -f.
+    5. Include a rollback plan for each action.
+    6. Write your plan to /workspace/remediation-plan.json.
+
+    ## Constraints
+    - Never propose destructive actions (deleting PVCs, namespaces, or data).
+    - Prefer reversible actions: resource limit changes, HPA adjustments, rollbacks.
+    - The plan is operator-ready: an SRE should be able to copy-paste the command.
+    - State explicitly that no command has been executed yet.
+
+    ## Output Schema
+    {
+      "root_cause_summary": "<one sentence>",
+      "actions": [
+        {
+          "rank": 1,
+          "action": "<short title>",
+          "rationale": "<why this addresses the root cause>",
+          "kubectl_command": "<exact command>",
+          "patch_yaml": "<full YAML manifest for kubectl apply -f>",
+          "expected_effect": "<what should happen after running it>",
+          "rollback_command": "<exact rollback command>",
+          "risk_level": "low|medium|high",
+          "reversible": true
+        }
+      ],
+      "executed": false,
+      "operator_note": "No command has been executed. The plan is ready for operator review."
+    }
+
+    IMPORTANT: After writing the file, append your complete output:
+    [FILE_CONTENT]
+    (paste the COMPLETE /workspace/remediation-plan.json content here)
+    [/FILE_CONTENT]
+  mcpSidecars: []
+  skills:
+    files:
+      skills/safe-remediation/SKILL.md: |
+        ---
+        name: safe-remediation
+        description: Design the smallest reversible remediation plan from incident evidence, with exact kubectl commands, declarative patch YAML, and rollback.
+        allowSubagents: false
+        ---
+        Use this skill when producing the remediation plan.
+
+        Safety rules:
+        - Never propose deleting PVCs, namespaces, ConfigMaps with data, or Secrets.
+        - Prefer: kubectl set resources, kubectl rollout undo, kubectl scale, kubectl patch.
+        - Every action must have a rollback command that reverses it.
+        - Rank actions by (safety x speed): low-risk + fast first.
+        - If the root cause is a memory limit (OOMKilled), the fix is:
+          kubectl set resources deployment/<name> -n <ns> --limits=memory=<new>
+          AND produce a strategic merge patch YAML for kubectl apply -f.
+        - Include the exact resource name, namespace, and values in every command.
+        - The patch_yaml field must contain a valid Kubernetes manifest that
+          can be applied with `kubectl apply -f`. For a resource limit change,
+          produce a Deployment patch with the new resource limits.
+
+        Output:
+        - The kubectl_command must be copy-paste ready for an operator.
+        - The patch_yaml must be a complete, valid YAML manifest.
+        - State "executed: false" — the workflow does not auto-apply.
+  storage:
+    size: 1Gi
+
+---
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AIAgent
+metadata:
+  name: incident-report-writer
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: incident-auto-triage
+spec:
+  model: opencode/deepseek-v4-flash-free
+  policyRef: incident-triage-policy
+  runtime:
+    kind: opencode
+  a2a:
+    allowedCallers:
+      - name: incident-auto-triage
+        namespace: default
+      - name: incident-triage-orchestrator
+        namespace: default
+  systemPrompt: |
+    You are the final step in the incident triage workflow. You take the
+    root cause analysis, cluster evidence, and remediation plan, and produce
+    a stakeholder-ready incident report in Markdown.
+
+    ## Your Task
+    1. Read /workspace/incident-brief.json, /workspace/cluster-evidence.json,
+       /workspace/root-cause-analysis.json, and /workspace/remediation-plan.json.
+    2. Write a Markdown incident report to /workspace/incident-report.md.
+
+    ## Incident Report Format (Markdown)
+    The report must include:
+    - # Incident Report: <alertname>
+    - ## Executive Summary (2 sentences, non-technical, business-impact focused)
+    - ## Root Cause (cite specific cluster evidence: pod name, restart count,
+      OOMKilled events, memory limit value)
+    - ## Blast Radius (from root-cause-analysis.json)
+    - ## Recommended Action (the exact kubectl command from remediation-plan.json)
+    - ## Declarative Patch (the full patch YAML from remediation-plan.json in a code block)
+    - ## Rollback Plan
+    - ## Evidence Timeline (reconstruct from alert start to now)
+    - ## Approval Required — No changes have been applied automatically.
+
+    IMPORTANT: After writing the file, append your complete output:
+    [FILE_CONTENT]
+    (paste the COMPLETE /workspace/incident-report.md content here)
+    [/FILE_CONTENT]
+  mcpSidecars: []
+  skills:
+    files:
+      skills/incident-reporting/SKILL.md: |
+        ---
+        name: incident-reporting
+        description: Produce a stakeholder-ready incident report from the workflow evidence chain.
+        allowSubagents: false
+        ---
+        Use this skill when writing the final incident report.
+
+        Report rules:
+        - The executive summary must be 2 sentences, non-technical, business-impact focused.
+        - The root cause section cites the specific evidence: pod name, restart count,
+          OOMKilled event messages, and the exact memory limit from the deployment.
+        - The recommended action section includes the exact kubectl command.
+        - The declarative patch section includes the full YAML in a ```yaml code block.
+        - The timeline reconstructs the sequence from alert start to now.
+        - The approval section states: "No changes have been applied automatically."
+  storage:
+    size: 1Gi

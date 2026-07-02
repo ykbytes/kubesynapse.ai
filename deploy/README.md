@@ -259,7 +259,7 @@ See `deploy/values.*.yaml` for environment-specific examples:
 
 ```yaml
 image:
-  registry: docker.io/kubesynapse
+  registry: quay.io/yakdhane
   tag: v1.0.0
 
 apiGateway:
@@ -299,7 +299,7 @@ Mistral Vibe is also **opt-in per agent**. Configure its runtime image defaults 
 ```yaml
 mistralVibeRuntime:
   image:
-    repository: docker.io/kubesynapse/kubesynapse-vibe-rt
+    repository: quay.io/yakdhane/kubesynapse
     tag: v2.1.0-run-intelligence
 ```
 

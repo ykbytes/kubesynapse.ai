@@ -1,0 +1,200 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentWorkflow
+metadata:
+  name: incident-auto-triage
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: incident-auto-triage
+spec:
+  description: >
+    Production incident auto-triage: Alertmanager fires → agents parse the alert,
+    investigate the LIVE cluster via Kubernetes MCP (pods, events, logs, deployments),
+    diagnose root cause, propose a safe remediation plan with declarative patch,
+    and produce a stakeholder-ready incident report for human approval.
+  input: >
+    Alertmanager firing: PodOOMKilled on checkout-api in default namespace.
+    Pod checkout-api-xxx has restarted 5 times with OOMKilled (exit code 137).
+    Memory limit is 64Mi. Triage the incident, investigate the live cluster,
+    diagnose root cause, and produce a safe remediation plan with an
+    operator-ready kubectl command and declarative patch YAML.
+  contextRef: incident-triage-context
+  messageBus: in-memory
+  autoRetry:
+    enabled: true
+    maxAttempts: 1
+  steps:
+    # ── Step 1: Parse alert and produce structured incident brief ──
+    - name: receive-alert
+      type: agent
+      agentRef: incident-triage-orchestrator
+      prompt: |
+        ## Task: Parse Alert and Produce Incident Brief
+
+        A production alert has fired. The alert details are in the workflow
+        input below. Parse it and produce a structured incident brief.
+
+        Alert details (from workflow input):
+        {{input}}
+
+        Also check [Project Context] ## alert-context.md for additional
+        environment context about the demo app.
+
+        Write your output to /workspace/incident-brief.json.
+
+        IMPORTANT: After writing the file, you MUST append your complete
+        output in this format at the end of your response:
+
+        [FILE_CONTENT]
+        (paste the COMPLETE /workspace/incident-brief.json content here)
+        [/FILE_CONTENT]
+
+        The next workflow step depends on receiving this embedded content.
+      execution:
+        timeoutSeconds: 120
+        maxAttempts: 2
+        backoffSeconds: 5
+        maxTurns: 6
+        sessionGroup: incident-triage-session
+
+    # ── Step 2: Investigate the LIVE cluster via Kubernetes MCP ──
+    - name: investigate-cluster
+      type: agent
+      agentRef: cluster-investigator
+      dependsOn:
+        - receive-alert
+      prompt: |
+        ## Task: Investigate the Live Cluster
+
+        The incident brief from the previous step is embedded below.
+        Use your Kubernetes MCP tools to query the LIVE cluster and find
+        the exact failing pod, its events, logs, and deployment config.
+
+        [Previous Step Output]
+        {{previous_output}}
+
+        Your investigation steps:
+        1. Call list_pods to find pods with high restart counts or OOMKilled status.
+        2. Call list_events to find OOMKilling, BackOff, or Killing events.
+        3. Call describe_deployment to get the deployment's resource limits.
+        4. Call get_pod_logs on the failing pod to see what happened before the crash.
+
+        Write your findings to /workspace/cluster-evidence.json.
+
+        IMPORTANT: After writing the file, you MUST append your complete
+        output in this format:
+
+        [FILE_CONTENT]
+        (paste the COMPLETE /workspace/cluster-evidence.json content here)
+        [/FILE_CONTENT]
+      execution:
+        timeoutSeconds: 240
+        maxAttempts: 2
+        backoffSeconds: 5
+        maxTurns: 12
+        sessionGroup: incident-triage-session
+
+    # ── Step 3: Diagnose root cause and assess blast radius ──
+    - name: diagnose-root-cause
+      type: agent
+      agentRef: root-cause-analyst
+      dependsOn:
+        - receive-alert
+        - investigate-cluster
+      prompt: |
+        ## Task: Diagnose Root Cause and Blast Radius
+
+        The incident brief and live cluster evidence are embedded below.
+        Use both to formulate the root cause hypothesis and assess blast radius.
+
+        [Previous Step Output]
+        {{previous_output}}
+
+        Write your analysis to /workspace/root-cause-analysis.json.
+
+        IMPORTANT: After writing the file, you MUST append your complete
+        output in this format:
+
+        [FILE_CONTENT]
+        (paste the COMPLETE /workspace/root-cause-analysis.json content here)
+        [/FILE_CONTENT]
+      execution:
+        timeoutSeconds: 120
+        maxAttempts: 2
+        backoffSeconds: 5
+        maxTurns: 6
+        sessionGroup: incident-triage-session
+
+    # ── Step 4: Propose safe remediation plan with patch YAML ──
+    - name: propose-remediation
+      type: agent
+      agentRef: remediation-architect
+      dependsOn:
+        - investigate-cluster
+        - diagnose-root-cause
+      prompt: |
+        ## Task: Propose Safe Remediation Plan
+
+        The cluster evidence and root cause analysis are embedded below.
+        Use them to design the smallest safe remediation plan with exact
+        kubectl commands and a declarative Kubernetes patch YAML.
+
+        [Previous Step Output]
+        {{previous_output}}
+
+        Constraints:
+        - Never propose destructive actions.
+        - Every action must have a rollback command.
+        - The patch YAML must be valid kubectl apply -f input.
+        - State that no command has been executed yet.
+
+        Write your plan to /workspace/remediation-plan.json.
+
+        IMPORTANT: After writing the file, you MUST append your complete
+        output in this format:
+
+        [FILE_CONTENT]
+        (paste the COMPLETE /workspace/remediation-plan.json content here)
+        [/FILE_CONTENT]
+      execution:
+        timeoutSeconds: 180
+        maxAttempts: 2
+        backoffSeconds: 5
+        maxTurns: 8
+        sessionGroup: incident-triage-session
+
+    # ── Step 5: Produce stakeholder-ready incident report ──
+    - name: generate-report
+      type: agent
+      agentRef: incident-report-writer
+      dependsOn:
+        - diagnose-root-cause
+        - propose-remediation
+      prompt: |
+        ## Task: Produce Incident Report
+
+        The root cause analysis and remediation plan are embedded below.
+        Use them to produce the final stakeholder-ready incident report.
+
+        [Previous Step Output]
+        {{previous_output}}
+
+        Write a Markdown incident report to /workspace/incident-report.md.
+        The report must cite specific cluster evidence (pod name, restart
+        count, OOMKilled events, memory limit) and include the exact
+        kubectl command and patch YAML from the remediation plan.
+
+        The report must state that no changes have been applied automatically
+        and that operator approval is required.
+
+        IMPORTANT: After writing the file, you MUST append your complete
+        output in this format:
+
+        [FILE_CONTENT]
+        (paste the COMPLETE /workspace/incident-report.md content here)
+        [/FILE_CONTENT]
+      execution:
+        timeoutSeconds: 240
+        maxAttempts: 2
+        backoffSeconds: 5
+        maxTurns: 10
+        sessionGroup: incident-triage-session

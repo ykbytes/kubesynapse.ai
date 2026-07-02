@@ -70,7 +70,7 @@ Distributed traces for every agent invocation and workflow run. Inspect individu
 
 ```bash
 helm install kubesynapse \
-  oci://docker.io/kubesynapse/charts/kubesynapse \
+  oci://quay.io/yakdhane/charts/kubesynapse \
   --namespace kubesynapse --create-namespace \
   --set platformSecrets.native.openaiApiKey="sk-..."
 ```

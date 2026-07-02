@@ -162,7 +162,7 @@ negotiation.
 Current image:
 
 ```bash
-docker pull docker.io/kubesynapse/kubesynapse-api-gateway:v1.0.15
+docker pull quay.io/yakdhane/kubesynapse:api-gateway
 ```
 
 In production the gateway runs behind the chart's Ingress at `/api` with the

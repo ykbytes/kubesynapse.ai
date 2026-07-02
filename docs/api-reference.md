@@ -931,6 +931,21 @@ Optimization studies use historical workflow traces and source manifests to crea
 
 Candidate generation accepts a topology mode. Preserve mode keeps step names, order, types, contracts, and agent references. An explicit administrator-approved topology rewrite may consolidate or reorder work only when the request contains a capability-equivalence map and the generated bundle passes contract, privilege, secret, namespace, and output checks.
 
+### Candidate contract-preservation gates
+
+Every candidate is validated against the source workflow's structural contract, not only its resource shape. The following hard gates are enforced and a candidate that violates any of them is rejected (or replaced by a no-change control candidate):
+
+| Gate | Code | Rejects |
+|---|---|---|
+| Output path preservation | `dropped_output_path` | A candidate step that no longer writes a `/workspace/*` path the source step declared. |
+| Handoff mode preservation | `handoff_mode_broken` | Switching from embedded handoff (`[FILE_CONTENT]`, `{{previous_output}}`) to file reads when `messageBus` is `in-memory`, because step pods do not share a filesystem. |
+| Handoff marker preservation | `dropped_handoff_marker` | Removing an embedded handoff marker the source step required. |
+| Inline data preservation | `stripped_inline_data` / `data_placeholder_substitution` | Strpping inline input data from a step prompt or replacing it with empty placeholders like `[data follows]`. |
+| Cross-step read safety | `unsatisfiable_read` | A candidate step reading a `/workspace/*` path that no upstream step writes when the bus is in-memory. |
+| Optimizer meta injection | `optimizer_meta_noise` | Optimizer/ROI Lab framing, skill names, tool bans (`Do NOT use todowrite`), or one-pass directives in candidate prompts or agent systemPrompts. |
+
+Reconstructed source agents (when the source `AIAgent` manifest is unavailable) keep a minimal behavioral `systemPrompt`; the step contract is stored in a `kubesynapse.ai/reconstructed-step-contract` annotation so optimizer copies do not inherit reconstruction preamble or per-run input data as agent identity.
+
 Each generated candidate stores an observable optimizer trace: runtime status, explicit skill-file load events, reasoning summaries exposed by the runtime, tool activity, artifacts, referenced resources, visible final response, and candidate validation outcome. This audit data does not expose hidden model chain-of-thought.
 
 The manifest download response uses `Content-Type: application/yaml` and `Content-Disposition: attachment`. It is the persisted candidate submitted to validation, not a regenerated preview.

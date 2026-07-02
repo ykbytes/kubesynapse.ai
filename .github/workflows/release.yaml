@@ -211,7 +211,7 @@ jobs:
           from pathlib import Path
 
           metadata = {
-              "repository": "docker.io/kubesynapse/kubesynapse-opencode-rt",
+              "repository": "quay.io/yakdhane/kubesynapse",
               "tag": "${{ steps.version.outputs.version }}",
               "digest": "${{ steps.build.outputs.digest }}",
               "pullPolicy": "IfNotPresent",

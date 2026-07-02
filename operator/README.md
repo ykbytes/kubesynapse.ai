@@ -140,7 +140,7 @@ reconciles `AgentIncident` CRDs against the gateway's incident state. It:
 The operator is published as a container image:
 
 ```bash
-docker pull docker.io/kubesynapse/kubesynapse-operator:v1.0.15
+docker pull quay.io/yakdhane/kubesynapse:operator
 ```
 
 In the Helm chart it runs as a Deployment with `operator.replicaCount` defaulting to `2`, plus

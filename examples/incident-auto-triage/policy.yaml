@@ -1,0 +1,40 @@
+apiVersion: kubesynapse.ai/v1alpha1
+kind: AgentPolicy
+metadata:
+  name: incident-triage-policy
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: incident-auto-triage
+spec:
+  inputGuardrails:
+    blockPromptInjection: true
+    maxInputTokens: 16384
+  outputGuardrails:
+    maskPII: true
+    maxOutputTokens: 8192
+  allowedModels:
+    - opencode/deepseek-v4-flash-free
+    - opencode-go/deepseek-v4-flash
+  allowedMcpServers:
+    - kubernetes
+  mcpRequireHitl: false
+  toolPolicy:
+    maxDelegationDepth: 1
+    allowedToolPrefixes:
+      - "local.command."
+      - "mcp.kubernetes."
+  memoryPolicy:
+    maxInjectedMemories: 0
+    autoPromote: false
+  a2a:
+    allowedTargets:
+      - name: cluster-investigator
+        namespace: default
+      - name: root-cause-analyst
+        namespace: default
+      - name: remediation-architect
+        namespace: default
+      - name: incident-report-writer
+        namespace: default
+    maxTimeoutSeconds: 60
+    requireHitl: false
